@@ -1,5 +1,12 @@
 import tseslint from "typescript-eslint";
 
+// `eslint-plugin-neverthrow@1.1.4` (the only published version, dated 2022)
+// uses an old `@typescript-eslint` parserServices API that throws "types not
+// available" when paired with `@typescript-eslint@8`. CLAUDE.md C11 mandates
+// the `must-use-result` rule; until a compatible plugin lands (or we fork
+// and patch), enforcement is convention + code review only. Tracked in
+// docs/drift-log.md as drift from C11.
+
 export default tseslint.config(
   {
     ignores: [
@@ -12,6 +19,7 @@ export default tseslint.config(
       "playwright-report/**",
       "test-results/**",
       ".vitest-cache/**",
+      "next-env.d.ts",
       "*.config.js",
       "*.config.ts",
       "*.config.mjs",
@@ -27,7 +35,4 @@ export default tseslint.config(
       ],
     },
   },
-  // TODO(@dennis, A2): enable eslint-plugin-neverthrow `must-use-result` per
-  // CLAUDE.md C11 once the first Result-returning function exists in A2
-  // (keychain wrapper). Currently no-op because no Results exist yet.
 );

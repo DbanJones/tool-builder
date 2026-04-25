@@ -4,16 +4,16 @@
   "phase": "A",
   "phase_started_at": "2026-04-25T18:09:00Z",
   "tasks_total_in_phase": 5,
-  "tasks_completed_in_phase": 1,
+  "tasks_completed_in_phase": 2,
   "current_task": null,
-  "next_task": "A2",
+  "next_task": "A3",
   "drift": {
     "blocker_count": 0,
-    "non_blocker_count": 1,
-    "last_check_at": "2026-04-25T18:10:00Z",
-    "notes": "Non-blocker: shadcn/ui init and Button smoke test deferred from A1 to A3. shadcn CLI restructured (no more --base-color flag); rather than block A1, Tailwind 3 was wired manually and shadcn integration moved to A3 where the Welcome screen needs UI primitives. Captured in A1 commit message and to be revisited at A3 Echo-back."
+    "non_blocker_count": 2,
+    "last_check_at": "2026-04-25T18:30:00Z",
+    "notes": "All non-blocker drift entries live in docs/drift-log.md. Summary: D-001 (eslint-plugin-neverthrow incompatible with @typescript-eslint v8; C11 enforcement is convention + code review until plugin updates), D-002 (shadcn/ui init + Button smoke test deferred from A1 to A3)."
   },
-  "tests": { "passing": 2, "failing": 0, "skipped": 0 },
+  "tests": { "passing": 10, "failing": 0, "skipped": 0 },
   "cost_so_far_usd": 0.0,
   "tokens": { "input": 0, "output": 0 },
   "history": [
@@ -22,6 +22,12 @@
       "completed_at": "2026-04-25T18:10:00Z",
       "commit": "9132e2c",
       "notes": "Repo scaffold + CI. Next 15.5.15, React 19.2.5, TS 5.9.3, Tailwind 3.4.19, Tauri 2.10.1, Vitest 2.1.9, ESLint 9.39.4. pnpm verify green (typecheck + lint + 2 sanity tests). pnpm dev confirmed Next dev server starts in 1.3s. pnpm tauri dev not exercised in this session (5-10 min cargo first-build deferred to user verification on next workspace open)."
+    },
+    {
+      "task_id": "A2",
+      "completed_at": "2026-04-25T18:30:00Z",
+      "commit": "TBD",
+      "notes": "OS keychain wrapper. keyring-rs 3.6.3 in src-tauri (per ADR-0003), exposed via three Tauri IPC commands (keychain_get/set/delete). lib/keychain/index.ts wraps invoke() in ResultAsync<T, KeychainError>. 8 unit tests pass with mocked invoke. cargo check green in 43.81s (first build). Real-keychain integration test deferred to a Phase-D follow-up that adds macOS+Windows CI runners."
     }
   ],
   "open_questions": []

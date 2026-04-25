@@ -46,11 +46,11 @@ Phase 0 sits outside the agent's per-task loop. The human completes these before
 - Add GitHub Actions workflow with required checks.
 - AC: `pnpm verify` is green on a clean clone; `pnpm tauri dev` opens an empty window with the Next.js dev server.
 
-### A2: OS keychain wrapper (Vercel and future credentials only, per ADR-0002)
-- Implement `lib/keychain/index.ts` with `get`, `set`, `delete` for named secrets.
-- Use `keytar` on macOS and Windows; Secret Service via `secret-tool` on Linux.
-- Tests: round-trip a fake key on each platform's CI runner.
-- AC: a test harness can set, retrieve, and delete a secret without writing it to disk anywhere.
+### A2: OS keychain wrapper (Vercel and future credentials only, per ADR-0002 and ADR-0003)
+- Implement `lib/keychain/index.ts` with `get`, `set`, `delete` for namespaced secrets, returning `Result<T, KeychainError>` per C10.
+- Backend: the `keyring` Rust crate inside the Tauri shell (`src-tauri/src/lib.rs`), exposed to the webview via three Tauri IPC commands (`keychain_get/set/delete`). See ADR-0003 for the choice of `keyring-rs` over `keytar` plus Node sidecar.
+- Tests: unit tests with a mocked `invoke()`; real-keychain round-trip (touching macOS Keychain / Windows Credential Manager / Linux Secret Service) is deferred to a Phase-D follow-up that adds macOS + Windows CI runners.
+- AC: a test harness can set, retrieve, and delete a secret without writing it to disk anywhere (proven by unit tests for the wrapper contract, plus `cargo check` for the Rust commands).
 - Note: the Builder does not store Anthropic credentials. The wrapper is reserved for the Vercel access token at E1 and any future third-party credential.
 
 ### A3: Welcome screen and Claude Code detection (per ADR-0002)
