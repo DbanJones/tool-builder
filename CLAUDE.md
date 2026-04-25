@@ -14,7 +14,7 @@ deployed Phase 1 app in under 90 minutes from first launch, on their own.
 - Next.js 15 App Router (UI), React 19, TypeScript strict
 - shadcn/ui + Tailwind for all UI; Radix primitives where shadcn falls short
 - Claude Code CLI (`claude`) for all the orchestrator's Claude interactions: interview chat, ingestion, drift checks, and build-phase subprocesses (see ADR-0002). Headless invocations use `claude -p --output-format stream-json`; tool use is wired via a local MCP server.
-- Drizzle ORM with better-sqlite3 for local state in `.builder/builder.db`
+- Drizzle ORM with better-sqlite3 for local state in `.builder/builder.db`, hosted in a Node sidecar process spawned by the Tauri shell. Webview talks to the sidecar via JSON-RPC over stdin/stdout brokered by a `sidecar_rpc` Tauri command. See ADR-0004.
 - Vitest (unit + integration), Playwright (E2E against the running Tauri app)
 - Tauri updater (signed) for auto-updates
 - Sentry for error reporting, opt-in only; no analytics by default

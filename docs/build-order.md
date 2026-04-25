@@ -63,13 +63,32 @@ Phase 0 sits outside the agent's per-task loop. The human completes these before
 - AC: Flow A passes end to end across all three states; the Builder stores no Anthropic credential.
 - E2E: `tests/e2e/welcome.spec.ts` covers all three states using a stubbed `claude` binary on PATH.
 
-### A4: Project creation
-- Build `app/(welcome)/new-project/page.tsx` with name and folder fields.
-- Validate name against npm naming rules.
-- On submit, create `{folder}/{name}/`, run `git init`, copy CLAUDE.md, rules, empty spec.md, empty `.builder/state.json` from a templates folder.
-- Insert into `projects` table.
-- AC: Flow B passes end to end.
-- Integration: `tests/integration/project-create.test.ts` against a temp directory.
+### A4: Project creation (split per ADR-0004 + decision 2026-04-25 to ship placeholder templates)
+
+A4 is split across three sub-tasks because the Node-sidecar architecture chosen at A4 entry adds enough machinery that it deserves its own commit before the project-creation flow is built on top.
+
+#### A4a: Sidecar foundation
+- New `sidecar/` package: `package.json`, `tsconfig.json`, JSON-RPC loop with one `ping` method.
+- `src-tauri/src/sidecar.rs`: process lifecycle (spawn on Tauri setup, kill on drop), `sidecar_rpc(method, params)` Tauri command synchronised by a `Mutex<SidecarHandle>`.
+- `lib/sidecar/client.ts`: typed RPC wrapper returning `ResultAsync<T, SidecarError>`.
+- Build orchestration: `tauri.conf.json` `beforeDevCommand` builds the sidecar before `next dev` starts.
+- AC: `pnpm verify` and `cargo check` both green; `pnpm tauri dev` opens the Tauri window and `client.ping()` returns `{ pong: true }`.
+
+#### A4b: DB schemas + handlers + audit migration
+- `sidecar/src/db.ts`: better-sqlite3 + Drizzle setup against `.builder/builder.db`.
+- `sidecar/src/schema/{projects,audit-log}.ts`: per spec.md §4 data model.
+- `sidecar/drizzle.config.ts` + first migration in `sidecar/migrations/`.
+- Sidecar handlers for `audit.logEvent`, `projects.create`, `projects.list`, `projects.get`, `projects.delete`.
+- Migrate `audit_log_event` Tauri command to call the sidecar's `audit.logEvent` instead of `tauri-plugin-log` (closes drift D-003).
+- AC: integration test loads the sidecar, runs the migration against a temp DB, inserts and reads back, asserts schema; pnpm verify green.
+
+#### A4c: Project creation flow
+- `app/(welcome)/new-project/page.tsx`: react-hook-form + zodResolver per F21, name + folder fields.
+- Validate name against npm naming rules (`validate-npm-package-name`).
+- `project_create` Tauri command: validates input, mkdir `{folder}/{name}/`, runs `git init`, copies placeholder templates from `src-tauri/templates/`, calls sidecar `projects.create` and `audit.logEvent("project_created", ...)`.
+- Placeholder templates in `src-tauri/templates/` (per human direction 2026-04-25 to defer real template content; placeholder files clearly state they are placeholders and must be replaced before novice use).
+- AC: Flow B AC1-AC4 pass end to end.
+- Integration: `tests/integration/project-create.test.ts` exercises the full flow against a temp directory and a fresh sidecar against a temp DB.
 
 ### A5: Minimum chat (per ADR-0002)
 - Build `app/(interview)/page.tsx` with chat panel, input, send button.

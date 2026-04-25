@@ -1,5 +1,10 @@
+mod sidecar;
+
 use keyring::Entry;
 use std::process::Command;
+use tauri::Manager;
+
+use sidecar::{sidecar_rpc, spawn_sidecar, SidecarState};
 
 // Builder-local keychain commands. See ADR-0003.
 //
@@ -79,7 +84,7 @@ fn cli_is_authenticated() -> Result<bool, String> {
 
 // Audit logger per spec.md Flow A AC5 and rules/02-backend.md B20.
 // Currently routes to tauri-plugin-log; a Drizzle audit_log table arrives
-// at A4 (project creation) when the DB layer first lands.
+// at A4b (see drift D-003).
 
 #[tauri::command]
 fn audit_log_event(event_type: String, payload: String) -> Result<(), String> {
@@ -91,6 +96,24 @@ fn audit_log_event(event_type: String, payload: String) -> Result<(), String> {
 pub fn run() {
   tauri::Builder::default()
     .setup(|app| {
+      let state = SidecarState::new();
+
+      // Best-effort spawn. If it fails (e.g. sidecar not built), log and continue;
+      // sidecar_rpc will return a clear error for any subsequent calls.
+      match spawn_sidecar(&app.handle()) {
+        Ok(handle) => {
+          if let Ok(mut guard) = state.handle.lock() {
+            *guard = Some(handle);
+            log::info!("sidecar spawned");
+          }
+        }
+        Err(e) => {
+          log::warn!("sidecar spawn failed: {e}; sidecar_rpc will return errors");
+        }
+      }
+
+      app.manage(state);
+
       if cfg!(debug_assertions) {
         app.handle().plugin(
           tauri_plugin_log::Builder::default()
@@ -106,7 +129,8 @@ pub fn run() {
       keychain_delete,
       cli_is_installed,
       cli_is_authenticated,
-      audit_log_event
+      audit_log_event,
+      sidecar_rpc
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
