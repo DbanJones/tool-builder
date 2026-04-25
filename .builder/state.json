@@ -32,7 +32,7 @@
     {
       "task_id": "A4a",
       "completed_at": "2026-04-26T00:00:00Z",
-      "commit": "TBD",
+      "commit": "bdc90f3",
       "notes": "Sidecar foundation per ADR-0004 (Node sidecar for SQLite + Drizzle, picked over Rust+rusqlite at A4 entry to honour the original CLAUDE.md stack line). Sidecar package at sidecar/ with a JSON-RPC ping handler. src-tauri/src/sidecar.rs spawns the sidecar in setup, exposes sidecar_rpc Tauri command synchronised by Mutex. lib/sidecar/client.ts wraps it returning ResultAsync<T, SidecarError>. predev/prebuild scripts in package.json build the sidecar before Next dev/build runs. pnpm verify GREEN (27 unit + 1 integration). cargo check GREEN 1.96s. Sidecar protocol smoke-tested via stdin pipe. Tauri end-to-end deferred to user's pnpm tauri dev test on next workspace open. A4b adds DB schemas + handlers + audit migration; A4c adds project_create flow."
     },
     {
