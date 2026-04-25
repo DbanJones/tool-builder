@@ -20,7 +20,7 @@
     {
       "task_id": "A1",
       "completed_at": "2026-04-25T18:10:00Z",
-      "commit": "TBD",
+      "commit": "9132e2c",
       "notes": "Repo scaffold + CI. Next 15.5.15, React 19.2.5, TS 5.9.3, Tailwind 3.4.19, Tauri 2.10.1, Vitest 2.1.9, ESLint 9.39.4. pnpm verify green (typecheck + lint + 2 sanity tests). pnpm dev confirmed Next dev server starts in 1.3s. pnpm tauri dev not exercised in this session (5-10 min cargo first-build deferred to user verification on next workspace open)."
     }
   ],
