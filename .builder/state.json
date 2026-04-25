@@ -4,16 +4,16 @@
   "phase": "A",
   "phase_started_at": "2026-04-25T18:09:00Z",
   "tasks_total_in_phase": 5,
-  "tasks_completed_in_phase": 2,
+  "tasks_completed_in_phase": 3,
   "current_task": null,
-  "next_task": "A3",
+  "next_task": "A4",
   "drift": {
     "blocker_count": 0,
-    "non_blocker_count": 2,
-    "last_check_at": "2026-04-25T18:30:00Z",
-    "notes": "All non-blocker drift entries live in docs/drift-log.md. Summary: D-001 (eslint-plugin-neverthrow incompatible with @typescript-eslint v8; C11 enforcement is convention + code review until plugin updates), D-002 (shadcn/ui init + Button smoke test deferred from A1 to A3)."
+    "non_blocker_count": 4,
+    "last_check_at": "2026-04-25T19:10:00Z",
+    "notes": "All non-blocker drift entries live in docs/drift-log.md. Open: D-001 (eslint-plugin-neverthrow gap, C11 enforced by convention), D-002 (shadcn primitives written manually because the shadcn CLI's nested pnpm spawn fails in this shell), D-003 (audit destination is tauri-plugin-log until A4 adds Drizzle audit_log table), D-004 (Welcome E2E deferred to Phase D pending tauri-driver setup)."
   },
-  "tests": { "passing": 10, "failing": 0, "skipped": 0 },
+  "tests": { "passing": 22, "failing": 0, "skipped": 0 },
   "cost_so_far_usd": 0.0,
   "tokens": { "input": 0, "output": 0 },
   "history": [
@@ -28,6 +28,12 @@
       "completed_at": "2026-04-25T18:30:00Z",
       "commit": "06df4c4",
       "notes": "OS keychain wrapper. keyring-rs 3.6.3 in src-tauri (per ADR-0003), exposed via three Tauri IPC commands (keychain_get/set/delete). lib/keychain/index.ts wraps invoke() in ResultAsync<T, KeychainError>. 8 unit tests pass with mocked invoke. cargo check green in 43.81s (first build). Real-keychain integration test deferred to a Phase-D follow-up that adds macOS+Windows CI runners."
+    },
+    {
+      "task_id": "A3",
+      "completed_at": "2026-04-25T19:10:00Z",
+      "commit": "TBD",
+      "notes": "Welcome screen + Claude Code detection. Three Tauri commands added (cli_is_installed, cli_is_authenticated, audit_log_event). lib/cli-detection wraps detection in ResultAsync<CliState, DetectionError>. lib/audit logs through tauri-plugin-log. app/(welcome)/page.tsx is the new root route, with three state components (loading, install, auth, ready) plus the original loading state. Hand-written Button/Card/Alert primitives (shadcn CLI not viable, see D-002). app/page.tsx deleted in favour of route group. pnpm verify green (21 unit + 1 integration). cargo check green in 2.26s (incremental). pnpm dev spot-check renders Welcome at /. Welcome E2E (D-004) deferred to Phase D."
     }
   ],
   "open_questions": []

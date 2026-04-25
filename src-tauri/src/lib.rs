@@ -1,4 +1,5 @@
 use keyring::Entry;
+use std::process::Command;
 
 // Builder-local keychain commands. See ADR-0003.
 //
@@ -33,6 +34,59 @@ fn keychain_delete(service: String, account: String) -> Result<(), String> {
   }
 }
 
+// Claude Code CLI detection per ADR-0002 and build-order.md A3.
+//
+// `cli_is_installed` returns true if `which claude` (or `where` on Windows)
+// resolves AND `claude --version` exits successfully. The version probe
+// guards against PATH lying about a non-functional binary.
+//
+// `cli_is_authenticated` runs `claude -p "ping" --output-format json` and
+// returns true on success. Cost is small (single ping prompt) but real;
+// cache hints can be added in a later phase.
+
+#[tauri::command]
+fn cli_is_installed() -> Result<bool, String> {
+  let which_or_where = if cfg!(target_os = "windows") {
+    "where"
+  } else {
+    "which"
+  };
+  let on_path = Command::new(which_or_where)
+    .arg("claude")
+    .output()
+    .map_err(|e| format!("failed to run {which_or_where}: {e}"))?;
+  if !on_path.status.success() {
+    return Ok(false);
+  }
+  let version = Command::new("claude").arg("--version").output();
+  match version {
+    Ok(v) => Ok(v.status.success()),
+    Err(_) => Ok(false),
+  }
+}
+
+#[tauri::command]
+fn cli_is_authenticated() -> Result<bool, String> {
+  let output = Command::new("claude")
+    .arg("-p")
+    .arg("ping")
+    .arg("--output-format")
+    .arg("json")
+    .output()
+    .map_err(|e| format!("failed to spawn claude: {e}"))?;
+  Ok(output.status.success())
+}
+
+// Audit logger per spec.md Flow A AC5 and rules/02-backend.md B20.
+// Currently routes to tauri-plugin-log; a Drizzle audit_log table arrives
+// at A4 (project creation) when the DB layer first lands.
+
+#[tauri::command]
+fn audit_log_event(event_type: String, payload: String) -> Result<(), String> {
+  log::info!(target: "builder.audit", "event={event_type} payload={payload}");
+  Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
@@ -49,7 +103,10 @@ pub fn run() {
     .invoke_handler(tauri::generate_handler![
       keychain_get,
       keychain_set,
-      keychain_delete
+      keychain_delete,
+      cli_is_installed,
+      cli_is_authenticated,
+      audit_log_event
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
