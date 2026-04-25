@@ -1,0 +1,172 @@
+{
+  "project_name": "Builder",
+  "interview_started_at": "2026-04-25T00:00:00Z",
+  "interview_complete": true,
+  "answers": {
+    "Q1": {
+      "answer": "A desktop app that lets absolute novices build production web apps by chatting with Claude, offline, on their own machine.",
+      "confidence": "confident",
+      "source": "design"
+    },
+    "Q2": {
+      "answer": "yes, with API key only; no separate user account",
+      "confidence": "confident",
+      "source": "design",
+      "rationale": "It is a single-user desktop app. The API key is the credential."
+    },
+    "Q3": {
+      "answer": "no",
+      "confidence": "confident",
+      "source": "design",
+      "rationale": "The Builder itself is free; the novice pays Anthropic directly for tokens."
+    },
+    "Q4": {
+      "answer": "no",
+      "confidence": "confident",
+      "source": "design"
+    },
+    "Q5": {
+      "answer": "yes, central feature: Claude conducts the interview, ingests files, and orchestrates Claude Code",
+      "confidence": "confident",
+      "source": "design"
+    },
+    "Q6": {
+      "answer": "yes, the orchestrator runs build phases that span minutes",
+      "confidence": "confident",
+      "source": "design"
+    },
+    "Q7": {
+      "answer": "no inbound webhooks; only outbound calls to Anthropic, Vercel, GitHub",
+      "confidence": "confident",
+      "source": "design"
+    },
+    "Q8": {
+      "answer": "yes, novice uploads PRDs, screenshots, schemas, transcripts, data samples",
+      "confidence": "confident",
+      "source": "design"
+    },
+    "Q9": {
+      "answer": "yes",
+      "confidence": "confident",
+      "source": "design",
+      "rationale": "Novices may be in the EU/UK; the app processes their content. PII guard required."
+    },
+    "Q10": {
+      "answer": "login-only equivalent: API key required to do anything beyond Welcome",
+      "confidence": "confident",
+      "source": "design"
+    },
+    "Q11": {
+      "answer": "under-1k for v1 beta",
+      "confidence": "tentative",
+      "source": "design"
+    },
+    "Q12": {
+      "answer": "you choose; calm and minimal, dark and light modes",
+      "confidence": "default-applied",
+      "source": "design"
+    },
+    "Q13": {
+      "answer": "desktop only",
+      "confidence": "confident",
+      "source": "design"
+    },
+    "Q14": {
+      "answer": "yes, WCAG 2.2 AA",
+      "confidence": "confident",
+      "source": "design"
+    },
+    "Q15": {
+      "answer": [
+        "First run: paste API key, create project",
+        "Recursive interview: chat to a complete spec",
+        "File ingestion: drop a PRD or screenshot, see it merged",
+        "Build: dashboard with live tail, ETA, drift surfacing",
+        "Deploy preview to Vercel and export to GitHub"
+      ],
+      "confidence": "confident",
+      "source": "design"
+    },
+    "Q16": {
+      "answer": "see spec.md section 3 Flows A through J for Given/When/Then",
+      "confidence": "confident",
+      "source": "design"
+    },
+    "Q17": {
+      "answer": ["Anthropic API", "Vercel", "GitHub via gh CLI", "OS keychain"],
+      "confidence": "confident",
+      "source": "design"
+    },
+    "Q18": {
+      "answer": "just-users (single user per machine; no multi-tenancy)",
+      "confidence": "confident",
+      "source": "design"
+    },
+    "Q19": {
+      "answer": "no paid tier; the Builder is free",
+      "confidence": "confident",
+      "source": "design"
+    },
+    "Q20": {
+      "answer": "Tauri 2 desktop app, signed installers per platform",
+      "confidence": "confident",
+      "source": "design",
+      "rationale": "Hard requirement: offline desktop, owned-by-novice."
+    },
+    "Q21": {
+      "answer": "very fast app launch and chat round-trip; see NFR budgets",
+      "confidence": "confident",
+      "source": "design"
+    },
+    "Q22": {
+      "answer": "smoke + critical paths; full coverage on lib/ and orchestrator",
+      "confidence": "confident",
+      "source": "design"
+    },
+    "Q23": {
+      "answer": "no telemetry by default; Sentry opt-in only after first build; novice content never leaves the machine except as Anthropic prompts",
+      "confidence": "confident",
+      "source": "design"
+    },
+    "Q24": {
+      "answer": "Builder dev cost ceiling: 50 USD per development phase; novice cost ceiling: 5 GBP per build day, configurable",
+      "confidence": "confident",
+      "source": "design"
+    },
+    "Q25": {
+      "answer": "Eat the kit's own dog food: the Builder is itself built using the Build Spec Kit, follows all rules, runs its own /recheck.",
+      "confidence": "confident",
+      "source": "design"
+    },
+    "Q26": {
+      "answer": "yes, global",
+      "confidence": "confident",
+      "source": "design"
+    },
+    "Q27": {
+      "answer": ["en-GB"],
+      "confidence": "default-applied",
+      "source": "design",
+      "rationale": "i18n deferred to a later phase per kit section 14.10"
+    },
+    "Q28": {
+      "answer": "yes: deleting a project, overwriting a non-empty folder, force-pushing to GitHub",
+      "confidence": "confident",
+      "source": "design"
+    }
+  },
+  "uploaded_files": [
+    {
+      "path": "inputs/kit-section-14.md",
+      "summary": "The original onboarding-layer specification for the Builder",
+      "extracted_answers": ["Q1", "Q5", "Q6", "Q8", "Q15", "Q16", "Q17", "Q20", "Q23"],
+      "ingested_at": "2026-04-25T00:00:00Z"
+    },
+    {
+      "path": "inputs/kit-sections-1-13.md",
+      "summary": "The Build Spec Kit defaults the Builder must follow and use",
+      "extracted_answers": ["Q22", "Q25"],
+      "ingested_at": "2026-04-25T00:00:00Z"
+    }
+  ]
+}

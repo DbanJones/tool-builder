@@ -1,0 +1,57 @@
+# Dependencies
+node_modules/
+
+# Next.js build output
+.next/
+out/
+
+# Tauri / Rust build output
+src-tauri/target/
+target/
+
+# Build / dist
+dist/
+build/
+
+# Test artefacts
+coverage/
+playwright-report/
+test-results/
+.vitest-cache/
+
+# Environment files (real values live in OS keychain or .env.local)
+.env
+.env.local
+.env.*.local
+
+# Builder runtime state (per CLAUDE.md binding rule 7; only state.json + answers.json + this directory's seed contents are tracked)
+.builder/builder.db
+.builder/builder.db-journal
+.builder/builder.db-wal
+.builder/builder.db-shm
+.builder/snapshots/
+.builder/history.log
+.builder/builder.log
+.builder/builder.log.*
+
+# Claude Code per-user settings (project-level commands and agents ARE tracked)
+.claude/settings.local.json
+
+# Signing artefacts (never committed)
+*.pfx
+*.p12
+*.cert
+*.crt
+*.key
+*.pem
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~
+
+# pnpm
+.pnpm-store/

@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "project_path": ".",
+  "phase": "A",
+  "phase_started_at": null,
+  "tasks_total_in_phase": 5,
+  "tasks_completed_in_phase": 0,
+  "current_task": null,
+  "next_task": "A1",
+  "drift": {
+    "blocker_count": 0,
+    "non_blocker_count": 0,
+    "last_check_at": null
+  },
+  "tests": { "passing": 0, "failing": 0, "skipped": 0 },
+  "cost_so_far_usd": 0.0,
+  "tokens": { "input": 0, "output": 0 },
+  "history": [],
+  "open_questions": []
+}
