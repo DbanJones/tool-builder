@@ -9,7 +9,7 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 - **Discovered at**: A2 (keychain wrapper) when wiring the rule for the first Result-returning module.
 - **Cause**: the only published version of `eslint-plugin-neverthrow` is 1.1.4 (2022). It uses an old `@typescript-eslint` parserServices accessor that throws "Error while loading rule 'neverthrow/must-use-result': types not available" when paired with `@typescript-eslint@8` (the current major). No compatible release exists.
 - **Resolution**: drift accepted. Plugin removed from `eslint.config.js`. Convention plus code review (and per-PR `reviewer` subagent) enforces "every Result must be consumed" until one of: (a) a compatible plugin release lands, (b) we fork-and-patch, (c) we migrate to a different result/error library with native lint support.
-- **Commit**: TBD (A2 commit).
+- **Commit**: 06df4c4 (A2 commit).
 - **Follow-up**: monitor https://github.com/mdbetancourt/eslint-plugin-neverthrow for v2 / a flat-config and TS-ESLint v8 compatible release. Re-attempt at next major dep refresh.
 
 ### D-002 — shadcn/ui init + Button smoke test deferred from A1 to A3

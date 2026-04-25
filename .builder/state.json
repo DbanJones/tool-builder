@@ -26,7 +26,7 @@
     {
       "task_id": "A2",
       "completed_at": "2026-04-25T18:30:00Z",
-      "commit": "TBD",
+      "commit": "06df4c4",
       "notes": "OS keychain wrapper. keyring-rs 3.6.3 in src-tauri (per ADR-0003), exposed via three Tauri IPC commands (keychain_get/set/delete). lib/keychain/index.ts wraps invoke() in ResultAsync<T, KeychainError>. 8 unit tests pass with mocked invoke. cargo check green in 43.81s (first build). Real-keychain integration test deferred to a Phase-D follow-up that adds macOS+Windows CI runners."
     }
   ],
