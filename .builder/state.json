@@ -32,7 +32,7 @@
     {
       "task_id": "A3",
       "completed_at": "2026-04-25T19:10:00Z",
-      "commit": "TBD",
+      "commit": "81bbc66",
       "notes": "Welcome screen + Claude Code detection. Three Tauri commands added (cli_is_installed, cli_is_authenticated, audit_log_event). lib/cli-detection wraps detection in ResultAsync<CliState, DetectionError>. lib/audit logs through tauri-plugin-log. app/(welcome)/page.tsx is the new root route, with three state components (loading, install, auth, ready) plus the original loading state. Hand-written Button/Card/Alert primitives (shadcn CLI not viable, see D-002). app/page.tsx deleted in favour of route group. pnpm verify green (21 unit + 1 integration). cargo check green in 2.26s (incremental). pnpm dev spot-check renders Welcome at /. Welcome E2E (D-004) deferred to Phase D."
     }
   ],

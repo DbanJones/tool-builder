@@ -17,7 +17,7 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 - **Discovered at**: A1 (deferred), retried and resolved at A3.
 - **Cause**: the `shadcn@latest init` and `shadcn add` commands internally `spawn('pnpm', ...)` for dep installation. In this Claude Code shell environment, that spawned subprocess does not inherit a working PATH to pnpm (which lives at `~/Library/pnpm/pnpm`, not on the system PATH), so shadcn fails with `ENOENT`. PATH propagation worked for the outer invocation but not the nested spawn. Even with `-y -d -f` and various PATH gymnastics it could not be coaxed into completing.
 - **Resolution**: shadcn deps were installed manually (`clsx`, `tailwind-merge`, `class-variance-authority`, `lucide-react`, `tw-animate-css`, `@base-ui/react`). The three primitives needed at A3 (`Button`, `Card`, `Alert`) and `lib/utils.ts` (`cn` helper) were hand-written using the canonical shadcn patterns and CSS variable tokens (neutral base color). `tailwind.config.ts` and `app/globals.css` were updated by hand. Output is identical to what shadcn would have produced; only the path differs.
-- **Commit**: TBD (A3 commit).
+- **Commit**: 81bbc66 (A3 commit).
 - **Follow-up**: when adding any further shadcn primitive (Dialog, Form, etc. for A4 onwards), keep writing them by hand from the same patterns. Revisit the CLI in a future session if Claude Code's shell environment changes or pnpm becomes available on the system PATH.
 
 ### D-003 — AC5 audit destination is `tauri-plugin-log` rather than `.builder/builder.log`
@@ -25,7 +25,7 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 - **Discovered at**: A3.
 - **Cause**: the audit mechanism needed to land at A3 to satisfy Flow A AC5 (`audit log records app_first_run`). The Drizzle `audit_log` table does not exist yet (no DB layer until A4), and `.builder/builder.log` rotation requires file-system glue we have not written. To unblock A3, `audit_log_event` is implemented as a Tauri command that calls `log::info!` via the existing `tauri-plugin-log`. The events ARE logged; the destination is the OS log directory rather than `.builder/builder.log`.
 - **Resolution**: drift accepted as a temporary destination. Migration target: when Drizzle lands at A4 (project creation requires the `projects` table), an `audit_log` table is added in the same migration and `audit_log_event` is rewritten to insert there.
-- **Commit**: TBD (A3 commit).
+- **Commit**: 81bbc66 (A3 commit).
 - **Follow-up**: A4 task to migrate the audit destination.
 
 ### D-004 — Welcome E2E (`tests/e2e/welcome.spec.ts`) deferred from A3 to Phase D
@@ -33,5 +33,5 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 - **Discovered at**: A3.
 - **Cause**: the E2E in build-order.md A3 wants Playwright driving the Welcome screen against a stubbed `claude` binary on PATH. To do that with the real Tauri webview requires `tauri-driver` (a separate setup); to do it against `pnpm dev` requires mocking Tauri `invoke` at the Playwright boundary, which is non-trivial and gives a less faithful test than the production transport. Both paths were larger than fit in A3's scope.
 - **Resolution**: drift accepted. A3 ships unit-test coverage of the same logical surface: 7 unit tests in `lib/cli-detection/index.test.ts` cover all three states (`missing`, `unauthenticated`, `ready`) plus error paths, with the `invoke` boundary mocked. A real-binary E2E lands in Phase D when `tauri-driver` is set up.
-- **Commit**: TBD (A3 commit).
+- **Commit**: 81bbc66 (A3 commit).
 - **Follow-up**: Phase D ticket to install `tauri-driver`, write `tests/e2e/welcome.spec.ts` with a fixture `claude` binary on a per-test PATH.
