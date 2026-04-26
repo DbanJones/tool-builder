@@ -38,7 +38,7 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
   - DOCX + PDF extractors implemented and ready to use.
   - MD + TXT round-trip integration tests against `tests/fixtures/sample.md` and `sample.txt` (5 tests including unsupported-extension + missing-path + summary-bounded behaviour).
   - DOCX + PDF round-trip integration tests deferred until binary fixtures are sourced (e.g. a 1-page sample PDF + 1-page DOCX checked into `tests/fixtures/`).
-- **Commit**: TBD (C2 commit).
+- **Commit**: 3c7aa4e (C2 commit).
 - **Follow-up**: source small (~5 KB each) sample.pdf + sample.docx fixtures, add 2-3 tests asserting expected paragraph content. Could be done at C8 (ingestion contract UI) when real files start landing in `{project}/inputs/` end-to-end.
 
 ### D-008 — Promptfoo eval suite for the interview prompt deferred from B5
