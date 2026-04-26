@@ -16,17 +16,17 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { createProject, PROJECT_NAME_REGEX } from "@/lib/project";
+import { createProject, sanitiseProjectName } from "@/lib/project";
 
 const FormSchema = z.object({
   name: z
     .string()
     .min(1, "Project name is required")
-    .max(214, "Project name must be 214 characters or fewer")
-    .regex(
-      PROJECT_NAME_REGEX,
-      "Use lowercase letters, digits, dots, hyphens, or underscores; start with a letter or digit",
-    ),
+    .max(200, "Project name is too long (200 characters max)")
+    .refine((n) => sanitiseProjectName(n) !== null, {
+      message:
+        "Project name needs at least one letter or digit (after stripping punctuation/emoji).",
+    }),
   folder: z.string().min(1, "Folder is required"),
 });
 
@@ -38,11 +38,15 @@ export default function NewProjectPage() {
   const {
     register,
     handleSubmit,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(FormSchema),
     defaultValues: { folder: "~/Documents/ClaudeBuilds" },
   });
+
+  const watchedName = watch("name") ?? "";
+  const sanitisedFolder = watchedName ? sanitiseProjectName(watchedName) : null;
 
   const onSubmit = async (values: FormValues): Promise<void> => {
     setSubmissionError(null);
@@ -93,9 +97,16 @@ export default function NewProjectPage() {
                   <p id="name-error" className="text-sm text-destructive">
                     {errors.name.message}
                   </p>
+                ) : sanitisedFolder ? (
+                  <p id="name-hint" className="text-sm text-muted-foreground">
+                    Folder will be{" "}
+                    <span className="font-mono">{sanitisedFolder}</span>; the display name in the
+                    Builder stays <span className="font-mono">{watchedName}</span>.
+                  </p>
                 ) : (
                   <p id="name-hint" className="text-sm text-muted-foreground">
-                    Lowercase, no spaces. Example: <span className="font-mono">preppilot</span>
+                    Anything goes. Example: <span className="font-mono">PrepPilot</span> or{" "}
+                    <span className="font-mono">My Cool App</span>.
                   </p>
                 )}
               </div>

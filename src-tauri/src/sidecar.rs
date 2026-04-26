@@ -33,23 +33,34 @@ impl SidecarState {
 
 /// Spawn the Node sidecar process. Returns a handle holding stdin/stdout.
 ///
-/// For dev: looks for `sidecar/dist/index.js` relative to the current working
-/// directory, which is the project root when launched via `pnpm tauri dev`.
-/// For production: a single-executable bundle is a Phase E task; this function
-/// will be revised to point at the bundled binary.
+/// For dev: looks for `sidecar/dist/index.js` either relative to the current
+/// working directory (which is the project root if launched via `pnpm tauri
+/// dev` from there) OR one level up (when cargo runs from `src-tauri/`,
+/// which is the actual cwd inside `pnpm tauri dev`). For production: a
+/// single-executable bundle is a Phase E task; this function will be revised
+/// to point at the bundled binary.
 pub fn spawn_sidecar(_app: &AppHandle) -> Result<SidecarHandle, String> {
   let cwd = std::env::current_dir().map_err(|e| format!("cwd: {e}"))?;
-  let sidecar_script: PathBuf = cwd.join("sidecar").join("dist").join("index.js");
-
-  if !sidecar_script.exists() {
-    return Err(format!(
-      "sidecar script not found at {}; run `pnpm sidecar:build` first",
-      sidecar_script.display()
-    ));
-  }
+  let candidates: Vec<PathBuf> = vec![
+    cwd.join("sidecar").join("dist").join("index.js"),
+    cwd.join("..").join("sidecar").join("dist").join("index.js"),
+  ];
+  let sidecar_script = candidates
+    .iter()
+    .find(|p| p.exists())
+    .ok_or_else(|| {
+      format!(
+        "sidecar script not found; run `pnpm sidecar:build` first. Tried: {}",
+        candidates
+          .iter()
+          .map(|p| p.display().to_string())
+          .collect::<Vec<_>>()
+          .join("; ")
+      )
+    })?;
 
   let mut child = Command::new("node")
-    .arg(&sidecar_script)
+    .arg(sidecar_script)
     .stdin(Stdio::piped())
     .stdout(Stdio::piped())
     .stderr(Stdio::inherit())

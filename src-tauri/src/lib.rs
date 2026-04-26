@@ -102,23 +102,58 @@ fn cli_is_authenticated() -> Result<bool, String> {
 // The DB insert + audit row are handled by the sidecar (`projects.create`); the
 // webview orchestrates the two halves via lib/project/index.ts.
 //
-// Validation is intentionally strict: lowercase, alphanumeric plus dot/dash/
-// underscore, max 214 chars, must not start with `.` or `_`. Filesystem-safe
-// across all three platforms.
+// The novice's typed name is preserved as the display name in the projects
+// row; the folder name on disk is the sanitised form (lowercase, hyphens
+// for whitespace, only [a-z0-9._-]). Mirrors lib/project/index.ts
+// sanitiseProjectName.
 
-fn is_valid_project_name(name: &str) -> bool {
-  if name.is_empty() || name.len() > 214 {
-    return false;
+fn sanitise_project_name(raw: &str) -> Option<String> {
+  let mut s: String = raw.to_lowercase();
+  // Whitespace -> hyphen
+  let mut out = String::with_capacity(s.len());
+  let mut prev_was_dash = false;
+  for c in s.chars() {
+    if c.is_whitespace() {
+      if !prev_was_dash {
+        out.push('-');
+        prev_was_dash = true;
+      }
+      continue;
+    }
+    if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_' {
+      out.push(c);
+      prev_was_dash = false;
+      continue;
+    }
+    if c == '-' {
+      if !prev_was_dash {
+        out.push('-');
+        prev_was_dash = true;
+      }
+      continue;
+    }
+    // Drop any other character (punctuation, emoji, accented letters, etc.).
   }
-  let mut chars = name.chars();
-  let first = match chars.next() {
-    Some(c) => c,
-    None => return false,
-  };
-  if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
-    return false;
+  s = out;
+  // Trim leading/trailing punctuation.
+  let trimmed = s.trim_matches(|c| c == '.' || c == '-' || c == '_');
+  let mut s = trimmed.to_string();
+  if s.len() > 100 {
+    s.truncate(100);
+    while s
+      .chars()
+      .last()
+      .map(|c| c == '.' || c == '-' || c == '_')
+      .unwrap_or(false)
+    {
+      s.pop();
+    }
   }
-  chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '-' || c == '_')
+  if s.is_empty() {
+    None
+  } else {
+    Some(s)
+  }
 }
 
 fn expand_tilde(path: &str) -> PathBuf {
@@ -132,17 +167,17 @@ fn expand_tilde(path: &str) -> PathBuf {
 
 #[tauri::command]
 fn project_create_folder(name: String, folder: String) -> Result<String, String> {
-  if !is_valid_project_name(&name) {
-    return Err(format!(
-      "invalid project name '{name}': must be 1-214 chars, lowercase, start with a letter or digit, contain only letters, digits, dots, hyphens, and underscores"
-    ));
-  }
+  let folder_name = sanitise_project_name(&name).ok_or_else(|| {
+    format!(
+      "project name '{name}' has no usable characters after sanitisation (need at least one letter or digit)"
+    )
+  })?;
 
   let parent = expand_tilde(&folder);
   fs::create_dir_all(&parent)
     .map_err(|e| format!("failed to create parent folder {}: {e}", parent.display()))?;
 
-  let project_root = parent.join(&name);
+  let project_root = parent.join(&folder_name);
   if project_root.exists() {
     return Err(format!(
       "target folder already exists: {}",

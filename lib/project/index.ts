@@ -21,22 +21,48 @@ export type ProjectError =
   | { kind: "Filesystem"; message: string }
   | { kind: "Db"; message: string };
 
-// Mirrors the Rust validator at src-tauri/src/lib.rs is_valid_project_name.
-// Pre-flight here so we can render an inline error before the round-trip.
-export const PROJECT_NAME_REGEX = /^[a-z0-9][a-z0-9._-]{0,213}$/;
+const MAX_NAME_LEN = 100;
+
+/**
+ * Sanitise a freeform project name into a filesystem-safe folder name.
+ * Mirrors the Rust function `sanitise_project_name` in src-tauri/src/lib.rs.
+ *
+ * Rules (designed to be friendly to novices):
+ * - Lowercase
+ * - Runs of whitespace collapse to a single hyphen
+ * - Strip anything that isn't [a-z0-9._-]
+ * - Collapse runs of hyphens
+ * - Trim leading/trailing dots, hyphens, underscores
+ * - Cap at 100 chars
+ *
+ * Returns null if the result would be empty (e.g. caller typed only emoji
+ * or punctuation).
+ */
+export function sanitiseProjectName(raw: string): string | null {
+  let s = raw.toLowerCase();
+  s = s.replace(/\s+/g, "-");
+  s = s.replace(/[^a-z0-9._-]+/g, "");
+  s = s.replace(/-+/g, "-");
+  s = s.replace(/^[._-]+|[._-]+$/g, "");
+  if (s.length > MAX_NAME_LEN) s = s.slice(0, MAX_NAME_LEN).replace(/[._-]+$/, "");
+  return s.length === 0 ? null : s;
+}
 
 export function validateProjectName(name: string): ProjectError | null {
-  if (!name) {
+  if (!name || name.trim().length === 0) {
     return { kind: "InvalidName", message: "Project name is required" };
   }
-  if (name.length > 214) {
-    return { kind: "InvalidName", message: "Project name must be 214 characters or fewer" };
+  if (name.length > 200) {
+    return {
+      kind: "InvalidName",
+      message: "Project name is too long (200 characters max)",
+    };
   }
-  if (!PROJECT_NAME_REGEX.test(name)) {
+  if (sanitiseProjectName(name) === null) {
     return {
       kind: "InvalidName",
       message:
-        "Project name must start with a lowercase letter or digit and contain only lowercase letters, digits, dots, hyphens, and underscores",
+        "Project name needs at least one letter or digit (after stripping punctuation/emoji).",
     };
   }
   return null;
@@ -54,14 +80,14 @@ const fromSidecarError = (e: SidecarError): ProjectError => ({
 
 /**
  * Two-stage project creation. The Tauri shell does the file-system work
- * (mkdir + git init + write placeholder templates); the sidecar inserts the
- * `projects` row plus a `project_created` audit row in one transaction.
+ * (mkdir + git init + write placeholder templates) and uses a sanitised
+ * folder name; the sidecar inserts the `projects` row + `project_created`
+ * audit row in one transaction storing the **raw** name (so display in the
+ * UI matches what the user typed) alongside the sanitised folder path.
  *
  * Partial failure window: if the FS step succeeds but the DB step fails, the
  * folder exists on disk without a matching DB row. For the A4c MVP this is
- * surfaced to the caller and not rolled back; manual cleanup is required.
- * A future task can wrap both halves in a Tauri command that calls the sidecar
- * internally and rolls back the FS work on DB failure.
+ * surfaced to the caller and not rolled back; manual cleanup required.
  */
 export function createProject(name: string, folder: string): ResultAsync<Project, ProjectError> {
   const validationError = validateProjectName(name);
