@@ -145,7 +145,9 @@ server.setRequestHandler(ListToolsRequestSchema, () => ({
 
 const OfferOptionsArgsSchema = z.object({
   question: z.string().min(1),
-  options: z.array(z.string().min(1)).min(1).max(20),
+  // Exactly 3 options per the human's 2026-04-26 direction. The UI always
+  // appends a 4th "Enter my own response" button regardless of allow_freeform.
+  options: z.array(z.string().min(1)).length(3),
   allow_freeform: z.boolean().optional(),
 });
 

@@ -80,7 +80,9 @@ function InterviewClient() {
     options: readonly string[];
     allowFreeform: boolean;
   } | null>(null);
+  const [isPreparingBank, setIsPreparingBank] = useState(false);
   const sessionIdRef = useRef<string | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Load the project (or surface a clear error) whenever the URL param changes.
@@ -164,6 +166,7 @@ function InterviewClient() {
         return;
       case "done":
         setStatus({ kind: "idle" });
+        setIsPreparingBank(false);
         void refreshSpec();
         return;
       case "rate_limit":
@@ -182,10 +185,13 @@ function InterviewClient() {
     if (status.kind === "streaming") return;
     if (!project) return;
 
+    const isFirstTurn = sessionIdRef.current === null;
+
     setMessages((prev) => [...prev, { role: "user", text: trimmed }]);
     setInput("");
     setPendingOptions(null);
     setStatus({ kind: "streaming" });
+    if (isFirstTurn) setIsPreparingBank(true);
 
     const result = await chatSend({
       prompt: trimmed,
@@ -198,9 +204,11 @@ function InterviewClient() {
     result.match(
       () => {
         setStatus((prev) => (prev.kind === "streaming" ? { kind: "idle" } : prev));
+        setIsPreparingBank(false);
       },
       (error) => {
         setStatus({ kind: "error", message: error.message });
+        setIsPreparingBank(false);
       },
     );
   };
@@ -211,10 +219,22 @@ function InterviewClient() {
       // Pre-fill the textarea so the novice can edit before sending.
       setInput(option);
       setPendingOptions(null);
+      // Focus so they can edit immediately.
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+      });
     } else {
       // Strict-pick: send immediately on click.
       void handleSend(option);
     }
+  };
+
+  const handleEnterMyOwn = (): void => {
+    setPendingOptions(null);
+    setInput("");
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
   };
 
   const isStreaming = status.kind === "streaming";
@@ -315,11 +335,29 @@ function InterviewClient() {
             </div>
           </div>
 
+          {isPreparingBank && messages[messages.length - 1]?.role === "user" && (
+            <div className="border-t bg-muted/40 px-6 py-3">
+              <div
+                className="mx-auto flex w-full max-w-2xl items-center gap-3 text-sm text-muted-foreground"
+                aria-live="polite"
+              >
+                <Loader2
+                  className="h-4 w-4 animate-spin motion-reduce:animate-none"
+                  aria-hidden="true"
+                />
+                <div>
+                  <strong className="text-foreground">Preparing question bank...</strong>{" "}
+                  28 fast-path questions will guide your spec.
+                </div>
+              </div>
+            </div>
+          )}
+
           {pendingOptions !== null && (
             <div className="border-t bg-muted/40 px-6 py-3">
               <div className="mx-auto w-full max-w-2xl">
                 <p className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">
-                  Pick one{pendingOptions.allowFreeform ? " (or type your own below)" : ""}
+                  Pick an option, or enter your own
                 </p>
                 <div className="flex flex-wrap gap-2" role="group" aria-label="Answer options">
                   {pendingOptions.options.map((opt) => (
@@ -335,6 +373,14 @@ function InterviewClient() {
                       {opt}
                     </Button>
                   ))}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleEnterMyOwn}
+                  >
+                    Enter my own response
+                  </Button>
                 </div>
               </div>
             </div>
@@ -346,6 +392,7 @@ function InterviewClient() {
                 Message
               </label>
               <textarea
+                ref={inputRef}
                 id="chat-input"
                 value={input}
                 onChange={(e) => {
