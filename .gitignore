@@ -28,15 +28,20 @@ test-results/
 .env.local
 .env.*.local
 
-# Builder runtime state (per CLAUDE.md binding rule 7; only state.json + answers.json + this directory's seed contents are tracked)
-.builder/builder.db
-.builder/builder.db-journal
-.builder/builder.db-wal
-.builder/builder.db-shm
-.builder/snapshots/
-.builder/history.log
-.builder/builder.log
-.builder/builder.log.*
+# Builder runtime state at any depth (root .builder/ for the Builder repo
+# itself, src-tauri/.builder/ when Tauri's cwd is src-tauri, and per-novice
+# project .builder/ folders). Only the seed files (state.json, answers.json,
+# mcp-config.json) under the root .builder/ are tracked; runtime artefacts
+# everywhere are ignored.
+**/.builder/builder.db
+**/.builder/builder.db-journal
+**/.builder/builder.db-wal
+**/.builder/builder.db-shm
+**/.builder/snapshots/
+**/.builder/history.log
+**/.builder/builder.log
+**/.builder/builder.log.*
+**/.builder/mcp-config.json
 
 # Claude Code per-user settings (project-level commands and agents ARE tracked)
 .claude/settings.local.json
