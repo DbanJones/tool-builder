@@ -9,7 +9,7 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 - **Discovered at**: D4.
 - **Cause**: the kit's estimator wants per-task-id observations so the dashboard can say "remaining tasks × per-task estimate". The orchestrator does not yet emit phase/task markers in the stream-json (D5 wires those). Building a per-task estimator now would have nothing to estimate against; building a per-turn estimator now gives the novice live feedback ("a turn takes ~2 min on this build") and is the correct primitive for the per-task estimator on top.
 - **Resolution**: drift accepted. D4 ships `lib/eta` as a pure (observations[], elapsedMs) → {median, p90, mode} estimator with full mode transitions (estimating → normal → past_p90) and the honesty fallback. The dashboard records one observation per claude `result.success` event (= one per turn) and labels the footer as "ETA per turn". When D5 wires phase markers, change the observation source from `done` events to `phase_complete` markers; the estimator function does not change.
-- **Commit**: TBD (D4 commit).
+- **Commit**: 340bd7a (D4 commit).
 - **Follow-up**: D5 swaps the observation source. No schema change needed (per-turn durations are kept in component state; the persisted `actions` rows already carry the timestamps for any future per-task derivation).
 
 ### D-013 — Chat-message + answer-merging side effects + PII confirm modal deferred from C8

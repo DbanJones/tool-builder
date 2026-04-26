@@ -7,19 +7,25 @@
   "phase_b_completed_at": "2026-04-26T11:45:00Z",
   "phase_c_completed_at": "2026-04-26T17:00:00Z",
   "tasks_total_in_phase": 6,
-  "tasks_completed_in_phase": 3,
+  "tasks_completed_in_phase": 4,
   "current_task": null,
-  "next_task": "D4",
+  "next_task": "D5",
   "drift": {
     "blocker_count": 0,
-    "non_blocker_count": 12,
+    "non_blocker_count": 13,
     "last_check_at": "2026-04-26T17:00:00Z",
-    "notes": "Open drift in docs/drift-log.md: D-001, D-002, D-004, D-005, D-006, D-007, D-008, D-009, D-010, D-011, D-012, D-013. Closed: D-003. Phase C boundary PASSED at 17:00:00Z (docs/spec-trace.md, commit 00cd441)."
+    "notes": "Open drift in docs/drift-log.md: D-001, D-002, D-004, D-005, D-006, D-007, D-008, D-009, D-010, D-011, D-012, D-013, D-014. Closed: D-003. Phase C boundary PASSED at 17:00:00Z (docs/spec-trace.md, commit 00cd441)."
   },
-  "tests": { "passing": 231, "failing": 0, "skipped": 0, "breakdown": "154 TS unit + 46 TS integration + 31 Rust unit" },
+  "tests": { "passing": 250, "failing": 0, "skipped": 0, "breakdown": "168 TS unit + 51 TS integration + 31 Rust unit" },
   "cost_so_far_usd": 0.0,
   "tokens": { "input": 0, "output": 0 },
   "history": [
+    {
+      "task_id": "D4",
+      "completed_at": "2026-04-26T18:25:00Z",
+      "commit": "340bd7a",
+      "notes": "Cost meter + ETA estimator. Closes Flow F AC4 (cost meter from claude usage data) and v1 of Flow F AC3 (ETA via kit §14.5.3). New `costs` table per spec §4 (id, project_id, ts, model, input_tokens, output_tokens, usd_cents — usd_cents stored as INTEGER so SUM stays exact; orchestrator's float total_cost_usd → round(*100)). Migration 0004_big_wiccan.sql. Handlers `costs.append` + `costs.sumByProject` (one-row aggregate for the meter via Drizzle sql\\`sum(...)\\` + count(*)). New lib/eta: pure (observations[], elapsedMs) → {medianMs, p90Ms, sampleSize, mode} where mode flips estimating (n<3) → normal (NIST type-7 percentile) → past_p90 (elapsed > p90, the honesty fallback). In-progress unit deliberately NOT folded into the percentile sample — would skew its own estimate. formatEta renders 'estimating…' / 'less than a minute' / '~12 min' / '~1 hr 7 min' / 'more than expected'. 14 unit tests cover percentile maths, mode transitions, NaN/Infinity filtering, formatter branches. Dashboard footer reads costs.sumByProject on mount + after every `done` event; records one elapsed-time observation per `done`, runs estimator live. Status line shows real $ + token totals + per-turn ETA. Drift D-014 logged: ETA observed at TURN granularity (not per-task) until D5 wires phase markers; the estimator function does not change when D5 swaps the observation source. 5 costs integration tests. pnpm verify GREEN (168 unit + 51 integration + 31 Rust = 250). Phase D: 4/6."
+    },
     {
       "task_id": "D3",
       "completed_at": "2026-04-26T17:58:00Z",
