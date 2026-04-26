@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2, Pause, Play, Square } from "lucide-react";
+import { Loader2, Pause, Play, Rocket, Square } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
@@ -13,10 +13,12 @@ import {
   type HistoryActionEntry,
   type TargetState,
 } from "@/lib/build-state";
+import { deployToVercel, getVercelToken, isVercelInstalled } from "@/lib/deploy";
 import { appendDrift, listOpenDrifts, type DriftEvent } from "@/lib/drift";
 import { estimate, formatEta, type EtaResult } from "@/lib/eta";
 import { orchestratorStart, orchestratorStop, type OrchestratorEvent } from "@/lib/orchestrator";
 
+import { DeployModal } from "./components/deploy-modal";
 import { DriftBanner } from "./components/drift-banner";
 import { translate } from "@/lib/orchestrator/translate";
 import type { Project } from "@/lib/project";
@@ -74,6 +76,13 @@ function BuildClient() {
   // True when the project's persisted status was "building" but no
   // subprocess is alive on app open — Flow H AC4. Cleared on Resume/Stop.
   const [recoveredFromCrash, setRecoveredFromCrash] = useState(false);
+  const [deployModalOpen, setDeployModalOpen] = useState(false);
+  const [deployStatus, setDeployStatus] = useState<
+    | { kind: "idle" }
+    | { kind: "running" }
+    | { kind: "success"; url: string }
+    | { kind: "error"; message: string }
+  >({ kind: "idle" });
   // The latest claude session id observed during the run, used by Resume.
   // Initially loaded from project.currentSessionId so a paused project can
   // resume across an app restart.
@@ -291,6 +300,44 @@ function BuildClient() {
     });
   }, [project]);
 
+  // Deploy preview to Vercel — Flow I AC1-AC6. If the keychain has no token,
+  // open the modal first; otherwise go straight to the CLI invocation.
+  const deployPreview = useCallback(async (): Promise<void> => {
+    if (!project) return;
+    const installed = await isVercelInstalled();
+    if (installed.isErr() || !installed.value) {
+      setDeployStatus({
+        kind: "error",
+        message:
+          "vercel CLI not found on your PATH. Install it from npmjs.com/package/vercel and try again.",
+      });
+      return;
+    }
+    const tokenResult = await getVercelToken();
+    if (tokenResult.isErr() || !tokenResult.value) {
+      setDeployModalOpen(true);
+      return;
+    }
+    void runDeploy();
+  }, [project]);
+
+  const runDeploy = useCallback(async (): Promise<void> => {
+    if (!project) return;
+    setDeployStatus({ kind: "running" });
+    const r = await deployToVercel({ projectPath: project.path, projectId: project.id });
+    r.match(
+      (result) => {
+        setDeployStatus({ kind: "success", url: result.previewUrl });
+        // Flow I AC5: copy URL to clipboard. Tauri webview supports the
+        // standard Clipboard API.
+        if (typeof navigator !== "undefined" && navigator.clipboard) {
+          void navigator.clipboard.writeText(result.previewUrl);
+        }
+      },
+      (e) => setDeployStatus({ kind: "error", message: e.message }),
+    );
+  }, [project]);
+
   // The in-progress turn's elapsed time (counted toward past_p90 only).
   // For idle/finished states there's no in-flight turn, so 0 is correct
   // (it can never exceed P90).
@@ -354,6 +401,20 @@ function BuildClient() {
           >
             <Square className="h-3 w-3" />
           </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void deployPreview()}
+            disabled={deployStatus.kind === "running"}
+            title="Deploy a preview to Vercel"
+          >
+            {deployStatus.kind === "running" ? (
+              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+            ) : (
+              <Rocket className="mr-1 h-3 w-3" />
+            )}
+            Deploy
+          </Button>
           {process.env.NODE_ENV !== "production" ? (
             <Button
               size="sm"
@@ -409,6 +470,23 @@ function BuildClient() {
         </aside>
 
         <section className="flex min-h-0 flex-col">
+          {deployStatus.kind === "success" ? (
+            <Alert className="mx-4 mt-3 mb-1">
+              <AlertTitle>Preview deployed</AlertTitle>
+              <AlertDescription>
+                Copied to clipboard:{" "}
+                <a href={deployStatus.url} target="_blank" rel="noopener noreferrer" className="underline">
+                  {deployStatus.url}
+                </a>
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          {deployStatus.kind === "error" ? (
+            <Alert variant="destructive" className="mx-4 mt-3 mb-1">
+              <AlertTitle>Deploy failed</AlertTitle>
+              <AlertDescription>{deployStatus.message}</AlertDescription>
+            </Alert>
+          ) : null}
           {recoveredFromCrash ? (
             <Alert className="mx-4 mt-3 mb-1">
               <AlertTitle>Recovered from crash</AlertTitle>
@@ -473,6 +551,12 @@ function BuildClient() {
         costSum={costSum}
         eta={liveEta}
         backHref={projectId ? `/interview?project=${projectId}` : "/"}
+      />
+
+      <DeployModal
+        open={deployModalOpen}
+        onOpenChange={setDeployModalOpen}
+        onTokenSaved={() => void runDeploy()}
       />
     </main>
   );

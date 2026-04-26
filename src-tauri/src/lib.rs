@@ -1,4 +1,5 @@
 mod chat;
+mod deploy;
 mod orchestrator;
 mod sidecar;
 
@@ -9,6 +10,7 @@ use std::process::Command;
 use tauri::Manager;
 
 use chat::chat_send;
+use deploy::{vercel_deploy, vercel_is_installed};
 use orchestrator::{orchestrator_start, orchestrator_stop, OrchestratorState};
 use sidecar::{sidecar_rpc, spawn_sidecar, SidecarState};
 
@@ -496,6 +498,8 @@ pub fn run() {
       chat_send,
       orchestrator_start,
       orchestrator_stop,
+      vercel_is_installed,
+      vercel_deploy,
       sidecar_rpc
     ])
     .run(tauri::generate_context!())
