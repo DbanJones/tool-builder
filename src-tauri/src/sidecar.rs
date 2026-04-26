@@ -31,36 +31,55 @@ impl SidecarState {
   }
 }
 
+/// Resolve the project root for dev. Tauri runs cargo from `src-tauri/`, so
+/// cwd ends in `src-tauri`; everywhere else cwd IS the project root.
+fn project_root_from_cwd() -> Result<PathBuf, String> {
+  let cwd = std::env::current_dir().map_err(|e| format!("cwd: {e}"))?;
+  if cwd.file_name().and_then(|n| n.to_str()) == Some("src-tauri") {
+    cwd
+      .parent()
+      .map(|p| p.to_path_buf())
+      .ok_or_else(|| "src-tauri has no parent".to_string())
+  } else {
+    Ok(cwd)
+  }
+}
+
 /// Spawn the Node sidecar process. Returns a handle holding stdin/stdout.
 ///
-/// For dev: looks for `sidecar/dist/index.js` either relative to the current
-/// working directory (which is the project root if launched via `pnpm tauri
-/// dev` from there) OR one level up (when cargo runs from `src-tauri/`,
-/// which is the actual cwd inside `pnpm tauri dev`). For production: a
-/// single-executable bundle is a Phase E task; this function will be revised
-/// to point at the bundled binary.
+/// For dev: locates `sidecar/dist/index.js` and the migrations folder under
+/// the project root (resolved from cwd, accounting for the cargo-from-
+/// src-tauri case under `pnpm tauri dev`). DB lives at
+/// `<project_root>/.builder/builder.db`.
+///
+/// For production: a single-executable bundle is a Phase E task; this
+/// function will be revised to point at the bundled binary + a per-OS app
+/// data dir for the DB.
 pub fn spawn_sidecar(_app: &AppHandle) -> Result<SidecarHandle, String> {
-  let cwd = std::env::current_dir().map_err(|e| format!("cwd: {e}"))?;
-  let candidates: Vec<PathBuf> = vec![
-    cwd.join("sidecar").join("dist").join("index.js"),
-    cwd.join("..").join("sidecar").join("dist").join("index.js"),
-  ];
-  let sidecar_script = candidates
-    .iter()
-    .find(|p| p.exists())
-    .ok_or_else(|| {
-      format!(
-        "sidecar script not found; run `pnpm sidecar:build` first. Tried: {}",
-        candidates
-          .iter()
-          .map(|p| p.display().to_string())
-          .collect::<Vec<_>>()
-          .join("; ")
-      )
-    })?;
+  let project_root = project_root_from_cwd()?;
+  let sidecar_script = project_root.join("sidecar").join("dist").join("index.js");
+  let migrations_folder = project_root.join("sidecar").join("migrations");
+  let db_path = project_root.join(".builder").join("builder.db");
+
+  if !sidecar_script.exists() {
+    return Err(format!(
+      "sidecar script not found at {}; run `pnpm sidecar:build` first",
+      sidecar_script.display()
+    ));
+  }
+  if !migrations_folder.exists() {
+    return Err(format!(
+      "sidecar migrations folder not found at {}; run `pnpm sidecar:build` first",
+      migrations_folder.display()
+    ));
+  }
 
   let mut child = Command::new("node")
-    .arg(sidecar_script)
+    .arg(&sidecar_script)
+    .arg("--db-path")
+    .arg(&db_path)
+    .arg("--migrations-folder")
+    .arg(&migrations_folder)
     .stdin(Stdio::piped())
     .stdout(Stdio::piped())
     .stderr(Stdio::inherit())
