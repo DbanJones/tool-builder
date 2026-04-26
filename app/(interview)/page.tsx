@@ -7,11 +7,14 @@ import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { chatSend, type ChatChunk } from "@/lib/chat/client";
+import type { IngestedFile } from "@/lib/files/types";
 import type { QuestionId } from "@/lib/interview/library";
 import { checkReadiness, type ReadinessResult } from "@/lib/interview/readiness";
 import { rebuildSpec, type RebuildAnswer } from "@/lib/interview/rebuild-spec";
 import type { Project } from "@/lib/project";
 import { sidecarCall } from "@/lib/sidecar/client";
+
+import { FilePanel } from "./components/file-panel";
 
 interface DisplayMessage {
   role: "user" | "assistant";
@@ -71,6 +74,7 @@ function InterviewClient() {
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [readiness, setReadiness] = useState<ReadinessResult>(() => checkReadiness([]));
   const [echoBackConfirmed, setEchoBackConfirmed] = useState(false);
+  const [files, setFiles] = useState<readonly IngestedFile[]>([]);
   const sessionIdRef = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -325,6 +329,13 @@ function InterviewClient() {
               </Button>
             </div>
           </div>
+
+          <FilePanel
+            files={files}
+            onDrop={(added) => {
+              setFiles((prev) => [...prev, ...added]);
+            }}
+          />
         </section>
 
         <aside className="hidden min-h-0 border-l lg:flex lg:flex-col">

@@ -6,16 +6,16 @@
   "phase_a_completed_at": "2026-04-26T10:30:00Z",
   "phase_b_completed_at": "2026-04-26T11:45:00Z",
   "tasks_total_in_phase": 8,
-  "tasks_completed_in_phase": 0,
+  "tasks_completed_in_phase": 1,
   "current_task": null,
-  "next_task": "C1",
+  "next_task": "C2",
   "drift": {
     "blocker_count": 0,
     "non_blocker_count": 7,
     "last_check_at": "2026-04-26T11:45:00Z",
     "notes": "Open drift in docs/drift-log.md: D-001, D-002, D-004, D-005 (extended at B3), D-006, D-007, D-008. Closed: D-003. AC6 audit gap addressed at B6.1 follow-up (transactional answer_recorded audit row)."
   },
-  "tests": { "passing": 101, "failing": 0, "skipped": 0, "breakdown": "78 TS unit + 12 TS integration + 11 Rust unit" },
+  "tests": { "passing": 118, "failing": 0, "skipped": 0, "breakdown": "95 TS unit + 12 TS integration + 11 Rust unit" },
   "cost_so_far_usd": 0.0,
   "tokens": { "input": 0, "output": 0 },
   "history": [
@@ -30,6 +30,12 @@
       "completed_at": "2026-04-25T18:30:00Z",
       "commit": "06df4c4",
       "notes": "OS keychain wrapper. keyring-rs 3.6.3 in src-tauri (per ADR-0003), exposed via three Tauri IPC commands (keychain_get/set/delete). lib/keychain/index.ts wraps invoke() in ResultAsync<T, KeychainError>. 8 unit tests pass with mocked invoke. cargo check green in 43.81s (first build). Real-keychain integration test deferred to a Phase-D follow-up that adds macOS+Windows CI runners."
+    },
+    {
+      "task_id": "C1",
+      "completed_at": "2026-04-26T11:55:00Z",
+      "commit": "TBD",
+      "notes": "File panel UI shell. lib/files/types.ts: IngestedFile + IngestedFileKind union (document/image/schema/data/url/unknown), IngestedFileStatus union (pending/processing/done/error), classifyByName helper. 17 unit tests for the classifier across all extension families and edge cases. New component app/(interview)/components/file-panel.tsx: HTML5 drag-and-drop strip below the chat input; renders a list of ingested files with kind icon, size, status icon (Loader/CheckCircle/XCircle/AlertTriangle for PII), and status message. Wired into the interview page; files held in component state for now (C2-C7 add real extraction + sidecar persistence in a `files` table per spec.md §4). pnpm verify GREEN (95 unit + 12 integration); cargo unchanged."
     },
     {
       "task_id": "B6",
