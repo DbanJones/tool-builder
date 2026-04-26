@@ -104,6 +104,30 @@ fn cli_is_authenticated() -> Result<bool, String> {
 // (see ADR-0004 + drift D-003 closed at A4b). The previous `audit_log_event`
 // Tauri command has been removed; lib/audit/index.ts calls sidecarCall directly.
 
+// Write the Builder-rebuilt spec into the novice's project folder so the
+// spawned claude has real context to work from. Without this, claude reads
+// the placeholder spec.md from project creation and goes off on tangents
+// (live-tested 2026-04-26: claude started giving VS Code setup advice
+// because it had no actual spec to anchor on).
+//
+// Path-sandboxed to {project}/spec.md (binding rule 5).
+#[tauri::command]
+fn write_target_spec(project_path: String, spec_text: String) -> Result<String, String> {
+  let project_root = expand_tilde(&project_path);
+  if !project_root.exists() {
+    return Err(format!(
+      "write_target_spec: project folder not found: {}",
+      project_root.display()
+    ));
+  }
+  let spec_path = project_root.join("spec.md");
+  fs::write(&spec_path, spec_text).map_err(|e| format!("write_target_spec: {e}"))?;
+  spec_path
+    .canonicalize()
+    .map(|p| p.display().to_string())
+    .map_err(|e| format!("canonicalise: {e}"))
+}
+
 // Build dashboard readers (D3). Both commands read files from inside the
 // novice's project folder (binding rule 5: untrusted from the Builder's
 // perspective). They sanitise the requested path by joining `project_path` +
@@ -506,6 +530,7 @@ pub fn run() {
       file_save_uploaded,
       read_target_state,
       read_history_log_tail,
+      write_target_spec,
       append_drift_log_line,
       chat_send,
       orchestrator_start,

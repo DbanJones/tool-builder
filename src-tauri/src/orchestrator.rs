@@ -24,14 +24,21 @@ use tauri::Manager;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 
-const ORCHESTRATOR_KICKOFF_PROMPT: &str = "You are the Builder's build-phase agent. The novice has finished the interview and clicked 'Start build'. Your job is to drive the build of their target app from this project folder.
+const ORCHESTRATOR_KICKOFF_PROMPT: &str = "You are the Builder's build-phase agent. The novice clicked 'Start build' inside the Builder desktop app. Your job is to BUILD THE WEB APP described in spec.md, IN THIS PROJECT FOLDER.
 
-For this first turn:
-1. Read CLAUDE.md at the root of this project to learn the binding rules and project context. Read spec.md for the build target. Read .builder/state.json if present to learn which phase you are in.
-2. Output a Markdown section that begins with the literal heading '## Plan' on its own line. Under it, list the next 3 to 7 concrete steps you intend to take in this build phase, smallest first, each one estimated at no more than one hour of work.
-3. Do not modify any files in this turn. Do not run shell commands beyond reading files. Wait for the novice to confirm the plan in the next turn before doing any work.
+Order of operations for this first turn:
+1. Read CLAUDE.md at the project root — those are the binding rules.
+2. Read spec.md — that is what the novice wants you to build. It contains their interview answers (sections, flows, data model, integrations, NFRs). Treat it as the source of truth.
+3. Use the TodoWrite tool to lay out a plan of 3-7 concrete next steps that move toward shipping spec.md's Phase 1. Each step should be no more than one hour of work and should be a CODE CHANGE (scaffold the app, add the auth flow, etc.) — not a tooling/config recommendation.
+4. STOP and wait for the novice to react to the plan. Do not modify files yet. Do not run shell commands beyond `Read`.
 
-Be terse. The novice is non-technical. Use plain language. Reference file paths when relevant.";
+Constraints — do NOT violate these:
+- DO NOT advise the novice on VS Code, terminals, or how to use any IDE. They are inside the Builder app and cannot see your shell.
+- DO NOT propose creating folders OUTSIDE this project's root.
+- DO NOT ask 'what would you like me to build?' — read spec.md and answer that question yourself. If spec.md is empty or contradictory, say so in one sentence and ask ONE pointed question.
+- DO NOT write multi-paragraph essays. Bullet points and short sentences only.
+
+You are non-interactive: the novice sees your plan via the dashboard's Plan panel and your tool calls via the live tail. They can interrupt you at any time via the chat input on the build dashboard.";
 
 /// One item in claude's TodoWrite plan. The dashboard renders these as a
 /// checklist so the novice sees the pathway to completion + what's blocked.

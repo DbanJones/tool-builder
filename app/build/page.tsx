@@ -1,5 +1,6 @@
 "use client";
 
+import { invoke } from "@tauri-apps/api/core";
 import { GitBranch, Loader2, Pause, Play, Rocket, Square } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -23,6 +24,8 @@ import { deployToVercel, getVercelToken, isVercelInstalled } from "@/lib/deploy"
 import { exportToGithub, isGhInstalled } from "@/lib/export";
 import { appendDrift, listOpenDrifts, type DriftEvent } from "@/lib/drift";
 import { estimate, formatEta, type EtaResult } from "@/lib/eta";
+import type { QuestionId } from "@/lib/interview/library";
+import { rebuildSpec } from "@/lib/interview/rebuild-spec";
 import {
   orchestratorStart,
   orchestratorStop,
@@ -59,6 +62,17 @@ interface CostSum {
   inputTokens: number;
   outputTokens: number;
   usdCents: number;
+}
+
+interface AnswerRow {
+  id: string;
+  projectId: string;
+  questionId: string;
+  answerText: string;
+  confidence: "confident" | "tentative" | "default-applied";
+  source: "chat" | "file" | "default";
+  rationale: string | null;
+  createdAt: number;
 }
 
 export default function BuildPage() {
@@ -226,6 +240,33 @@ function BuildClient() {
     // Mark the project as building BEFORE we spawn so a hard crash mid-turn
     // is detectable on next mount (the only writer of "building" is here).
     void sidecarCall("projects.setStatus", { id: project.id, status: "building" });
+
+    // Write the rebuilt spec into the project's spec.md before spawning, so
+    // claude reads real interview answers instead of the placeholder template
+    // (live-tested 2026-04-26: claude went off on VS Code tangents because
+    // spec.md was the placeholder). Skips on first start with no answers.
+    const answersResult = await sidecarCall<AnswerRow[]>("answers.list", { projectId: project.id });
+    if (answersResult.isOk() && answersResult.value.length > 0) {
+      try {
+        const rebuildAnswers = answersResult.value.map((row) => ({
+          questionId: row.questionId as QuestionId,
+          answerText: row.answerText,
+          confidence: row.confidence,
+          source: row.source,
+          rationale: row.rationale,
+        }));
+        const specMarkdown = rebuildSpec(rebuildAnswers);
+        await invoke("write_target_spec", {
+          projectPath: project.path,
+          specText: specMarkdown,
+        });
+      } catch (e) {
+        // Non-fatal: claude reads the placeholder; the chat input lets the
+        // novice paste their requirements directly.
+        console.warn("Failed to write rebuilt spec.md:", e);
+      }
+    }
+
     const historyLogPath = project.path.replace(/\/$/, "") + "/.builder/history.log";
     let terminal: DashboardStatus = { kind: "idle" };
     turnStartRef.current = Date.now();
