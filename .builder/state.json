@@ -32,7 +32,7 @@
     {
       "task_id": "A5",
       "completed_at": "2026-04-26T10:15:00Z",
-      "commit": "TBD",
+      "commit": "17c3762",
       "notes": "Minimum chat per ADR-0002. tokio added as a Tauri dep (process + io-util + rt + macros features). New module src-tauri/src/chat.rs: ChatChunk discriminated enum (session | assistant_delta | done | rate_limit | error), parse_stream_line() pure parser for claude --output-format stream-json events, detect_rate_limit() heuristic on stderr, chat_send Tauri command using tokio Command + Tauri 2 Channel<T> for async streaming. Session resumption via --resume <id> for multi-turn context. lib/chat/client.ts wraps the Channel + invoke pattern returning ResultAsync. app/(interview)/page.tsx implements the chat UI: streaming bubbles (assistant_delta merges into the last assistant message), rate-limit banner, error banner, send-on-Enter (Shift+Enter for newline), aria-live status. 11 Rust tests for the parser/rate-limit detection (cargo test). 5 TS tests for the chat client wrapper (mocked Channel + invoke). pnpm verify GREEN (52 unit + 10 integration). cargo check + cargo test GREEN. E2E + rate-limit integration test deferred to Phase D under D-004 (now extended to cover A5's E2E + integration). Phase A is now 5/5 — phase boundary check follows."
     },
     {
