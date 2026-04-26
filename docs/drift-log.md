@@ -4,6 +4,22 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 
 ## 2026-04-25
 
+### D-019 — Sentry SDK integration deferred from E5 (consent capture only)
+- **Drift type**: scope drift (deferral, against [rules/06-other.md](../rules/06-other.md) O7 "MUST install Sentry for errors").
+- **Discovered at**: E5.
+- **Cause**: O7 wants Sentry installed AND opt-in. The opt-in mechanism is the load-bearing novice-facing piece (per spec §8 open question's default answer); the SDK integration itself is a separate Initiative (pick `@sentry/nextjs` vs `@sentry/react` + Sentry's webview-shim, configure DSN, sourcemap upload in CI, beforeSend PII scrubbing per O16, etc.). Bundling both into a single E5 slice would push it past the 400-line ceiling per binding rule 9.
+- **Resolution**: drift accepted. E5 ships:
+  - `lib/telemetry/index.ts`: `getSentryDecision`/`setSentryDecision` (localStorage), `hasMadeSentryDecision`, and a `reportError(error)` no-op shim that always honours the consent decision (so we cannot accidentally leak PII before consent). 16 unit tests cover the persistence + the privacy guarantee (a Proxy-trapped error payload is not even read when consent is missing).
+  - `<SentryPrompt>` Alert with Yes / No / Later buttons + a brief disclaimer naming what we will and will not send (per O16: never chat content, never project paths, never uploaded files).
+  - Dashboard triggers the prompt once after the first `done` event, gated on `hasMadeSentryDecision()` being false.
+- **Commit**: TBD (E5 commit).
+- **Follow-up**: Phase F-style polish ticket adds the SDK:
+  1. `pnpm add @sentry/react` (or @sentry/nextjs if the Tauri webview shim works for Next App Router).
+  2. Initialise in `app/layout.tsx` gated on `getSentryDecision() === "accepted"`.
+  3. Replace the `reportError` body with `Sentry.captureException(error, { extra: scrubExtra(error) })`.
+  4. Add `beforeSend` PII scrub per O16.
+  5. Configure CI to upload sourcemaps on every signed build (E0-dependent).
+
 ### D-018 — E4 ships an OPTIONAL spend cap (not "daily"), reconciling spec §6 vs build-order E4
 - **Drift type**: implementation drift (against [docs/build-order.md](build-order.md) E4 wording "daily cap... soft warn at 50%, hard stop at 100%").
 - **Discovered at**: E4.

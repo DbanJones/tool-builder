@@ -24,10 +24,13 @@ import { exportToGithub, isGhInstalled } from "@/lib/export";
 import { appendDrift, listOpenDrifts, type DriftEvent } from "@/lib/drift";
 import { estimate, formatEta, type EtaResult } from "@/lib/eta";
 import { orchestratorStart, orchestratorStop, type OrchestratorEvent } from "@/lib/orchestrator";
+import { translate } from "@/lib/orchestrator/translate";
+import { hasMadeSentryDecision } from "@/lib/telemetry";
+
+import { SentryPrompt } from "@/app/components/sentry-prompt";
 
 import { DeployModal } from "./components/deploy-modal";
 import { DriftBanner } from "./components/drift-banner";
-import { translate } from "@/lib/orchestrator/translate";
 import type { Project } from "@/lib/project";
 import { sidecarCall } from "@/lib/sidecar/client";
 
@@ -105,6 +108,9 @@ function BuildClient() {
   // without needing a DB migration; if a real per-project setting is
   // needed later, swap the storage backend without changing the UI.
   const [costCap, setCostCap] = useState<number | null>(null);
+  // E5 Sentry opt-in prompt: shown ONCE after the user's first successful
+  // build (the first `done` event since mount, gated on no prior decision).
+  const [showSentryPrompt, setShowSentryPrompt] = useState(false);
   // Past per-turn elapsed durations (ms). Updated on each `done` event;
   // feeds the ETA estimator. v1 granularity is per-turn; D5 swaps to
   // per-task-id when phase markers are wired (drift D-014).
@@ -235,6 +241,12 @@ function BuildClient() {
             const elapsed = Date.now() - turnStartRef.current;
             setTurnDurations((prev) => [...prev, elapsed]);
             turnStartRef.current = null;
+          }
+          // First-successful-build trigger for the Sentry opt-in prompt.
+          // Shown at most once per app install (decision persists in
+          // localStorage). O7 + spec §8 default.
+          if (!hasMadeSentryDecision()) {
+            setShowSentryPrompt(true);
           }
           // Persist the turn's cost row for the meter, then re-read the
           // aggregate AND re-poll open drifts (claude may have appended
@@ -578,6 +590,9 @@ function BuildClient() {
               <AlertTitle>GitHub push failed</AlertTitle>
               <AlertDescription>{exportStatus.message}</AlertDescription>
             </Alert>
+          ) : null}
+          {showSentryPrompt ? (
+            <SentryPrompt onDecided={() => setShowSentryPrompt(false)} />
           ) : null}
           {ceiling.state === "warn" || ceiling.state === "stop" ? (
             <Alert
