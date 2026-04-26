@@ -33,7 +33,7 @@
     {
       "task_id": "B4",
       "completed_at": "2026-04-26T11:15:00Z",
-      "commit": "TBD",
+      "commit": "d61c66f",
       "notes": "Live spec preview panel in the interview screen. Two-column layout (chat left, spec right; right panel hides under lg breakpoint). New project context wiring: new-project form on success routes to /interview?project=<id>; interview page reads ?project param via Next 15 useSearchParams (wrapped in Suspense per the App Router rules). Loads project via sidecarCall('projects.get'); on load and after each chat 'done' chunk, calls sidecarCall('answers.list') and rebuildSpec() to refresh the preview pane. Chat send now passes project_id + project_path so the MCP record_answer wiring activates. Spec rendered as monospaced <pre>; markdown rendering + diff highlighting deferred (drift D-007). pnpm verify GREEN (70 unit + 12 integration). No new automated tests for the UI change at this stage; live verification deferred to user pnpm tauri dev."
     },
     {

@@ -35,7 +35,7 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 - **Discovered at**: B4.
 - **Cause**: build-order's B4 says "Use a Markdown renderer that highlights diffs between renders." Two non-trivial pieces: pick + integrate a Markdown renderer (react-markdown + sanitiser, or remark/rehype pipeline), and compute + render diffs (diff-match-patch or similar, scoped per section). Either alone is fine; both at once for B4 stretches the task. Both are presentation polish, not behaviour.
 - **Resolution**: drift accepted. B4 ships the spec preview as monospaced `<pre>`-rendered raw markdown that updates after every chat turn (which is the load-bearing part: "preview reflects current spec"). Markdown rendering and diff highlighting land in a Phase D polish task.
-- **Commit**: TBD (B4 commit).
+- **Commit**: d61c66f (B4 commit).
 - **Follow-up**: Phase D ticket adds react-markdown + a small section-level diff that flashes changed sections for ~3s, per the spec's UX intent.
 
 ### D-006 — `.builder/answers.json` legacy file mirror skipped
