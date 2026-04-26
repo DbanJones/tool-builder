@@ -32,7 +32,7 @@
     {
       "task_id": "A4c",
       "completed_at": "2026-04-26T10:00:00Z",
-      "commit": "TBD",
+      "commit": "ddc875e",
       "notes": "Project creation flow. Tauri command project_create_folder validates the name (npm-style regex), creates {folder}/{name}/, runs git init, writes placeholder templates (CLAUDE.md, spec.md, .builder/state.json, rules/README.md) bundled via include_str! macros from src-tauri/templates/. Sidecar projects.create handler inserts project + project_created audit row in one Drizzle transaction (atomicity per B11). lib/project/index.ts orchestrates: validate name → Tauri FS work → sidecar projects.create. Returns ResultAsync<Project, ProjectError> with discriminated InvalidName/InvalidFolder/Filesystem/Db errors. 19 new unit tests cover validator + orchestrator. New form at app/(welcome)/new-project/page.tsx uses react-hook-form + zodResolver per F21, accessibility: aria-invalid + aria-describedby per F22-F23. Integration test tests/integration/sidecar-projects.test.ts spawns sidecar against temp DB, exercises create + list + get + UNIQUE constraint + empty-name rejection (5 tests). pnpm verify GREEN (47 unit + 10 integration). cargo check GREEN 1.92s. A4 fully done (A4a + A4b + A4c). Note: partial-failure window between FS and DB steps is documented (no automatic rollback at A4c MVP); future work to wrap both in atomic Tauri command. Real (non-placeholder) template content remains a follow-up per the human's option-3 decision earlier."
     },
     {
