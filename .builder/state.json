@@ -6,19 +6,31 @@
   "phase_a_completed_at": "2026-04-26T10:30:00Z",
   "phase_b_completed_at": "2026-04-26T11:45:00Z",
   "tasks_total_in_phase": 8,
-  "tasks_completed_in_phase": 7,
+  "tasks_completed_in_phase": 8,
   "current_task": null,
-  "next_task": "C8",
+  "next_task": "PHASE_C_BOUNDARY",
   "drift": {
     "blocker_count": 0,
-    "non_blocker_count": 11,
-    "last_check_at": "2026-04-26T16:45:00Z",
-    "notes": "Open drift in docs/drift-log.md: D-001, D-002, D-004, D-005, D-006, D-007, D-008, D-009, D-010, D-011, D-012. Closed: D-003."
+    "non_blocker_count": 12,
+    "last_check_at": "2026-04-26T16:55:00Z",
+    "notes": "Open drift in docs/drift-log.md: D-001, D-002, D-004, D-005, D-006, D-007, D-008, D-009, D-010, D-011, D-012, D-013. Closed: D-003. Phase C complete pending boundary self-check."
   },
   "tests": { "passing": 171, "failing": 0, "skipped": 0, "breakdown": "119 TS unit + 36 TS integration + 16 Rust unit" },
   "cost_so_far_usd": 0.0,
   "tokens": { "input": 0, "output": 0 },
   "history": [
+    {
+      "task_id": "C8",
+      "completed_at": "2026-04-26T16:55:00Z",
+      "commit": "a0c1c27",
+      "notes": "Ingestion contract UI. New Tauri command file_save_uploaded (base64 0.22 added to Cargo.toml; 25 MB cap; name validation rejects path separators / leading dots / .. ; mkdir inputs/ on demand; refuses overwrite; canonicalises return path). New lib/files/ingest.ts orchestrator: readFileAsBase64 (chunked to avoid call-stack overflow on large files) → file_save_uploaded → callExtractor (dispatches by IngestedFileKind to files.extractText / summariseImage / parseSchema / parseDataSample) → files.guardPii on text outputs. Returns IngestResult {summary, hasPiiWarning, storedPath} via ResultAsync<_, IngestError>. FilePanel.onDrop signature widened to (newFiles, rawFiles); interview page kicks off ingestFile per file in parallel and updates each row's status icon (Loader during processing, CheckCircle/AlertTriangle on done depending on PII verdict, XCircle on error) + statusMessage tooltip with the summary. Drift D-013 logged: chat-message injection + answer-merging through record_answer + PII confirm modal deferred from C8 to a Phase D ticket; the file panel surfaces the extracted summary inline but does not yet feed it into the interview turn list. pnpm verify GREEN (119 unit + 36 integration). Phase C: 8/8. Next: PHASE_C_BOUNDARY (full /recheck + human approval before Phase D)."
+    },
+    {
+      "task_id": "C7",
+      "completed_at": "2026-04-26T16:30:00Z",
+      "commit": "fc5b2a4",
+      "notes": "PII guard. New sidecar handler files.guardPii({text, source}) with regex detection for emails, phone numbers (digit-count post-filter 7-12 to dodge false positives), credit cards (Luhn-validated), US SSNs, and IPv4 addresses. Returns {hasPii, hits[], redacted} where hits[].masked is a synthetic-redacted preview and the full redacted text replaces every detection with a placeholder marker. Six integration tests cover clean text, each detector individually, and the multi-detection redaction path. Surfaced to the C8 ingest orchestrator for the document/image/data text outputs (schema text intentionally skipped). pnpm verify GREEN."
+    },
     {
       "task_id": "A1",
       "completed_at": "2026-04-25T18:10:00Z",
