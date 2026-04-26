@@ -33,7 +33,7 @@
     {
       "task_id": "B2",
       "completed_at": "2026-04-26T10:50:00Z",
-      "commit": "TBD",
+      "commit": "163677d",
       "notes": "record_answer MCP tool. New answers table (Drizzle migration 0001_aromatic_warstar.sql) with FK to projects. sidecar/src/handlers/answers.ts (record + list) shared between main sidecar (answers.record/list JSON-RPC methods) and the new MCP server. sidecar/src/mcp-server.ts is a separate Node entry point using @modelcontextprotocol/sdk's StdioServerTransport, exposes record_answer tool with Zod-validated args. Tauri chat_send updated: takes project_id + project_path; when both present, generates .builder/mcp-config.json and passes --mcp-config to claude. INTERVIEW_SYSTEM_PROMPT updated to instruct Claude to call record_answer. Integration test mcp-record-answer.test.ts uses the official MCP client SDK to drive the server stdio, asserts tools/list contains record_answer, calls it, and verifies the row landed via main sidecar's answers.list (2 tests, both green). Drift D-006: skipped the legacy .builder/answers.json file mirror; DB is source of truth. pnpm verify GREEN (62 unit + 12 integration); cargo check + cargo test GREEN."
     },
     {
