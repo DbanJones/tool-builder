@@ -12,7 +12,7 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
   - `lib/telemetry/index.ts`: `getSentryDecision`/`setSentryDecision` (localStorage), `hasMadeSentryDecision`, and a `reportError(error)` no-op shim that always honours the consent decision (so we cannot accidentally leak PII before consent). 16 unit tests cover the persistence + the privacy guarantee (a Proxy-trapped error payload is not even read when consent is missing).
   - `<SentryPrompt>` Alert with Yes / No / Later buttons + a brief disclaimer naming what we will and will not send (per O16: never chat content, never project paths, never uploaded files).
   - Dashboard triggers the prompt once after the first `done` event, gated on `hasMadeSentryDecision()` being false.
-- **Commit**: TBD (E5 commit).
+- **Commit**: 85beb46 (E5 commit).
 - **Follow-up**: Phase F-style polish ticket adds the SDK:
   1. `pnpm add @sentry/react` (or @sentry/nextjs if the Tauri webview shim works for Next App Router).
   2. Initialise in `app/layout.tsx` gated on `getSentryDecision() === "accepted"`.
