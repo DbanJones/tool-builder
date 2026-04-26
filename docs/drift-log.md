@@ -35,7 +35,7 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 - **Discovered at**: B5.
 - **Cause**: build-order's B5 says "Eval: a Promptfoo suite with 12 fixture conversations asserts on follow-up presence and 'you choose' handling." Promptfoo is its own infra setup (config, fixtures, CI hookup) and the assertions need a fixed model + reproducible fixtures. Combined with the current absence of the kit's authoritative question phrasing (D-005), an eval suite written today would lock in placeholder behaviour.
 - **Resolution**: drift accepted. B5 ships the upgraded interview system prompt directly in `src-tauri/src/chat.rs::INTERVIEW_SYSTEM_PROMPT` covering the four behaviours called out in build-order (one-question-per-turn, follow-ups on vague/contradictory/high-stakes, 'you choose' default-application, topic counter). The Promptfoo suite lands in a Phase D quality task once D-005 is closed (real question phrasing in place) and we've picked a fixed eval model.
-- **Commit**: TBD (B5 commit).
+- **Commit**: fdfc445 (B5+B6 commit).
 - **Follow-up**: Phase D task to add `evals/` with the 12 fixture conversations + `pnpm eval` script.
 
 ### D-007 — Spec-preview diff highlighting deferred from B4

@@ -33,13 +33,13 @@
     {
       "task_id": "B6",
       "completed_at": "2026-04-26T11:30:00Z",
-      "commit": "TBD",
+      "commit": "fdfc445",
       "notes": "Ready-to-build gating per kit 14.3.5. lib/interview/readiness.ts: pure checkReadiness(answers, {echoBackConfirmed?, library?}) returning ReadinessResult with fast-path counts, missing ids in library order, echo-back state, and human-readable reason. 8 unit tests cover boundaries (none/partial/all-but-one/all-no-echo/ready/echo-without-answers/sort-order/dupe). Interview UI header now shows 'X / 28 answered' + Start build button: disabled with reason tooltip when not ready; reads 'Confirm echo-back' when all 28 answered, sets the flag on click; once fully ready clicking shows an alert pointing at Phase D for the actual build dashboard."
     },
     {
       "task_id": "B5",
       "completed_at": "2026-04-26T11:25:00Z",
-      "commit": "TBD",
+      "commit": "fdfc445",
       "notes": "Recursive interview system prompt. Replaces the minimal A5 prompt in src-tauri/src/chat.rs INTERVIEW_SYSTEM_PROMPT with the kit-style instruction set: one question per turn, follow-ups on vague/contradictory/high-stakes (no depth limit, close on clear answer or 'you choose'), 'you choose' triggers default-application, topic counter at the start of each turn. Promptfoo eval suite deferred (drift D-008) until the kit's authoritative phrasing lands so the eval doesn't lock in placeholder behaviour."
     },
     {
