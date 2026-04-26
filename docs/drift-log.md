@@ -30,6 +30,14 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 - **Closure commit**: cbb8128 (A4b commit).
 - **Note**: O8 also asks for `.builder/builder.log` daily rotation. The audit destination is now the DB; the application log file (Tauri's `tauri-plugin-log` output) is a separate concern and remains at the OS log dir for now. Tracked separately if/when needed.
 
+### D-005 — Question library + decision table seeded as inferred placeholders
+- **Drift type**: scope drift (placeholder content, against the B1 plan in [docs/build-order.md](build-order.md)).
+- **Discovered at**: B1.
+- **Cause**: the build-order's B1 reads "Copy the kit's question library and decision table into `lib/interview/library.ts` as typed data". The original Build Spec Kit's authoritative library has not been sourced into this repo. Same pattern as the placeholder templates at A4c (per human direction 2026-04-25 to defer real content).
+- **Resolution**: drift accepted. `lib/interview/library.ts` ships 28 fast-path questions whose **ids and topics** are taken from `.builder/answers.json` (the recorded interview that produced spec.md), but whose **exact prompt strings** are inferred placeholder phrasing. Decision table is a thin starter set covering the most obvious mappings (PII, accessibility, webhooks, jobs, i18n). The schema is canonical and matches what the real kit will plug into.
+- **Commit**: TBD (B1 commit).
+- **Follow-up**: when the kit is sourced, replace `prompt` strings and extend the decision table; tests should still pass without schema changes.
+
 ### D-004 — Tauri-context E2E + integration tests deferred to Phase D (extended at A5)
 - **Drift type**: scope drift (deferral, against the A3 + A5 plans in [docs/build-order.md](build-order.md)).
 - **Discovered at**: A3, extended at A5.

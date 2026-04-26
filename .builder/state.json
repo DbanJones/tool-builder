@@ -31,6 +31,12 @@
       "notes": "OS keychain wrapper. keyring-rs 3.6.3 in src-tauri (per ADR-0003), exposed via three Tauri IPC commands (keychain_get/set/delete). lib/keychain/index.ts wraps invoke() in ResultAsync<T, KeychainError>. 8 unit tests pass with mocked invoke. cargo check green in 43.81s (first build). Real-keychain integration test deferred to a Phase-D follow-up that adds macOS+Windows CI runners."
     },
     {
+      "task_id": "B1",
+      "completed_at": "2026-04-26T10:35:00Z",
+      "commit": "TBD",
+      "notes": "Question library + decision table seeded into lib/interview/library.ts. 28 fast-path questions with ids and topics taken from .builder/answers.json; prompt strings are inferred placeholders (drift D-005 logged). Decision table starter set covers PII, accessibility, webhooks, jobs, i18n. 9 unit tests cover count, id uniqueness, format, and decision-table integrity. pnpm verify GREEN (61 unit + 10 integration). When the kit is sourced: replace prompt strings + extend table; tests should keep passing without schema changes."
+    },
+    {
       "task_id": "A5",
       "completed_at": "2026-04-26T10:15:00Z",
       "commit": "17c3762",
