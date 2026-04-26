@@ -75,7 +75,9 @@ function InterviewClient() {
   const [input, setInput] = useState("");
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [readiness, setReadiness] = useState<ReadinessResult>(() => checkReadiness([]));
-  const [echoBackConfirmed, setEchoBackConfirmed] = useState(false);
+  // Echo-back gate retired in UX4 ("Build now" bypasses readiness); kept as
+  // a const so any downstream readiness check still gets a defined value.
+  const echoBackConfirmed = false;
   const [files, setFiles] = useState<readonly IngestedFile[]>([]);
   const [pendingOptions, setPendingOptions] = useState<{
     question: string;
@@ -267,25 +269,25 @@ function InterviewClient() {
           </span>
           <Button
             type="button"
-            disabled={!readiness.ready}
-            title={readiness.ready ? "Start the build" : readiness.reason}
+            disabled={!project}
+            title={
+              readiness.ready
+                ? "Open the build dashboard"
+                : `${readiness.fastPathAnswered} / ${readiness.fastPathTotal} answered — Claude will fill in defaults for the rest. You can keep answering questions later.`
+            }
             onClick={() => {
-              if (readiness.ready) {
-                // The build dashboard lands at Phase D; for now, mark the user's intent.
-                window.alert(
-                  "Start build is wired in Phase D. The interview is complete and the spec is ready.",
+              if (!project) return;
+              if (!readiness.ready) {
+                const ok = window.confirm(
+                  `You've answered ${readiness.fastPathAnswered} of ${readiness.fastPathTotal} fast-path questions. Claude will fill in defaults for the rest from your interview so far. Continue to the build dashboard?`,
                 );
-              } else if (readiness.fastPathAnswered === readiness.fastPathTotal) {
-                setEchoBackConfirmed(true);
+                if (!ok) return;
               }
+              window.location.href = `/build?project=${project.id}`;
             }}
           >
             <CheckCircle2 className="mr-2 h-4 w-4" aria-hidden="true" />
-            {readiness.ready
-              ? "Start build"
-              : readiness.fastPathAnswered === readiness.fastPathTotal
-                ? "Confirm echo-back"
-                : "Start build"}
+            {readiness.ready ? "Start build" : "Build now"}
           </Button>
         </div>
       </header>

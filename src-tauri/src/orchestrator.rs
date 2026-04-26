@@ -216,6 +216,14 @@ pub async fn orchestrator_start(
   // Subsequent turns reuse the same model via --resume.
   command.arg("--model").arg("sonnet");
 
+  // Auto-accept file edits + tool calls within the project folder. Without
+  // this the spawned claude prompts the user (via its own permission UI)
+  // for every Edit/Write/Bash call, which is unworkable for an autonomous
+  // build. cwd is already path-sandboxed to the novice's project folder
+  // (the only place the build subprocess should be writing); the claude
+  // CLI's own per-tool guards still apply for things outside cwd.
+  command.arg("--permission-mode").arg("acceptEdits");
+
   if let Some(sid) = &session_id {
     command.arg("--resume").arg(sid);
   }
