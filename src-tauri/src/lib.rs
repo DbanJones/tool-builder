@@ -477,6 +477,13 @@ pub fn run() {
       app.manage(state);
       app.manage(OrchestratorState::new());
 
+      // Tauri auto-updater (Flow J AC1-AC3). The actual signed feed +
+      // pubkey are provisioned in Phase E0 (deferred per human direction
+      // 2026-04-25). The plugin is wired now so all that's needed when
+      // E0 lands is to swap the placeholder pubkey + endpoint in
+      // tauri.conf.json — no code change. Drift D-017 documents the gap.
+      app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+
       if cfg!(debug_assertions) {
         app.handle().plugin(
           tauri_plugin_log::Builder::default()

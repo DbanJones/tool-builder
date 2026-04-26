@@ -4,6 +4,24 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 
 ## 2026-04-25
 
+### D-017 — E3 ships updater wiring with placeholder pubkey + endpoint (Phase E0 deferred)
+- **Drift type**: scope drift (deferral, against [docs/build-order.md](build-order.md) E3 + [spec.md](../spec.md) Flow J).
+- **Discovered at**: E3.
+- **Cause**: Phase E0 (Apple Developer ID + Windows code-signing cert + Tauri updater keypair) is deferred per human direction 2026-04-25 — the actual signing artefacts haven't been provisioned, so we have no real `pubkey` to put in `tauri.conf.json` and no signed feed to point `endpoints` at. Building the updater UI + wiring without those is the right move (so when E0 lands the user just swaps two strings in `tauri.conf.json` rather than re-architecting).
+- **Resolution**: drift accepted. E3 ships:
+  - `tauri-plugin-updater = "2"` Cargo dep + matching `@tauri-apps/plugin-updater` 2.9.0 npm dep.
+  - Plugin registered in `lib.rs` setup; `updater:default` capability added.
+  - `lib/updater/index.ts` wraps `check()` + `downloadAndInstall()` with neverthrow; recognises the placeholder-pubkey error and translates it into a `NotConfigured` error variant; `checkForUpdateQuiet()` swallows that variant so the launch flow doesn't nag the novice until the real keypair lands.
+  - `<UpdatePrompt>` component renders the prompt per Flow J AC2; runs on Welcome page mount.
+  - `tauri.conf.json` plugins.updater config has placeholder pubkey `REPLACE_WITH_TAURI_SIGNER_PUBKEY_FROM_PHASE_E0` and endpoint `https://updates.airtec.example/builder/...`.
+- **Commit**: TBD (E3 commit).
+- **Follow-up**: when Phase E0 ships:
+  1. Run `pnpm tauri signer generate` to produce a keypair.
+  2. Replace the `pubkey` in `tauri.conf.json` with the public half.
+  3. Replace the `endpoints` URL with the real GitHub Releases / S3 / etc. feed.
+  4. Add the private key to GitHub Actions secrets as `TAURI_SIGNING_PRIVATE_KEY` (per E0.3 in build-order).
+  No code changes required.
+
 ### D-016 — Live-tail latency budget (Flow F AC2 < 200ms) is unverified
 - **Drift type**: nfr drift (verification gap, against [spec.md](../spec.md) §6 + Flow F AC2).
 - **Discovered at**: Phase D boundary self-check.
