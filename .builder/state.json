@@ -7,19 +7,25 @@
   "phase_b_completed_at": "2026-04-26T11:45:00Z",
   "phase_c_completed_at": "2026-04-26T17:00:00Z",
   "tasks_total_in_phase": 6,
-  "tasks_completed_in_phase": 4,
+  "tasks_completed_in_phase": 5,
   "current_task": null,
-  "next_task": "D5",
+  "next_task": "D6",
   "drift": {
     "blocker_count": 0,
     "non_blocker_count": 13,
     "last_check_at": "2026-04-26T17:00:00Z",
     "notes": "Open drift in docs/drift-log.md: D-001, D-002, D-004, D-005, D-006, D-007, D-008, D-009, D-010, D-011, D-012, D-013, D-014. Closed: D-003. Phase C boundary PASSED at 17:00:00Z (docs/spec-trace.md, commit 00cd441)."
   },
-  "tests": { "passing": 250, "failing": 0, "skipped": 0, "breakdown": "168 TS unit + 51 TS integration + 31 Rust unit" },
+  "tests": { "passing": 265, "failing": 0, "skipped": 0, "breakdown": "177 TS unit + 57 TS integration + 31 Rust unit" },
   "cost_so_far_usd": 0.0,
   "tokens": { "input": 0, "output": 0 },
   "history": [
+    {
+      "task_id": "D5",
+      "completed_at": "2026-04-26T18:55:00Z",
+      "commit": "e8bca5a",
+      "notes": "Drift banner + drift_events table + drift-log writer. Closes Flow G AC2 + AC3 (banner shows drift item with 3 resolution buttons; choice persists DB row + drift-log.md line). Phase boundary modal (D5 second build-order bullet) and orchestrator-side report_drift MCP tool deferred to a follow-up so this fits a single slice; D5 ships an 'Inject drift' dev button on the dashboard header that exercises the full path. New `drift_events` table per spec §4 (id, project_id, phase, kind enum, description, resolution enum nullable, commit_hash, occurred_at, resolved_at). Migration 0005_abnormal_leech.sql. Handlers drift.append + drift.resolve + drift.listOpen (resolution IS NULL filter, oldest-first so the banner shows the head of the queue). New Tauri command append_drift_log_line writes a markdown block to {project}/docs/drift-log.md (path-sandboxed; seeds the file with the same header the Builder's own log uses); includes a small std::time-only iso8601 formatter (no chrono dep added). New lib/drift wrapper composes the two-step resolve flow: sidecar DB update FIRST then file-line append; if file write fails the DB update still landed (the row IS the source of truth). 9 unit tests cover dispatcher ordering, forwarded params, DB-first guarantee, partial-success error path. New app/build/components/drift-banner.tsx: destructive Alert with Revert/Change spec/Accept buttons, per-button loading spinner, soft-fail message. Dashboard polls drift.listOpen on mount + after every `done` event so banners surface as soon as claude eventually calls report_drift. 6 drift integration tests. pnpm verify GREEN (177 unit + 57 integration + 31 Rust = 265). Phase D: 5/6."
+    },
     {
       "task_id": "D4",
       "completed_at": "2026-04-26T18:25:00Z",
