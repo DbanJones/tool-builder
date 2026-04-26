@@ -7,19 +7,25 @@
   "phase_b_completed_at": "2026-04-26T11:45:00Z",
   "phase_c_completed_at": "2026-04-26T17:00:00Z",
   "tasks_total_in_phase": 6,
-  "tasks_completed_in_phase": 0,
-  "current_task": "D1",
-  "next_task": "D1",
+  "tasks_completed_in_phase": 1,
+  "current_task": null,
+  "next_task": "D2",
   "drift": {
     "blocker_count": 0,
     "non_blocker_count": 12,
     "last_check_at": "2026-04-26T17:00:00Z",
     "notes": "Open drift in docs/drift-log.md: D-001, D-002, D-004, D-005, D-006, D-007, D-008, D-009, D-010, D-011, D-012, D-013. Closed: D-003. Phase C boundary PASSED at 17:00:00Z (docs/spec-trace.md, commit 00cd441)."
   },
-  "tests": { "passing": 171, "failing": 0, "skipped": 0, "breakdown": "119 TS unit + 36 TS integration + 16 Rust unit" },
+  "tests": { "passing": 199, "failing": 0, "skipped": 0, "breakdown": "125 TS unit + 43 TS integration + 31 Rust unit" },
   "cost_so_far_usd": 0.0,
   "tokens": { "input": 0, "output": 0 },
   "history": [
+    {
+      "task_id": "D1",
+      "completed_at": "2026-04-26T17:35:00Z",
+      "commit": "8ed8c5b",
+      "notes": "Orchestrator subprocess. New src-tauri/src/orchestrator.rs spawns the `claude` CLI inside the novice's project folder (current_dir = projectPath, expanded for ~/) with --output-format stream-json --verbose --model sonnet, optional --resume <session_id>. Kickoff prompt asks claude to read CLAUDE.md and emit a `## Plan` section satisfying build-order D1 AC. Pure parser parse_orchestrator_line returns Vec<OrchestratorEvent> (Session | AssistantDelta | ToolUse | Done | RateLimit | Error); differs from chat.rs's parser by emitting ToolUse for EVERY tool, not just our offer_options UI tool — the dashboard's live tail and the new actions table need the full surface. 15 Rust unit tests cover parser variants (text, single+multi tool_use, missing input, missing name, result usage, malformed JSON, rate-limit detection). lib/orchestrator/index.ts wraps the Tauri command with a Channel-based ResultAsync<void, OrchestratorError>; 6 TS unit tests with mocked Channel + invoke. New `actions` table per spec.md §4 (id ULID, project_id FK, ts, tool, raw_input verbatim JSON-as-string, human_line + phase + task_id all nullable until D2 / D5 fill them in); migration 0003_tan_vindicator.sql; sidecar handlers actions.append + actions.list with cursor pagination by ts (B10 default). 7 integration tests via temp-DB sidecar harness. Dev-only `Start build (test)` button on the interview-page right aside lets us verify the AC live; replaced by the proper Build dashboard at D3. pnpm verify GREEN (125 unit + 43 integration TS + 31 Rust). Phase D: 1/6."
+    },
     {
       "task_id": "C8",
       "completed_at": "2026-04-26T16:55:00Z",
