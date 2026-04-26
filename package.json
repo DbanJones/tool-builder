@@ -25,6 +25,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "test:unit": "vitest run --config vitest.unit.config.ts",
+    "pretest:integration": "pnpm sidecar:build",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "e2e": "playwright test",
     "verify": "pnpm typecheck && pnpm lint && pnpm test:unit && pnpm test:integration"

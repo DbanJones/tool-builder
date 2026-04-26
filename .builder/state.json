@@ -5,15 +5,15 @@
   "phase_started_at": "2026-04-25T18:09:00Z",
   "tasks_total_in_phase": 5,
   "tasks_completed_in_phase": 3,
-  "current_task": "A4 (split into A4a/A4b/A4c per ADR-0004; A4a complete)",
-  "next_task": "A4b",
+  "current_task": "A4 (split into A4a/A4b/A4c per ADR-0004; A4a + A4b complete)",
+  "next_task": "A4c",
   "drift": {
     "blocker_count": 0,
-    "non_blocker_count": 4,
-    "last_check_at": "2026-04-25T19:10:00Z",
-    "notes": "All non-blocker drift entries live in docs/drift-log.md. Open: D-001 (eslint-plugin-neverthrow gap, C11 enforced by convention), D-002 (shadcn primitives written manually because the shadcn CLI's nested pnpm spawn fails in this shell), D-003 (audit destination is tauri-plugin-log until A4 adds Drizzle audit_log table), D-004 (Welcome E2E deferred to Phase D pending tauri-driver setup)."
+    "non_blocker_count": 3,
+    "last_check_at": "2026-04-26T09:50:00Z",
+    "notes": "Open drift in docs/drift-log.md: D-001 (eslint-plugin-neverthrow gap, C11 enforced by convention), D-002 (shadcn primitives written manually because the shadcn CLI's nested pnpm spawn fails in this shell), D-004 (Welcome E2E deferred to Phase D pending tauri-driver setup). Closed at A4b: D-003 (audit destination, now Drizzle audit_log table via sidecar)."
   },
-  "tests": { "passing": 22, "failing": 0, "skipped": 0 },
+  "tests": { "passing": 33, "failing": 0, "skipped": 0 },
   "cost_so_far_usd": 0.0,
   "tokens": { "input": 0, "output": 0 },
   "history": [
@@ -28,6 +28,12 @@
       "completed_at": "2026-04-25T18:30:00Z",
       "commit": "06df4c4",
       "notes": "OS keychain wrapper. keyring-rs 3.6.3 in src-tauri (per ADR-0003), exposed via three Tauri IPC commands (keychain_get/set/delete). lib/keychain/index.ts wraps invoke() in ResultAsync<T, KeychainError>. 8 unit tests pass with mocked invoke. cargo check green in 43.81s (first build). Real-keychain integration test deferred to a Phase-D follow-up that adds macOS+Windows CI runners."
+    },
+    {
+      "task_id": "A4b",
+      "completed_at": "2026-04-26T09:50:00Z",
+      "commit": "TBD",
+      "notes": "DB schemas + handlers + audit migration. drizzle-orm 0.45.2, drizzle-kit 0.31.10, better-sqlite3 12.9.0 (native compile clean), ulid 3.0.2 added to sidecar. Schemas at sidecar/src/schema/{projects,audit-log}.ts per spec.md §4 + B1/B3. First migration generated: sidecar/migrations/0000_tricky_killmonger.sql. sidecar/src/db.ts handles connection + drizzle migrate runner; pragma WAL + foreign_keys ON. sidecar/src/handlers/audit.ts implements logEvent + listEvents with Zod-validated params. sidecar/src/index.ts parses --db-path and --migrations-folder CLI args, calls initDb on startup, registers audit.* methods. lib/audit/index.ts now calls sidecarCall('audit.logEvent') directly; src-tauri/src/lib.rs's audit_log_event command deleted. Drift D-003 closed. Integration test tests/integration/sidecar-audit.test.ts spawns the sidecar against a temp DB and proves the round-trip (4 tests, all green). pnpm verify GREEN (28 unit + 5 integration). cargo check GREEN 2.28s. A4c (project_create flow) is the last A4 sub-task."
     },
     {
       "task_id": "A4a",

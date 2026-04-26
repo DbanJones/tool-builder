@@ -12,10 +12,15 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "better-sqlite3": "12.9.0",
+    "drizzle-orm": "0.45.2",
+    "ulid": "3.0.2",
     "zod": "3.25.76"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "7.6.13",
     "@types/node": "22.19.17",
+    "drizzle-kit": "0.31.10",
     "tsx": "4.20.6",
     "typescript": "5.9.3"
   }

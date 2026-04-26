@@ -82,15 +82,9 @@ fn cli_is_authenticated() -> Result<bool, String> {
   Ok(output.status.success())
 }
 
-// Audit logger per spec.md Flow A AC5 and rules/02-backend.md B20.
-// Currently routes to tauri-plugin-log; a Drizzle audit_log table arrives
-// at A4b (see drift D-003).
-
-#[tauri::command]
-fn audit_log_event(event_type: String, payload: String) -> Result<(), String> {
-  log::info!(target: "builder.audit", "event={event_type} payload={payload}");
-  Ok(())
-}
+// Audit logging is now routed through the sidecar's `audit.logEvent` handler
+// (see ADR-0004 + drift D-003 closed at A4b). The previous `audit_log_event`
+// Tauri command has been removed; lib/audit/index.ts calls sidecarCall directly.
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -129,7 +123,6 @@ pub fn run() {
       keychain_delete,
       cli_is_installed,
       cli_is_authenticated,
-      audit_log_event,
       sidecar_rpc
     ])
     .run(tauri::generate_context!())

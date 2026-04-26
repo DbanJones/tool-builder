@@ -20,13 +20,15 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 - **Commit**: 81bbc66 (A3 commit).
 - **Follow-up**: when adding any further shadcn primitive (Dialog, Form, etc. for A4 onwards), keep writing them by hand from the same patterns. Revisit the CLI in a future session if Claude Code's shell environment changes or pnpm becomes available on the system PATH.
 
-### D-003 — AC5 audit destination is `tauri-plugin-log` rather than `.builder/builder.log`
+### D-003 — AC5 audit destination is `tauri-plugin-log` rather than `.builder/builder.log` [RESOLVED at A4b]
 - **Drift type**: implementation drift (against [rules/06-other.md](../rules/06-other.md) O8 and indirectly Flow A AC5).
 - **Discovered at**: A3.
-- **Cause**: the audit mechanism needed to land at A3 to satisfy Flow A AC5 (`audit log records app_first_run`). The Drizzle `audit_log` table does not exist yet (no DB layer until A4), and `.builder/builder.log` rotation requires file-system glue we have not written. To unblock A3, `audit_log_event` is implemented as a Tauri command that calls `log::info!` via the existing `tauri-plugin-log`. The events ARE logged; the destination is the OS log directory rather than `.builder/builder.log`.
-- **Resolution**: drift accepted as a temporary destination. Migration target: when Drizzle lands at A4 (project creation requires the `projects` table), an `audit_log` table is added in the same migration and `audit_log_event` is rewritten to insert there.
-- **Commit**: 81bbc66 (A3 commit).
-- **Follow-up**: A4 task to migrate the audit destination.
+- **Cause**: the audit mechanism needed to land at A3 to satisfy Flow A AC5 (`audit log records app_first_run`). The Drizzle `audit_log` table did not exist yet (no DB layer until A4), and `.builder/builder.log` rotation required file-system glue we had not written. To unblock A3, `audit_log_event` was implemented as a Tauri command that called `log::info!` via the existing `tauri-plugin-log`. Events were logged; the destination was the OS log directory rather than `.builder/builder.log`.
+- **Original resolution**: drift accepted as a temporary destination. Migration target: A4b.
+- **A3 commit**: 81bbc66.
+- **Closure (A4b)**: the Drizzle `audit_log` table now exists in `.builder/builder.db` (per ADR-0004's Node sidecar architecture). `lib/audit/index.ts` calls `sidecarCall("audit.logEvent", ...)` directly; the sidecar handler at `sidecar/src/handlers/audit.ts` inserts a row with a ULID id, default `actor_id = 'novice'`, and a JSON `payload`. The legacy `audit_log_event` Tauri command in `src-tauri/src/lib.rs` is deleted. An integration test (`tests/integration/sidecar-audit.test.ts`) spawns the sidecar against a temp DB and asserts the round-trip.
+- **Closure commit**: TBD (A4b commit).
+- **Note**: O8 also asks for `.builder/builder.log` daily rotation. The audit destination is now the DB; the application log file (Tauri's `tauri-plugin-log` output) is a separate concern and remains at the OS log dir for now. Tracked separately if/when needed.
 
 ### D-004 — Welcome E2E (`tests/e2e/welcome.spec.ts`) deferred from A3 to Phase D
 - **Drift type**: scope drift (deferral, against the A3 plan in [docs/build-order.md](build-order.md)).

@@ -9,10 +9,14 @@
 //   success:  { "id": "<same>", "ok": true,  "result": <any> }
 //   failure:  { "id": "<same>", "ok": false, "error": { "code": "<str>", "message": "<str>" } }
 //
-// A4a ships only the `ping` method to prove the pipe. A4b adds the real
-// db-backed handlers.
+// CLI args:
+//   --db-path <path>            Path to SQLite DB file (default: .builder/builder.db)
+//   --migrations-folder <path>  Path to drizzle migrations (default: ./migrations)
 
 import { z } from "zod";
+
+import { initDb } from "./db.js";
+import { logEvent, listEvents } from "./handlers/audit.js";
 
 const RequestSchema = z.object({
   id: z.string(),
@@ -21,12 +25,29 @@ const RequestSchema = z.object({
 });
 
 type Request = z.infer<typeof RequestSchema>;
-
 type Handler = (params: unknown) => Promise<unknown> | unknown;
 
-const handlers: Record<string, Handler> = {
-  ping: () => ({ pong: true, version: "0.1.0", at: new Date().toISOString() }),
-};
+interface Args {
+  dbPath: string;
+  migrationsFolder: string;
+}
+
+function parseArgs(argv: string[]): Args {
+  let dbPath = ".builder/builder.db";
+  let migrationsFolder = "./migrations";
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    const next = argv[i + 1];
+    if (arg === "--db-path" && next !== undefined) {
+      dbPath = next;
+      i++;
+    } else if (arg === "--migrations-folder" && next !== undefined) {
+      migrationsFolder = next;
+      i++;
+    }
+  }
+  return { dbPath, migrationsFolder };
+}
 
 const writeResponse = (response: object): void => {
   process.stdout.write(JSON.stringify(response) + "\n");
@@ -34,6 +55,22 @@ const writeResponse = (response: object): void => {
 
 const writeLog = (level: "info" | "warn" | "error", message: string): void => {
   process.stderr.write(JSON.stringify({ level, message, at: new Date().toISOString() }) + "\n");
+};
+
+const args = parseArgs(process.argv.slice(2));
+
+try {
+  initDb({ dbPath: args.dbPath, migrationsFolder: args.migrationsFolder });
+  writeLog("info", `db initialised at ${args.dbPath}`);
+} catch (e) {
+  writeLog("error", `db init failed: ${e instanceof Error ? e.message : String(e)}`);
+  process.exit(1);
+}
+
+const handlers: Record<string, Handler> = {
+  ping: () => ({ pong: true, version: "0.1.0", at: new Date().toISOString() }),
+  "audit.logEvent": logEvent,
+  "audit.listEvents": listEvents,
 };
 
 const handleLine = async (line: string): Promise<void> => {

@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { sidecarCall } from "@/lib/sidecar/client";
 
 // Once-per-process dedupe set so events flagged `once: true` (e.g. app_first_run)
 // don't get logged repeatedly across re-renders or HMR cycles.
@@ -10,13 +10,12 @@ export interface LogAuditOptions {
 }
 
 /**
- * Append a structured audit event. Routes through a Tauri command which logs to
- * `tauri-plugin-log`. A Drizzle `audit_log` table arrives at A4 when the DB layer
- * lands; this writer is the migration target.
+ * Append a structured audit event. Routes through the sidecar (per ADR-0004),
+ * which inserts into the Drizzle `audit_log` table.
  *
  * Audit logging is best effort: failures do not surface to the caller, because
- * the calling UX should not stall waiting on log infrastructure. Per spec.md Flow A AC5
- * and rules/02-backend.md B20.
+ * the calling UX should not stall waiting on log infrastructure. Per spec.md
+ * Flow A AC5 and rules/02-backend.md B20.
  */
 export async function logAuditEvent(
   eventType: string,
@@ -26,14 +25,16 @@ export async function logAuditEvent(
   if (options.once && loggedOnceEvents.has(eventType)) return;
   if (options.once) loggedOnceEvents.add(eventType);
 
-  try {
-    await invoke("audit_log_event", {
-      eventType,
-      payload: JSON.stringify(payload),
-    });
-  } catch {
-    // Audit logging is best-effort; intentionally not surfacing failures.
-  }
+  const result = await sidecarCall<{ id: string }>("audit.logEvent", {
+    eventType,
+    payload: JSON.stringify(payload),
+  });
+
+  // Best-effort: discard both branches. We intentionally do not surface failures.
+  result.match(
+    () => undefined,
+    () => undefined,
+  );
 }
 
 /** Test-only: clear the once-per-process dedupe set. */
