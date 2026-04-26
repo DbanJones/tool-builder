@@ -38,7 +38,7 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
   - `summariseImage` handler with all three tiers implemented and registered in the sidecar (`files.summariseImage`).
   - Clear error path when all tiers fail, telling the user which env vars to set.
   - Manual verification by the user: drop an image into the file panel (once C8 wires the upload flow), check that a summary comes back via whichever tier their machine has.
-- **Commit**: TBD (C3 commit).
+- **Commit**: 85fbb25 (C3 commit).
 - **Follow-up**: Phase D ticket adds (a) a fixture `claude` binary that returns a fixed JSON response, used by Vitest with PATH override; (b) a Vitest setup that intercepts `fetch` to api.anthropic.com / api.deepseek.com and returns canned responses; then 3 tests covering each tier's success path plus the all-fail error message.
 
 ### D-009 — DOCX + PDF extraction integration tests deferred from C2 (binary fixtures missing)

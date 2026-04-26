@@ -34,7 +34,7 @@
     {
       "task_id": "C3",
       "completed_at": "2026-04-26T12:15:00Z",
-      "commit": "TBD",
+      "commit": "85fbb25",
       "notes": "Image vision (PNG/JPG/WEBP/GIF) per build-order.md C3 + human's 2026-04-26 fallback direction. New sidecar handler files.summariseImage with three tiers: (1) claude CLI via @path attachment syntax; (2) Anthropic Messages API with image content block (if ANTHROPIC_API_KEY env var set); (3) DeepSeek API with OpenAI-compatible image_url block (if DEEPSEEK_API_KEY env var set). Tier 1 preferred because it inherits the user's existing claude auth. Returns {kind, summary, via, sizeBytes} where `via` records which tier produced the answer. Clear error path when all tiers fail listing each tier's failure. 60s timeout per tier. Drift D-010: integration tests deferred (need fixture claude binary + fetch interception infra). Manual verification when C8 wires the upload flow."
     },
     {
