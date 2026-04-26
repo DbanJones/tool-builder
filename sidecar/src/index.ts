@@ -19,6 +19,7 @@ import { initDb } from "./db.js";
 import { record as recordAnswer, list as listAnswers } from "./handlers/answers.js";
 import { logEvent, listEvents } from "./handlers/audit.js";
 import { extractText, fetchUrl, parseDataSample, parseSchema, summariseImage } from "./handlers/files.js";
+import { guardPii } from "./handlers/pii.js";
 import { create as createProject, list as listProjects, get as getProject } from "./handlers/projects.js";
 
 const RequestSchema = z.object({
@@ -84,6 +85,7 @@ const handlers: Record<string, Handler> = {
   "files.parseSchema": parseSchema,
   "files.parseDataSample": parseDataSample,
   "files.fetchUrl": fetchUrl,
+  "files.guardPii": guardPii,
 };
 
 const handleLine = async (line: string): Promise<void> => {
