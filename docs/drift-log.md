@@ -38,12 +38,12 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 - **Commit**: 163677d (B2 commit).
 - **Follow-up**: add the `answers.exportJson` derivation in B3 if the spec-rebuild step needs the JSON shape.
 
-### D-005 — Question library + decision table seeded as inferred placeholders
+### D-005 — Question library + decision table + spec template seeded as inferred placeholders (extended at B3)
 - **Drift type**: scope drift (placeholder content, against the B1 plan in [docs/build-order.md](build-order.md)).
-- **Discovered at**: B1.
-- **Cause**: the build-order's B1 reads "Copy the kit's question library and decision table into `lib/interview/library.ts` as typed data". The original Build Spec Kit's authoritative library has not been sourced into this repo. Same pattern as the placeholder templates at A4c (per human direction 2026-04-25 to defer real content).
-- **Resolution**: drift accepted. `lib/interview/library.ts` ships 28 fast-path questions whose **ids and topics** are taken from `.builder/answers.json` (the recorded interview that produced spec.md), but whose **exact prompt strings** are inferred placeholder phrasing. Decision table is a thin starter set covering the most obvious mappings (PII, accessibility, webhooks, jobs, i18n). The schema is canonical and matches what the real kit will plug into.
-- **Commit**: a534bd5 (B1 commit).
+- **Discovered at**: B1, extended at B3.
+- **Cause**: the build-order's B1 reads "Copy the kit's question library and decision table into `lib/interview/library.ts` as typed data". B3 extends the same gap: "rebuilds spec.md ... using the kit's spec template" — that template is also missing. The original Build Spec Kit's authoritative content has not been sourced into this repo. Same pattern as the placeholder templates at A4c (per human direction 2026-04-25 to defer real content).
+- **Resolution**: drift accepted. `lib/interview/library.ts` ships 28 fast-path questions whose **ids and topics** are taken from `.builder/answers.json` (the recorded interview that produced spec.md), but whose **exact prompt strings** are inferred placeholder phrasing. Decision table is a thin starter set covering the most obvious mappings (PII, accessibility, webhooks, jobs, i18n). At B3, `lib/interview/rebuild-spec.ts` ships a section emitter set that mirrors the Builder's own spec.md as a stand-in for the kit's authoritative spec template; the function is pure, deterministic, and snapshot-tested against three fixture answer sets (minimal, partial, full). When the kit is sourced, replace prompt strings + extend decision table + swap section emitters; tests should pass without schema changes.
+- **Commits**: a534bd5 (B1), 163677d-ish (B3 extends).
 - **Follow-up**: when the kit is sourced, replace `prompt` strings and extend the decision table; tests should still pass without schema changes.
 
 ### D-004 — Tauri-context E2E + integration tests deferred to Phase D (extended at A5)

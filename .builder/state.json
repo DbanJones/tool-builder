@@ -5,16 +5,16 @@
   "phase_started_at": "2026-04-26T10:30:00Z",
   "phase_a_completed_at": "2026-04-26T10:30:00Z",
   "tasks_total_in_phase": 6,
-  "tasks_completed_in_phase": 2,
+  "tasks_completed_in_phase": 3,
   "current_task": null,
-  "next_task": "B3",
+  "next_task": "B4",
   "drift": {
     "blocker_count": 0,
     "non_blocker_count": 5,
-    "last_check_at": "2026-04-26T10:50:00Z",
-    "notes": "Open drift in docs/drift-log.md: D-001, D-002, D-004, D-005, D-006 (answers.json file mirror skipped; DB is source of truth). Closed: D-003."
+    "last_check_at": "2026-04-26T10:30:00Z",
+    "notes": "Open drift in docs/drift-log.md: D-001, D-002, D-004, D-005 (now extended to also cover the spec template at B3), D-006. Closed: D-003."
   },
-  "tests": { "passing": 85, "failing": 0, "skipped": 0, "breakdown": "62 TS unit + 12 TS integration + 11 Rust unit" },
+  "tests": { "passing": 93, "failing": 0, "skipped": 0, "breakdown": "70 TS unit + 12 TS integration + 11 Rust unit" },
   "cost_so_far_usd": 0.0,
   "tokens": { "input": 0, "output": 0 },
   "history": [
@@ -29,6 +29,12 @@
       "completed_at": "2026-04-25T18:30:00Z",
       "commit": "06df4c4",
       "notes": "OS keychain wrapper. keyring-rs 3.6.3 in src-tauri (per ADR-0003), exposed via three Tauri IPC commands (keychain_get/set/delete). lib/keychain/index.ts wraps invoke() in ResultAsync<T, KeychainError>. 8 unit tests pass with mocked invoke. cargo check green in 43.81s (first build). Real-keychain integration test deferred to a Phase-D follow-up that adds macOS+Windows CI runners."
+    },
+    {
+      "task_id": "B3",
+      "completed_at": "2026-04-26T11:00:00Z",
+      "commit": "TBD",
+      "notes": "Spec rebuild from answers. lib/interview/rebuild-spec.ts: pure deterministic rebuildSpec(answers, options?) returning markdown; section emitters for §1 Problem, §2 Scope (top flows from Q15), §3 Flows (Q16 ACs), §4 Data model (deferred), §5 Integrations (Q17), §6 NFRs (Q14/21/22/23/24/26/27), §7 Active rules (decision table activation), §8 Interview progress (counts + outstanding). Output is byte-for-byte stable (no timestamps in body). 8 unit tests including 3 snapshot tests on minimal/partial/full fixture answer sets, decision-table activation assertions, progress counts, and unknown-questionId rejection. Drift D-005 extended to subsume the missing kit spec template."
     },
     {
       "task_id": "B2",
