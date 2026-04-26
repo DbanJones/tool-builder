@@ -16,6 +16,7 @@
 import { z } from "zod";
 
 import { initDb } from "./db.js";
+import { record as recordAnswer, list as listAnswers } from "./handlers/answers.js";
 import { logEvent, listEvents } from "./handlers/audit.js";
 import { create as createProject, list as listProjects, get as getProject } from "./handlers/projects.js";
 
@@ -75,6 +76,8 @@ const handlers: Record<string, Handler> = {
   "projects.create": createProject,
   "projects.list": listProjects,
   "projects.get": getProject,
+  "answers.record": recordAnswer,
+  "answers.list": listAnswers,
 };
 
 const handleLine = async (line: string): Promise<void> => {

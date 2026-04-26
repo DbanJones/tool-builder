@@ -8,12 +8,53 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::fs;
+use std::path::PathBuf;
 use std::process::Stdio;
 use tauri::ipc::Channel;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
-const INTERVIEW_SYSTEM_PROMPT: &str = "You are interviewing the user to populate spec.md. Ask one question at a time. After each answer, write a brief summary to the chat.";
+const INTERVIEW_SYSTEM_PROMPT: &str = "You are interviewing the user to populate spec.md. Ask one question at a time. After each clear answer, call the `record_answer` tool with the kit question id (e.g. Q1, Q15), the novice's answer (or your faithful summary of it), and a confidence (confident/tentative/default-applied). Then write a brief summary to the chat for the novice.";
+
+/// Generate the MCP config JSON that claude consumes via `--mcp-config`.
+/// Per ADR-0004 the MCP server is a separate Node entry point that opens its
+/// own better-sqlite3 connection on the same DB file the main sidecar uses.
+fn build_mcp_config(project_id: &str, project_root: &PathBuf) -> Result<PathBuf, String> {
+  let cwd = std::env::current_dir().map_err(|e| format!("cwd: {e}"))?;
+  let mcp_server_script = cwd.join("sidecar").join("dist").join("mcp-server.js");
+  let migrations_folder = cwd.join("sidecar").join("migrations");
+  let db_path = project_root.join(".builder").join("builder.db");
+
+  if !mcp_server_script.exists() {
+    return Err(format!(
+      "mcp-server build missing at {}; run pnpm sidecar:build",
+      mcp_server_script.display()
+    ));
+  }
+
+  let config = serde_json::json!({
+    "mcpServers": {
+      "builder-record-answer": {
+        "command": "node",
+        "args": [
+          mcp_server_script.to_string_lossy(),
+          "--db-path", db_path.to_string_lossy(),
+          "--migrations-folder", migrations_folder.to_string_lossy(),
+          "--project-id", project_id,
+        ],
+      },
+    },
+  });
+
+  let config_dir = project_root.join(".builder");
+  fs::create_dir_all(&config_dir)
+    .map_err(|e| format!("create .builder/: {e}"))?;
+  let config_path = config_dir.join("mcp-config.json");
+  fs::write(&config_path, serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?)
+    .map_err(|e| format!("write mcp config: {e}"))?;
+  Ok(config_path)
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -101,6 +142,8 @@ pub fn detect_rate_limit(stderr: &str) -> bool {
 pub async fn chat_send(
   prompt: String,
   session_id: Option<String>,
+  project_id: Option<String>,
+  project_path: Option<String>,
   on_chunk: Channel<ChatChunk>,
 ) -> Result<(), String> {
   let mut command = Command::new("claude");
@@ -109,6 +152,21 @@ pub async fn chat_send(
     .arg("--output-format")
     .arg("stream-json")
     .arg("--verbose"); // claude requires --verbose to stream; otherwise it batches
+
+  // Wire the record_answer MCP server when we have a project context. Per
+  // build-order.md B2 + ADR-0004. If either project_id or project_path is
+  // missing, fall back to plain chat (preserves the A5 minimum chat path).
+  if let (Some(pid), Some(ppath)) = (&project_id, &project_path) {
+    let project_root = PathBuf::from(ppath);
+    match build_mcp_config(pid, &project_root) {
+      Ok(config_path) => {
+        command.arg("--mcp-config").arg(&config_path);
+      }
+      Err(e) => {
+        log::warn!("MCP config build failed; chat falls back to no-tools: {e}");
+      }
+    }
+  }
 
   if let Some(sid) = &session_id {
     command.arg("--resume").arg(sid);

@@ -30,6 +30,14 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 - **Closure commit**: cbb8128 (A4b commit).
 - **Note**: O8 also asks for `.builder/builder.log` daily rotation. The audit destination is now the DB; the application log file (Tauri's `tauri-plugin-log` output) is a separate concern and remains at the OS log dir for now. Tracked separately if/when needed.
 
+### D-006 — `.builder/answers.json` legacy file mirror skipped
+- **Drift type**: implementation drift (against [docs/build-order.md](build-order.md) B2 wording: "On tool call, the MCP handler writes to `.builder/answers.json` and appends to the answers table.").
+- **Discovered at**: B2.
+- **Cause**: the build-order calls for double-writing answers to both `.builder/answers.json` and the SQLite `answers` table. The JSON file is a legacy format from the original design pack (used as a portable record). With the sidecar + Drizzle + ULID architecture per ADR-0004, the DB row is the source of truth: it has FK to projects, ordered timestamps, and confidence/source enums. A JSON-file mirror would need careful concurrency handling (two processes writing to the same file) and adds a second source of truth that can drift from the DB.
+- **Resolution**: drift accepted. Source of truth is the DB. If a portable JSON export is needed later (e.g. for a "show me my answers" view, or for spec-rebuild input), expose an `answers.exportJson` sidecar method that derives it from the table on demand.
+- **Commit**: TBD (B2 commit).
+- **Follow-up**: add the `answers.exportJson` derivation in B3 if the spec-rebuild step needs the JSON shape.
+
 ### D-005 — Question library + decision table seeded as inferred placeholders
 - **Drift type**: scope drift (placeholder content, against the B1 plan in [docs/build-order.md](build-order.md)).
 - **Discovered at**: B1.

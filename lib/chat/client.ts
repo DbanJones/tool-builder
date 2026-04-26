@@ -21,6 +21,11 @@ export type ChatError = { kind: "Transport"; message: string };
 export interface ChatSendOptions {
   prompt: string;
   sessionId?: string | null;
+  /** When both projectId and projectPath are set, the chat turn is wired to
+   * the record_answer MCP server (per ADR-0004 + build-order B2). Without
+   * them, the chat falls back to plain (no-tools) Claude. */
+  projectId?: string | null;
+  projectPath?: string | null;
   onChunk: (chunk: ChatChunk) => void;
 }
 
@@ -37,10 +42,8 @@ const fromInvokeError = (e: unknown): ChatError => ({
  * system prompt); pass the captured id on subsequent turns to maintain
  * conversation context via `claude --resume`.
  *
- * Resolves once the subprocess has exited and all chunks have been delivered
- * (or rejects if the IPC transport itself fails). The terminal `done`,
- * `rate_limit`, or `error` chunk is delivered through `onChunk` before the
- * promise resolves.
+ * `projectId` + `projectPath` activate the `record_answer` MCP tool by
+ * generating a per-project mcp-config.json and passing it via `--mcp-config`.
  */
 export function chatSend(options: ChatSendOptions): ResultAsync<void, ChatError> {
   const channel = new Channel<ChatChunk>();
@@ -49,6 +52,8 @@ export function chatSend(options: ChatSendOptions): ResultAsync<void, ChatError>
     invoke<void>("chat_send", {
       prompt: options.prompt,
       sessionId: options.sessionId ?? null,
+      projectId: options.projectId ?? null,
+      projectPath: options.projectPath ?? null,
       onChunk: channel,
     }),
     fromInvokeError,

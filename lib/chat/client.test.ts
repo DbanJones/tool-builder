@@ -40,11 +40,33 @@ describe("chatSend", () => {
     expect(args.onChunk).toBeInstanceOf(Channel);
   });
 
-  it("defaults sessionId to null when not provided", async () => {
+  it("defaults sessionId, projectId, projectPath to null when not provided", async () => {
     mockInvoke.mockResolvedValueOnce(undefined);
     await chatSend({ prompt: "hi", onChunk: vi.fn() });
-    const args = mockInvoke.mock.calls[0]?.[1] as { sessionId: string | null };
+    const args = mockInvoke.mock.calls[0]?.[1] as {
+      sessionId: string | null;
+      projectId: string | null;
+      projectPath: string | null;
+    };
     expect(args.sessionId).toBeNull();
+    expect(args.projectId).toBeNull();
+    expect(args.projectPath).toBeNull();
+  });
+
+  it("forwards projectId + projectPath when supplied (used by Rust to wire MCP)", async () => {
+    mockInvoke.mockResolvedValueOnce(undefined);
+    await chatSend({
+      prompt: "hi",
+      projectId: "01ABC",
+      projectPath: "/tmp/preppilot",
+      onChunk: vi.fn(),
+    });
+    const args = mockInvoke.mock.calls[0]?.[1] as {
+      projectId: string | null;
+      projectPath: string | null;
+    };
+    expect(args.projectId).toBe("01ABC");
+    expect(args.projectPath).toBe("/tmp/preppilot");
   });
 
   it("delivers chunks pushed on the channel to the user-provided callback", async () => {
