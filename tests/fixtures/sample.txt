@@ -1,0 +1,4 @@
+Plain text fixture.
+
+Two paragraphs separated by a blank line. The extractor should preserve both
+the paragraph break and the embedded line break inside this very paragraph.

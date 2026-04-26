@@ -30,6 +30,17 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 - **Closure commit**: cbb8128 (A4b commit).
 - **Note**: O8 also asks for `.builder/builder.log` daily rotation. The audit destination is now the DB; the application log file (Tauri's `tauri-plugin-log` output) is a separate concern and remains at the OS log dir for now. Tracked separately if/when needed.
 
+### D-009 — DOCX + PDF extraction integration tests deferred from C2 (binary fixtures missing)
+- **Drift type**: scope drift (deferral, against the C2 plan in [docs/build-order.md](build-order.md): "round-trip a fixture PRD; extracted text contains expected paragraphs").
+- **Discovered at**: C2.
+- **Cause**: the extractor handler at `sidecar/src/handlers/files.ts` implements all four formats (PDF via unpdf, DOCX via mammoth, MD + TXT via direct read), but there are no real PDF or DOCX fixtures in the repo. Generating minimal valid PDFs/DOCX inline in tests is fiddly (PDFs are byte-precise; DOCX is a multi-file ZIP); checking in real binary fixtures bloats the repo without a clear governance for what they should contain.
+- **Resolution**: drift accepted. C2 ships:
+  - DOCX + PDF extractors implemented and ready to use.
+  - MD + TXT round-trip integration tests against `tests/fixtures/sample.md` and `sample.txt` (5 tests including unsupported-extension + missing-path + summary-bounded behaviour).
+  - DOCX + PDF round-trip integration tests deferred until binary fixtures are sourced (e.g. a 1-page sample PDF + 1-page DOCX checked into `tests/fixtures/`).
+- **Commit**: TBD (C2 commit).
+- **Follow-up**: source small (~5 KB each) sample.pdf + sample.docx fixtures, add 2-3 tests asserting expected paragraph content. Could be done at C8 (ingestion contract UI) when real files start landing in `{project}/inputs/` end-to-end.
+
 ### D-008 — Promptfoo eval suite for the interview prompt deferred from B5
 - **Drift type**: scope drift (deferral, against the B5 plan in [docs/build-order.md](build-order.md)).
 - **Discovered at**: B5.

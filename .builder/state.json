@@ -6,16 +6,16 @@
   "phase_a_completed_at": "2026-04-26T10:30:00Z",
   "phase_b_completed_at": "2026-04-26T11:45:00Z",
   "tasks_total_in_phase": 8,
-  "tasks_completed_in_phase": 1,
+  "tasks_completed_in_phase": 2,
   "current_task": null,
-  "next_task": "C2",
+  "next_task": "C3",
   "drift": {
     "blocker_count": 0,
-    "non_blocker_count": 7,
-    "last_check_at": "2026-04-26T11:45:00Z",
-    "notes": "Open drift in docs/drift-log.md: D-001, D-002, D-004, D-005 (extended at B3), D-006, D-007, D-008. Closed: D-003. AC6 audit gap addressed at B6.1 follow-up (transactional answer_recorded audit row)."
+    "non_blocker_count": 8,
+    "last_check_at": "2026-04-26T12:05:00Z",
+    "notes": "Open drift in docs/drift-log.md: D-001, D-002, D-004, D-005, D-006, D-007, D-008, D-009 (DOCX + PDF extraction integration tests deferred until binary fixtures sourced). Closed: D-003. AC6 audit gap closed at B6.1."
   },
-  "tests": { "passing": 118, "failing": 0, "skipped": 0, "breakdown": "95 TS unit + 12 TS integration + 11 Rust unit" },
+  "tests": { "passing": 123, "failing": 0, "skipped": 0, "breakdown": "95 TS unit + 17 TS integration + 11 Rust unit" },
   "cost_so_far_usd": 0.0,
   "tokens": { "input": 0, "output": 0 },
   "history": [
@@ -30,6 +30,12 @@
       "completed_at": "2026-04-25T18:30:00Z",
       "commit": "06df4c4",
       "notes": "OS keychain wrapper. keyring-rs 3.6.3 in src-tauri (per ADR-0003), exposed via three Tauri IPC commands (keychain_get/set/delete). lib/keychain/index.ts wraps invoke() in ResultAsync<T, KeychainError>. 8 unit tests pass with mocked invoke. cargo check green in 43.81s (first build). Real-keychain integration test deferred to a Phase-D follow-up that adds macOS+Windows CI runners."
+    },
+    {
+      "task_id": "C2",
+      "completed_at": "2026-04-26T12:05:00Z",
+      "commit": "TBD",
+      "notes": "Text extraction (DOCX/PDF/MD/TXT). Sidecar deps: mammoth 1.12.0 (DOCX), unpdf 1.6.0 (PDF, Mozilla pdf.js underneath, no native deps). New `files` table + migration 0002. New sidecar handler files.extractText({path}) returning {kind, text, summary, pages, sizeBytes}: MD/TXT via direct UTF-8 read, PDF via unpdf, DOCX via lazily-imported mammoth. Summary collapses whitespace and is bounded at 500 chars. 5 integration tests against MD + TXT fixtures (tests/fixtures/sample.md + .txt) including unsupported-extension rejection, missing-path rejection, and summary-bounding. DOCX + PDF integration tests deferred (drift D-009 — binary fixtures need a separate sourcing pass). pnpm verify GREEN (95 unit + 17 integration). Phase C: 2/8."
     },
     {
       "task_id": "C1",

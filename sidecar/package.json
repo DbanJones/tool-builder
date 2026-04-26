@@ -15,7 +15,9 @@
     "@modelcontextprotocol/sdk": "1.29.0",
     "better-sqlite3": "12.9.0",
     "drizzle-orm": "0.45.2",
+    "mammoth": "1.12.0",
     "ulid": "3.0.2",
+    "unpdf": "1.6.0",
     "zod": "3.25.76"
   },
   "devDependencies": {
