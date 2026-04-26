@@ -34,7 +34,7 @@
     {
       "task_id": "C1",
       "completed_at": "2026-04-26T11:55:00Z",
-      "commit": "TBD",
+      "commit": "86a0ab6",
       "notes": "File panel UI shell. lib/files/types.ts: IngestedFile + IngestedFileKind union (document/image/schema/data/url/unknown), IngestedFileStatus union (pending/processing/done/error), classifyByName helper. 17 unit tests for the classifier across all extension families and edge cases. New component app/(interview)/components/file-panel.tsx: HTML5 drag-and-drop strip below the chat input; renders a list of ingested files with kind icon, size, status icon (Loader/CheckCircle/XCircle/AlertTriangle for PII), and status message. Wired into the interview page; files held in component state for now (C2-C7 add real extraction + sidecar persistence in a `files` table per spec.md §4). pnpm verify GREEN (95 unit + 12 integration); cargo unchanged."
     },
     {
