@@ -7,19 +7,25 @@
   "phase_b_completed_at": "2026-04-26T11:45:00Z",
   "phase_c_completed_at": "2026-04-26T17:00:00Z",
   "tasks_total_in_phase": 6,
-  "tasks_completed_in_phase": 1,
+  "tasks_completed_in_phase": 2,
   "current_task": null,
-  "next_task": "D2",
+  "next_task": "D3",
   "drift": {
     "blocker_count": 0,
     "non_blocker_count": 12,
     "last_check_at": "2026-04-26T17:00:00Z",
     "notes": "Open drift in docs/drift-log.md: D-001, D-002, D-004, D-005, D-006, D-007, D-008, D-009, D-010, D-011, D-012, D-013. Closed: D-003. Phase C boundary PASSED at 17:00:00Z (docs/spec-trace.md, commit 00cd441)."
   },
-  "tests": { "passing": 199, "failing": 0, "skipped": 0, "breakdown": "125 TS unit + 43 TS integration + 31 Rust unit" },
+  "tests": { "passing": 221, "failing": 0, "skipped": 0, "breakdown": "144 TS unit + 46 TS integration + 31 Rust unit" },
   "cost_so_far_usd": 0.0,
   "tokens": { "input": 0, "output": 0 },
   "history": [
+    {
+      "task_id": "D2",
+      "completed_at": "2026-04-26T17:50:00Z",
+      "commit": "956f0d1",
+      "notes": "Tool-call translation + actions/history.log persistence per kit §14.5.2 + binding rule 7. New lib/orchestrator/translate.ts: pure (tool, rawInput) → humanLine for the built-in Claude Code tools (Bash with description-first formatting, Read/Edit/Write showing basename, Glob/Grep with pattern + optional path, Task with subagent type + description, WebFetch/WebSearch/TodoWrite/NotebookEdit/ExitPlanMode/BashOutput/KillBash) plus an MCP-prefix handler that strips `mcp__<server>__` and a generic '<tool>(<key>: <val>)' fallback. Defensive: trims to 140 chars with ellipsis suffix; never throws on malformed JSON; safe property access throughout. 19 unit tests cover every branch + edge cases (long lines, MCP prefix, missing fields, malformed JSON, multi-line Bash). sidecar/src/handlers/actions.ts extended: AppendParamsSchema accepts optional historyLogPath; when set, the inserted row is mirrored as a JSON line to that file (mkdir -p the parent dir on demand). Best-effort write — failures log to stderr but never roll back the DB row (a missed log line is recoverable; losing the action would not be). 3 new integration tests assert: line lands when path provided, parent dir auto-created, DB insert survives mkdir failure. Interview-page dev panel translates each tool_use, persists via sidecarCall(actions.append) with historyLogPath = {project}/.builder/history.log, and shows humanLine above raw input. New local DevOrchestratorEvent type enriches OrchestratorEvent.tool_use with humanLine; D3 builds the proper dashboard on top. pnpm verify GREEN (144 unit + 46 integration + 31 Rust = 221). Phase D: 2/6."
+    },
     {
       "task_id": "D1",
       "completed_at": "2026-04-26T17:35:00Z",
