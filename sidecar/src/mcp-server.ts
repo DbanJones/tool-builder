@@ -114,41 +114,61 @@ server.setRequestHandler(ListToolsRequestSchema, () => ({
       },
     },
     {
-      name: "offer_options",
+      name: "queue_questions",
       description:
-        "Present the novice with a set of click-to-pick answer options for a closed question (yes/no, single-select from a known list, etc.). The Builder UI renders each option as a button next to the chat input; if allow_freeform is true the novice can also type their own answer. Use this for any question where the answer space is small and well-defined; for open-ended questions (elevator pitch, lists of flows) do not call this tool — the novice will write a paragraph.",
+        "Pre-fetch a batch of up to 10 interview questions for the novice in one round trip. Call this ONCE per turn with all the questions you want to ask. The Builder UI displays them ONE AT A TIME (the novice sees + answers Q1 first, then Q2, etc.); each answer goes into a buffer that is sent back to you in a single follow-up turn so you can call record_answer for all of them at once. This trades round-trip latency for batch throughput — a turn that queues 8 questions is far better than 8 turns of one question each.",
       inputSchema: {
         type: "object",
         properties: {
-          question: {
-            type: "string",
-            description:
-              "The question being asked, in plain language, repeated here for clarity (the same text typically also appears in your chat message).",
-          },
-          options: {
+          items: {
             type: "array",
-            items: { type: "string" },
-            description:
-              "The candidate answers, in the order you want them shown. Keep each option short (under 30 characters when possible).",
-          },
-          allow_freeform: {
-            type: "boolean",
-            description:
-              "Whether the novice may type their own answer alongside picking an option. Default true; only set false when no other answer is sensible (e.g. an enum that the build pipeline depends on).",
+            description: "The next batch of questions, in the order you want them asked (up to 10).",
+            items: {
+              type: "object",
+              properties: {
+                id: {
+                  type: "string",
+                  description: "Kit question id, e.g. 'Q1' or 'Q15'. Used to FK the recorded answer.",
+                },
+                text: {
+                  type: "string",
+                  description: "The question itself, in plain language. Shown verbatim to the novice.",
+                },
+                options: {
+                  type: "array",
+                  items: { type: "string" },
+                  description:
+                    "Optional 3 click-to-pick options for closed questions (yes/no, single-select). Omit for open-ended questions (elevator pitch, freeform descriptions). The UI always appends a 4th 'Enter my own response' button.",
+                },
+                allow_freeform: {
+                  type: "boolean",
+                  description:
+                    "Whether the novice may type their own answer alongside the click options. Default true; only set false for an enum the build pipeline depends on.",
+                },
+              },
+              required: ["id", "text"],
+            },
           },
         },
-        required: ["question", "options"],
+        required: ["items"],
       },
     },
   ],
 }));
 
-const OfferOptionsArgsSchema = z.object({
-  question: z.string().min(1),
-  // Exactly 3 options per the human's 2026-04-26 direction. The UI always
-  // appends a 4th "Enter my own response" button regardless of allow_freeform.
-  options: z.array(z.string().min(1)).length(3),
-  allow_freeform: z.boolean().optional(),
+const QueueQuestionsArgsSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        text: z.string().min(1),
+        // 3 options when present (matches the click-to-pick UX); omit for open-ended.
+        options: z.array(z.string().min(1)).length(3).optional(),
+        allow_freeform: z.boolean().optional(),
+      }),
+    )
+    .min(1)
+    .max(10),
 });
 
 server.setRequestHandler(CallToolRequestSchema, (request) => {
@@ -172,18 +192,17 @@ server.setRequestHandler(CallToolRequestSchema, (request) => {
     };
   }
 
-  if (request.params.name === "offer_options") {
-    // The MCP server's only job for offer_options is to validate the args
-    // and return success — the actual UI surfacing happens in the Tauri
-    // shell's stream-json parser, which sees the tool_use call and emits
-    // an OptionsOffered chunk to the webview. We return a confirmation so
-    // claude knows the options were accepted and can continue its turn.
-    const params = OfferOptionsArgsSchema.parse(request.params.arguments ?? {});
+  if (request.params.name === "queue_questions") {
+    // Same shape as the old offer_options handler: validate the args and
+    // return success. The actual UI surfacing happens in the Tauri shell's
+    // stream-json parser, which sees the tool_use call and emits a
+    // QuestionsQueued chunk to the webview.
+    const params = QueueQuestionsArgsSchema.parse(request.params.arguments ?? {});
     return {
       content: [
         {
           type: "text",
-          text: `Offered ${String(params.options.length)} options to the novice; awaiting their pick.`,
+          text: `Queued ${String(params.items.length)} question${params.items.length === 1 ? "" : "s"} for the novice; they will answer them one at a time and you will receive all the answers in a single follow-up turn.`,
         },
       ],
     };

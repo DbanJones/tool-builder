@@ -4,15 +4,17 @@ import { ResultAsync } from "neverthrow";
 // Mirror the discriminated union in src-tauri/src/chat.rs ChatChunk.
 // The Rust side serialises with `#[serde(tag = "kind", rename_all = "snake_case")]`,
 // so the wire format is `{ kind: "session" | "assistant_delta" | ... , ... }`.
+export interface QueuedQuestion {
+  id: string;
+  text: string;
+  options: string[];
+  allow_freeform: boolean;
+}
+
 export type ChatChunk =
   | { kind: "session"; id: string }
   | { kind: "assistant_delta"; text: string }
-  | {
-      kind: "options_offered";
-      question: string;
-      options: string[];
-      allow_freeform: boolean;
-    }
+  | { kind: "questions_queued"; items: QueuedQuestion[] }
   | {
       kind: "done";
       cost_usd: number | null;

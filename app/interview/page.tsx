@@ -7,7 +7,7 @@ import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { chatSend, type ChatChunk } from "@/lib/chat/client";
+import { chatSend, type ChatChunk, type QueuedQuestion } from "@/lib/chat/client";
 import { ingestFile } from "@/lib/files/ingest";
 import type { IngestedFile } from "@/lib/files/types";
 import type { QuestionId } from "@/lib/interview/library";
@@ -79,11 +79,15 @@ function InterviewClient() {
   // a const so any downstream readiness check still gets a defined value.
   const echoBackConfirmed = false;
   const [files, setFiles] = useState<readonly IngestedFile[]>([]);
-  const [pendingOptions, setPendingOptions] = useState<{
-    question: string;
-    options: readonly string[];
-    allowFreeform: boolean;
-  } | null>(null);
+  // UX3 batched-question pipeline: claude pre-fetches up to 10 questions per
+  // turn via queue_questions; we render the head one at a time. Each answer
+  // (click or freeform) goes into bufferedAnswers; when the queue empties we
+  // flush the buffer in a single chat_send so claude can record_answer all
+  // of them and queue the next batch — 1 round-trip per N answers.
+  const [questionQueue, setQuestionQueue] = useState<readonly QueuedQuestion[]>([]);
+  const [bufferedAnswers, setBufferedAnswers] = useState<
+    readonly { id: string; text: string; question: string }[]
+  >([]);
   const [isPreparingBank, setIsPreparingBank] = useState(false);
   const sessionIdRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -185,12 +189,10 @@ function InterviewClient() {
           return [...prev, { role: "assistant", text: chunk.text }];
         });
         return;
-      case "options_offered":
-        setPendingOptions({
-          question: chunk.question,
-          options: chunk.options,
-          allowFreeform: chunk.allow_freeform,
-        });
+      case "questions_queued":
+        // Append to the queue so partial deliveries (rare) accumulate.
+        setQuestionQueue((prev) => [...prev, ...chunk.items]);
+        setIsPreparingBank(false);
         return;
       case "done":
         setStatus({ kind: "idle" });
@@ -218,30 +220,16 @@ function InterviewClient() {
     }
   };
 
-  const handleSend = async (textOverride?: string): Promise<void> => {
-    const raw = textOverride ?? input;
-    const trimmed = raw.trim();
-    if (trimmed.length === 0) return;
-    if (status.kind === "streaming") return;
+  // Low-level: send `text` to claude. Used for the initial pitch and for
+  // flushing buffered answers when the queue empties.
+  const sendToClaude = async (text: string): Promise<void> => {
     if (!project) return;
-
     const isFirstTurn = sessionIdRef.current === null;
-
-    setMessages((prev) => [...prev, { role: "user", text: trimmed }]);
-    // UX2: persist the user message immediately (independent of the
-    // assistant reply landing).
-    void sidecarCall("chatMessages.append", {
-      projectId: project.id,
-      role: "user",
-      text: trimmed,
-    });
-    setInput("");
-    setPendingOptions(null);
     setStatus({ kind: "streaming" });
     if (isFirstTurn) setIsPreparingBank(true);
 
     const result = await chatSend({
-      prompt: trimmed,
+      prompt: text,
       sessionId: sessionIdRef.current,
       projectId: project.id,
       projectPath: project.path,
@@ -260,20 +248,88 @@ function InterviewClient() {
     );
   };
 
+  // Compile buffered answers as a single message claude can parse with one
+  // record_answer call per entry. Format: "1) Q1: <answer> (q: <text>)".
+  const flushBuffer = async (buffer: readonly { id: string; text: string; question: string }[]): Promise<void> => {
+    if (buffer.length === 0) return;
+    const compiled = buffer
+      .map((b, i) => `${i + 1}) ${b.id}: ${b.text} — (you asked: "${b.question}")`)
+      .join("\n");
+    setBufferedAnswers([]);
+    await sendToClaude(compiled);
+  };
+
+  // Pop the head, buffer the answer, echo to chat. If queue empties, flush
+  // the buffer in a single chat_send turn (so 1 round trip per N answers).
+  const submitAnswerForHead = (answerText: string): void => {
+    const head = questionQueue[0];
+    if (!head || !project) return;
+    const trimmed = answerText.trim();
+    if (trimmed.length === 0) return;
+
+    const entry = { id: head.id, text: trimmed, question: head.text };
+    const newBuffer = [...bufferedAnswers, entry];
+    const newQueue = questionQueue.slice(1);
+
+    // Echo the answer into the chat scrollback + persist for reload.
+    setMessages((prev) => [...prev, { role: "user", text: `${head.id}: ${trimmed}` }]);
+    void sidecarCall("chatMessages.append", {
+      projectId: project.id,
+      role: "user",
+      text: `${head.id}: ${trimmed}`,
+    });
+
+    setBufferedAnswers(newBuffer);
+    setQuestionQueue(newQueue);
+    setInput("");
+
+    if (newQueue.length === 0) {
+      void flushBuffer(newBuffer);
+    }
+  };
+
+  // The input-box submit handler. If a queued question is on screen, the
+  // input is the freeform answer for it; otherwise (first turn / between
+  // batches) it goes straight to claude.
+  const handleSendInput = (): void => {
+    const trimmed = input.trim();
+    if (trimmed.length === 0) return;
+    if (status.kind === "streaming") return;
+    if (!project) return;
+
+    if (questionQueue[0]) {
+      submitAnswerForHead(trimmed);
+      return;
+    }
+
+    // No queued question — treat as a freeform turn (initial pitch or a
+    // user-driven prompt between batches).
+    setMessages((prev) => [...prev, { role: "user", text: trimmed }]);
+    void sidecarCall("chatMessages.append", {
+      projectId: project.id,
+      role: "user",
+      text: trimmed,
+    });
+    setInput("");
+    void sendToClaude(trimmed);
+  };
+
   const handleOptionPick = (option: string): void => {
-    // Click = send. The freeform escape hatch is the separate
-    // "Enter my own response" button. Per human direction 2026-04-26
-    // the previous prefill-and-edit behaviour was confusing — novices
-    // expected one click to commit the answer.
-    void handleSend(option);
+    // Click = answer head + advance queue.
+    submitAnswerForHead(option);
   };
 
   const handleEnterMyOwn = (): void => {
-    setPendingOptions(null);
-    setInput("");
     requestAnimationFrame(() => {
       inputRef.current?.focus();
     });
+  };
+
+  // Manual flush: useful if the novice wants to send their answers-so-far
+  // before completing the queue.
+  const handleManualFlush = (): void => {
+    if (bufferedAnswers.length === 0) return;
+    void flushBuffer(bufferedAnswers);
   };
 
   const isStreaming = status.kind === "streaming";
@@ -392,20 +448,33 @@ function InterviewClient() {
             </div>
           )}
 
-          {pendingOptions !== null && (
+          {questionQueue[0] && (
             <div className="border-t bg-muted/40 px-6 py-3">
               <div className="mx-auto w-full max-w-2xl">
-                <p className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">
-                  Click to send, or enter your own
-                </p>
+                <div className="mb-2 flex items-baseline justify-between">
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                    {questionQueue[0].id} · question {bufferedAnswers.length + 1} of {bufferedAnswers.length + questionQueue.length} in this batch
+                  </p>
+                  {bufferedAnswers.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={handleManualFlush}
+                      className="text-xs text-muted-foreground underline hover:text-foreground"
+                      title="Send the answers you've given so far without finishing the batch"
+                    >
+                      Send my {bufferedAnswers.length} answer{bufferedAnswers.length === 1 ? "" : "s"} now
+                    </button>
+                  ) : null}
+                </div>
+                <p className="mb-3 text-sm font-medium">{questionQueue[0].text}</p>
                 <div className="flex flex-wrap gap-2" role="group" aria-label="Answer options">
-                  {pendingOptions.options.map((opt) => (
+                  {questionQueue[0].options.map((opt) => (
                     <Button
                       key={opt}
                       type="button"
                       variant="outline"
                       size="sm"
-                      title="Click to send this answer"
+                      title="Click to answer this question"
                       onClick={() => {
                         handleOptionPick(opt);
                       }}
@@ -413,15 +482,17 @@ function InterviewClient() {
                       {opt}
                     </Button>
                   ))}
-                  <Button
-                    type="button"
-                    variant="default"
-                    size="sm"
-                    onClick={handleEnterMyOwn}
-                    title="Type a freeform answer instead"
-                  >
-                    Enter my own response
-                  </Button>
+                  {questionQueue[0].options.length > 0 ? (
+                    <Button
+                      type="button"
+                      variant="default"
+                      size="sm"
+                      onClick={handleEnterMyOwn}
+                      title="Type a freeform answer instead"
+                    >
+                      Enter my own response
+                    </Button>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -442,7 +513,7 @@ function InterviewClient() {
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
-                    void handleSend();
+                    void handleSendInput();
                   }
                 }}
                 placeholder={
@@ -460,7 +531,7 @@ function InterviewClient() {
                 type="button"
                 disabled={isBlocked || input.trim().length === 0}
                 onClick={() => {
-                  void handleSend();
+                  void handleSendInput();
                 }}
                 aria-label="Send message"
               >

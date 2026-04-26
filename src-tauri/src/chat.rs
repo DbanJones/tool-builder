@@ -17,29 +17,32 @@ use tokio::process::Command;
 
 use crate::sidecar::project_root_from_cwd;
 
-const INTERVIEW_SYSTEM_PROMPT: &str = "You are the Builder's recursive interviewer. Your job is to populate the project's spec.md by asking the novice the kit's fast-path questions (28 baseline, plus high-stakes follow-ups when activated, plus any extra questions you think the novice's project genuinely needs — you are NOT capped at 28).
+const INTERVIEW_SYSTEM_PROMPT: &str = "You are the Builder's recursive interviewer. Your job is to populate the project's spec.md by asking the novice the kit's fast-path questions (28 baseline, plus high-stakes follow-ups when activated, plus any extra questions the project genuinely needs — you are NOT capped at 28).
+
+THE PIPELINE (read this carefully — it changes how you should behave):
+- The Builder UI shows the novice ONE question at a time, but you generate them in BATCHES of up to 10 per turn. You call the `queue_questions` tool ONCE per turn with the next batch; the UI displays the head of the queue, the novice answers, the UI displays the next, and so on. While the novice is clicking through the queue you are not running — the latency they feel is just the click-to-render time, not a Claude round-trip.
+- When the queue empties, the UI sends you all the buffered answers in a single follow-up turn. You must:
+  1. Call `record_answer` ONCE per question they answered (one tool call per buffered answer, all in this same turn).
+  2. Then call `queue_questions` ONCE with the next batch.
+  3. Write a brief one-sentence acknowledgement to the chat so the novice sees the batch landed.
+- Do NOT put the question text in your assistant message instead of (or in addition to) `queue_questions`. The UI only renders questions from the queue; text-only questions are invisible to the click-to-pick path.
 
 The first turn is special:
 - The novice's first message describes their project. The Builder UI shows a 'Preparing question bank' indicator while you generate your reply.
-- In your first reply: briefly (one sentence) reflect what you understood, then state 'Question bank ready: ~28 fast-path questions to work through.', then start the first batch of questions per the batching rules below. Do not call record_answer for the freeform first message; the novice's pitch is the input you will use for context, not an answer to a numbered question.
+- In your first reply: briefly (one sentence) reflect what you understood, then state 'Question bank ready: ~28 fast-path questions to work through.', then call `queue_questions` with the FIRST batch of up to 10 questions. Do NOT call record_answer for the freeform first message; the novice's pitch is context, not an answer to a numbered question.
 
-How to ask (BATCHING — every turn after the first):
-- Ask up to 10 RELATED questions per turn, grouped by topic. Round-trip latency dominates the experience, so a turn that asks 6 questions about the data model is far better than 6 turns of one question each. Number them 1, 2, 3, ... so the novice can answer in order or by number.
-- Plain language. No jargon unless you have just defined it.
-- If ONE question in the batch is the most-pressing closed (yes/no/single-select) decision, ALSO call the `offer_options` tool with EXACTLY 3 candidate options for it. The Builder UI appends a 4th 'Enter my own response' button automatically — do not include a 'something else' option in your 3. Examples: 'Will this app take payments?' (yes / no / not sure); 'Pick a design direction' (clean and minimal / expressive and bold / professional). Use offer_options for at most ONE question per turn (clicking sends an answer immediately, so multiple option-blocks would race).
-- For open-ended questions (the pitch, the top 5 flows, freeform descriptions), no offer_options.
-- When the novice's answer is vague, contradictory, or covers a high-stakes topic (auth, payments, data model, deploy target), follow up with a sharper question in the next turn's batch. There is no depth limit on follow-ups; close the branch only when the novice answers clearly or says 'you choose' / 'I do not mind'. You may exceed the 28-question fast-path if the project genuinely demands it.
+How to write each queued question:
+- Plain language. No jargon unless you have just defined it. Each `text` field is what the novice will see verbatim.
+- For closed questions (yes/no, single-select), supply EXACTLY 3 candidate `options`. The UI appends a 4th 'Enter my own response' button automatically — do not include a 'something else' option in your 3. Examples: 'Will this app take payments?' (yes / no / not sure); 'Pick a design direction' (clean and minimal / expressive and bold / professional).
+- For open-ended questions (the pitch, top 5 flows, freeform descriptions), omit `options` so the novice gets a freeform input only.
+- The `id` field is the kit question id (Q1, Q15, etc.) and is what `record_answer` will reference when the novice's answer comes back.
+
+When you receive the buffered answers back:
+- The novice's reply will be a numbered list ('1) red 2) yes 3) email...'). Parse it; call `record_answer` for each, with the kit `question_id`, the novice's answer (in their own words or your faithful summary), a confidence ('confident' for direct, 'tentative' for inferred or partial, 'default-applied' when the kit default was used), and a short rationale if confidence is not 'confident'.
 - When the novice defers ('you choose'), apply the kit default and record confidence='default-applied'.
-- Open each turn with a topic counter like 'Topic 5 of ~28'. Increment it across topic boundaries, not within follow-ups.
+- When an answer is vague or covers a high-stakes topic (auth, payments, data model, deploy target), include a sharper follow-up in the NEXT batch's queue_questions call. There is no depth limit on follow-ups; close the branch when the novice answers clearly or says 'you choose'. You may exceed the 28-question fast-path if the project demands it.
 
-How to answer-batches the novice sends back:
-- The novice may answer the batch all at once ('1) yes 2) no 3) clean minimal') or one at a time. Either way, parse out as many answers as you can and call `record_answer` ONCE per question they answered. Then ask the next batch.
-
-How to record:
-- After every clear answer (or applied default), call `record_answer` with the kit question id (Q1, Q15, etc.), the novice's answer (or your faithful summary in their own words), a confidence ('confident' for direct, 'tentative' for inferred or partial, 'default-applied' when the kit default was used), and a short rationale if confidence is not 'confident'.
-- After recording, write a one-sentence acknowledgement so the novice sees their answer landed.
-
-Do not invent answers. If an answer is unclear after one follow-up, mark it tentative and move on; the spec preview will show it as outstanding.";
+Do not invent answers. If an answer is unclear after one follow-up, mark it tentative and move on; the spec preview shows outstanding items.";
 
 /// Generate the MCP config JSON that claude consumes via `--mcp-config`.
 /// Per ADR-0004 the MCP server is a separate Node entry point that opens
@@ -90,6 +93,17 @@ fn build_mcp_config(project_id: &str, novice_project_root: &PathBuf) -> Result<P
   Ok(config_path)
 }
 
+/// One queued question in a `queue_questions` MCP call. The UI shows them
+/// one at a time from the head of the local queue.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct QueuedQuestion {
+  pub id: String,
+  pub text: String,
+  /// 3 click-to-pick options, or empty for an open-ended question.
+  pub options: Vec<String>,
+  pub allow_freeform: bool,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ChatChunk {
@@ -98,13 +112,11 @@ pub enum ChatChunk {
   /// A piece of assistant text. Multiple of these arrive per turn; concatenate
   /// in order to render the full message as it streams.
   AssistantDelta { text: String },
-  /// Emitted when claude calls the `offer_options` MCP tool. The UI should
-  /// render the options as click-to-pick buttons next to the input.
-  OptionsOffered {
-    question: String,
-    options: Vec<String>,
-    allow_freeform: bool,
-  },
+  /// Emitted when claude calls the `queue_questions` MCP tool. The UI
+  /// accumulates the items into a local queue and shows them one at a time;
+  /// answers are buffered locally and sent back to claude as a single
+  /// follow-up turn when the queue empties (so 1 round trip per N answers).
+  QuestionsQueued { items: Vec<QueuedQuestion> },
   /// Emitted once at the end of a successful turn.
   Done {
     cost_usd: Option<f64>,
@@ -164,39 +176,47 @@ pub fn parse_stream_line(line: &str) -> Vec<ChatChunk> {
             // We only forward calls to our own UI-facing tool. record_answer
             // and any other MCP tool calls run silently.
             //
-            // claude prefixes MCP tool names: a tool named `offer_options`
+            // claude prefixes MCP tool names: a tool named `queue_questions`
             // exposed by an MCP server registered as `builder-record-answer`
-            // arrives in stream-json as `mcp__builder-record-answer__offer_options`.
+            // arrives in stream-json as `mcp__builder-record-answer__queue_questions`.
             // Match either the bare name or the prefixed form.
             let tool_name = block.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let is_offer_options = tool_name == "offer_options"
-              || tool_name.ends_with("__offer_options");
-            if is_offer_options {
+            let is_queue_questions = tool_name == "queue_questions"
+              || tool_name.ends_with("__queue_questions");
+            if is_queue_questions {
               if let Some(input) = block.get("input") {
-                let question = input
-                  .get("question")
-                  .and_then(|v| v.as_str())
-                  .unwrap_or("")
-                  .to_string();
-                let options = input
-                  .get("options")
+                let items: Vec<QueuedQuestion> = input
+                  .get("items")
                   .and_then(|v| v.as_array())
                   .map(|arr| {
                     arr
                       .iter()
-                      .filter_map(|o| o.as_str().map(|s| s.to_string()))
+                      .filter_map(|item| {
+                        let obj = item.as_object()?;
+                        let id = obj.get("id")?.as_str()?.to_string();
+                        let text = obj.get("text")?.as_str()?.to_string();
+                        let options = obj
+                          .get("options")
+                          .and_then(|v| v.as_array())
+                          .map(|arr| {
+                            arr
+                              .iter()
+                              .filter_map(|o| o.as_str().map(|s| s.to_string()))
+                              .collect()
+                          })
+                          .unwrap_or_default();
+                        let allow_freeform = obj
+                          .get("allow_freeform")
+                          .and_then(|v| v.as_bool())
+                          .unwrap_or(true);
+                        Some(QueuedQuestion { id, text, options, allow_freeform })
+                      })
                       .collect()
                   })
                   .unwrap_or_default();
-                let allow_freeform = input
-                  .get("allow_freeform")
-                  .and_then(|v| v.as_bool())
-                  .unwrap_or(true);
-                chunks.push(ChatChunk::OptionsOffered {
-                  question,
-                  options,
-                  allow_freeform,
-                });
+                if !items.is_empty() {
+                  chunks.push(ChatChunk::QuestionsQueued { items });
+                }
               }
             }
           }
@@ -275,7 +295,7 @@ pub async fn chat_send(
         command.arg("--mcp-config").arg(&config_path);
         command
           .arg("--allowed-tools")
-          .arg("mcp__builder-record-answer__record_answer,mcp__builder-record-answer__offer_options");
+          .arg("mcp__builder-record-answer__record_answer,mcp__builder-record-answer__queue_questions");
       }
       Err(e) => {
         log::warn!("MCP config build failed; chat falls back to no-tools: {e}");
@@ -392,26 +412,45 @@ mod tests {
   }
 
   #[test]
-  fn parses_offer_options_tool_use_into_options_offered_chunk() {
-    let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"x","name":"offer_options","input":{"question":"Will this app take payments?","options":["yes","no","not sure"],"allow_freeform":true}}]}}"#;
+  fn parses_queue_questions_tool_use_into_questions_queued_chunk() {
+    let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"x","name":"queue_questions","input":{"items":[{"id":"Q1","text":"Will this app take payments?","options":["yes","no","not sure"],"allow_freeform":true}]}}]}}"#;
     match first(line) {
-      ChatChunk::OptionsOffered { question, options, allow_freeform } => {
-        assert_eq!(question, "Will this app take payments?");
-        assert_eq!(options, vec!["yes".to_string(), "no".to_string(), "not sure".to_string()]);
-        assert!(allow_freeform);
+      ChatChunk::QuestionsQueued { items } => {
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, "Q1");
+        assert_eq!(items[0].text, "Will this app take payments?");
+        assert_eq!(items[0].options, vec!["yes", "no", "not sure"]);
+        assert!(items[0].allow_freeform);
       }
       _ => panic!("wrong variant"),
     }
   }
 
   #[test]
-  fn parses_mcp_prefixed_offer_options_tool_use() {
+  fn parses_mcp_prefixed_queue_questions_tool_use() {
     // claude prefixes MCP tools as `mcp__<server-key>__<tool-name>`. The
     // parser must recognise both the bare and prefixed forms.
-    let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"x","name":"mcp__builder-record-answer__offer_options","input":{"question":"q","options":["a","b","c"],"allow_freeform":true}}]}}"#;
+    let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"x","name":"mcp__builder-record-answer__queue_questions","input":{"items":[{"id":"Q1","text":"q","options":["a","b","c"]}]}}]}}"#;
     match first(line) {
-      ChatChunk::OptionsOffered { options, .. } => {
-        assert_eq!(options, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+      ChatChunk::QuestionsQueued { items } => {
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].options, vec!["a", "b", "c"]);
+      }
+      _ => panic!("wrong variant"),
+    }
+  }
+
+  #[test]
+  fn parses_multi_item_queue_questions_into_ordered_items() {
+    let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"x","name":"queue_questions","input":{"items":[{"id":"Q1","text":"first"},{"id":"Q2","text":"second","options":["a","b","c"]},{"id":"Q3","text":"third"}]}}]}}"#;
+    match first(line) {
+      ChatChunk::QuestionsQueued { items } => {
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].id, "Q1");
+        assert!(items[0].options.is_empty()); // open-ended
+        assert_eq!(items[1].id, "Q2");
+        assert_eq!(items[1].options.len(), 3);
+        assert_eq!(items[2].id, "Q3");
       }
       _ => panic!("wrong variant"),
     }
@@ -420,33 +459,34 @@ mod tests {
   #[test]
   fn ignores_other_mcp_prefixed_tool_calls() {
     // record_answer (and any future MCP tool we expose) must NOT emit a
-    // chunk; UI-facing chunks come only from offer_options.
+    // chunk; UI-facing chunks come only from queue_questions.
     let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"x","name":"mcp__builder-record-answer__record_answer","input":{"question_id":"Q1","answer":"hi"}}]}}"#;
     assert!(parse_stream_line(line).is_empty());
   }
 
   #[test]
-  fn assistant_with_text_and_offer_options_returns_text_first_then_options() {
-    let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Topic 5 of 28. Pick one:"},{"type":"tool_use","id":"x","name":"offer_options","input":{"question":"Pick a design direction","options":["clean","bold"],"allow_freeform":true}}]}}"#;
+  fn assistant_with_text_and_queue_questions_returns_text_first_then_queue() {
+    let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Topic 5 of 28."},{"type":"tool_use","id":"x","name":"queue_questions","input":{"items":[{"id":"Q5","text":"Pick a design","options":["clean","bold","pro"]}]}}]}}"#;
     let chunks = parse_stream_line(line);
     assert_eq!(chunks.len(), 2);
     match &chunks[0] {
-      ChatChunk::AssistantDelta { text } => assert_eq!(text, "Topic 5 of 28. Pick one:"),
+      ChatChunk::AssistantDelta { text } => assert_eq!(text, "Topic 5 of 28."),
       _ => panic!("wrong first variant"),
     }
     match &chunks[1] {
-      ChatChunk::OptionsOffered { options, .. } => {
-        assert_eq!(options, &vec!["clean".to_string(), "bold".to_string()]);
+      ChatChunk::QuestionsQueued { items } => {
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].options, vec!["clean", "bold", "pro"]);
       }
       _ => panic!("wrong second variant"),
     }
   }
 
   #[test]
-  fn offer_options_defaults_allow_freeform_true_when_missing() {
-    let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"x","name":"offer_options","input":{"question":"q","options":["a","b"]}}]}}"#;
+  fn queue_questions_defaults_allow_freeform_true_when_missing() {
+    let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"x","name":"queue_questions","input":{"items":[{"id":"Q1","text":"q"}]}}]}}"#;
     match first(line) {
-      ChatChunk::OptionsOffered { allow_freeform, .. } => assert!(allow_freeform),
+      ChatChunk::QuestionsQueued { items } => assert!(items[0].allow_freeform),
       _ => panic!("wrong variant"),
     }
   }
