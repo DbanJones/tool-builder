@@ -15,6 +15,8 @@ export default tseslint.config(
       "out/**",
       "src-tauri/target/**",
       "dist/**",
+      "apps/marketing/**",
+      "sidecar/**",
       "coverage/**",
       "playwright-report/**",
       "test-results/**",

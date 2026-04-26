@@ -4,6 +4,20 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 
 ## 2026-04-25
 
+### D-020 — E6 marketing site ships with placeholder downloads + no demo recording
+- **Drift type**: scope drift (deferral, against [docs/build-order.md](build-order.md) E6: "one-page Next.js site at apps/marketing/ with download links and a 90-second screen recording").
+- **Discovered at**: E6.
+- **Cause**: real download links require Phase E0 (signed installer artefacts) and a release pipeline that publishes to a CDN/GitHub Releases — both deferred. The 90-second screen recording can only be made after a real end-to-end build runs in `pnpm tauri dev` (which depends on the user's claude CLI auth + a real test project).
+- **Resolution**: drift accepted. E6 ships:
+  - `apps/marketing/` — minimal Next.js 15 + React 19 + Tailwind sibling project (NOT a pnpm workspace member; runs via `pnpm install && pnpm dev` from inside the dir; serves on port 3001 to avoid clashing with the root Builder dev server).
+  - `apps/marketing/app/page.tsx` — hero + 90s-demo placeholder block + three download cards (macOS/Windows/Linux) gated on a `DOWNLOAD_LINKS_PENDING` flag (currently true). When E0 ships, flip the flag and set the URLs.
+  - Root `tsconfig.json` excludes `apps/marketing` so the Builder's strict typecheck doesn't trip on the marketing site's looser settings; ESLint config does the same.
+- **Commit**: TBD (E6 commit).
+- **Follow-up**:
+  1. After E0: replace the placeholder download URLs with real signed-installer URLs and flip `DOWNLOAD_LINKS_PENDING = false`.
+  2. After a real build run: capture a 90s screen recording (Loom / OBS), put `demo.mp4` in `apps/marketing/public/`, and set `SCREEN_RECORDING_URL = "/demo.mp4"`.
+  3. Configure deploy of the marketing site (Vercel) — separate from the Builder app; uses the same E1 deploy flow.
+
 ### D-019 — Sentry SDK integration deferred from E5 (consent capture only)
 - **Drift type**: scope drift (deferral, against [rules/06-other.md](../rules/06-other.md) O7 "MUST install Sentry for errors").
 - **Discovered at**: E5.
