@@ -214,19 +214,11 @@ function InterviewClient() {
   };
 
   const handleOptionPick = (option: string): void => {
-    if (pendingOptions === null) return;
-    if (pendingOptions.allowFreeform) {
-      // Pre-fill the textarea so the novice can edit before sending.
-      setInput(option);
-      setPendingOptions(null);
-      // Focus so they can edit immediately.
-      requestAnimationFrame(() => {
-        inputRef.current?.focus();
-      });
-    } else {
-      // Strict-pick: send immediately on click.
-      void handleSend(option);
-    }
+    // Click = send. The freeform escape hatch is the separate
+    // "Enter my own response" button. Per human direction 2026-04-26
+    // the previous prefill-and-edit behaviour was confusing — novices
+    // expected one click to commit the answer.
+    void handleSend(option);
   };
 
   const handleEnterMyOwn = (): void => {
@@ -357,7 +349,7 @@ function InterviewClient() {
             <div className="border-t bg-muted/40 px-6 py-3">
               <div className="mx-auto w-full max-w-2xl">
                 <p className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">
-                  Pick an option, or enter your own
+                  Click to send, or enter your own
                 </p>
                 <div className="flex flex-wrap gap-2" role="group" aria-label="Answer options">
                   {pendingOptions.options.map((opt) => (
@@ -366,6 +358,7 @@ function InterviewClient() {
                       type="button"
                       variant="outline"
                       size="sm"
+                      title="Click to send this answer"
                       onClick={() => {
                         handleOptionPick(opt);
                       }}
@@ -375,9 +368,10 @@ function InterviewClient() {
                   ))}
                   <Button
                     type="button"
-                    variant="outline"
+                    variant="default"
                     size="sm"
                     onClick={handleEnterMyOwn}
+                    title="Type a freeform answer instead"
                   >
                     Enter my own response
                   </Button>
