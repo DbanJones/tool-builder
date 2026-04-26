@@ -7,19 +7,25 @@
   "phase_b_completed_at": "2026-04-26T11:45:00Z",
   "phase_c_completed_at": "2026-04-26T17:00:00Z",
   "tasks_total_in_phase": 6,
-  "tasks_completed_in_phase": 5,
+  "tasks_completed_in_phase": 6,
   "current_task": null,
-  "next_task": "D6",
+  "next_task": "PHASE_D_BOUNDARY",
   "drift": {
     "blocker_count": 0,
     "non_blocker_count": 13,
     "last_check_at": "2026-04-26T17:00:00Z",
     "notes": "Open drift in docs/drift-log.md: D-001, D-002, D-004, D-005, D-006, D-007, D-008, D-009, D-010, D-011, D-012, D-013, D-014. Closed: D-003. Phase C boundary PASSED at 17:00:00Z (docs/spec-trace.md, commit 00cd441)."
   },
-  "tests": { "passing": 265, "failing": 0, "skipped": 0, "breakdown": "177 TS unit + 57 TS integration + 31 Rust unit" },
+  "tests": { "passing": 270, "failing": 0, "skipped": 0, "breakdown": "179 TS unit + 60 TS integration + 31 Rust unit" },
   "cost_so_far_usd": 0.0,
   "tokens": { "input": 0, "output": 0 },
   "history": [
+    {
+      "task_id": "D6",
+      "completed_at": "2026-04-26T19:05:00Z",
+      "commit": "93956f0",
+      "notes": "Pause / resume / stop / crash recovery (Flow H AC1-4). New current_session_id column on projects (migration 0006_busy_avengers.sql) so resume can pass --resume <id> across app restarts. New projects.setStatus handler — optional currentSessionId/currentPhase patches only when caller provides them, so a status flip doesn't blank a previously-saved session id. New OrchestratorState (Rust): Mutex<Option<Child>> holding the in-flight build subprocess; orchestrator_start hands the child INTO state on spawn and takes it back OUT for stderr+wait at exit (if orchestrator_stop already pulled it, the read loop sees EOF and returns cleanly). New orchestrator_stop Tauri command + lib/orchestrator wrapper (2 unit tests: happy path + transport error). Dashboard wires it: Pause = orchestratorStop + setStatus(paused) preserving session id; Resume = startBuild reads sessionIdRef and passes --resume; Stop = orchestratorStop + setStatus(ready, currentSessionId: null) so next start is fresh. Crash recovery: on mount, if project.status === 'building' the previous app process died mid-build (the only writer of 'building' is startBuild); flips to 'paused' + shows 'Recovered from crash' banner. Session id from claude's session event persisted via setStatus(currentSessionId) immediately so a hard kill mid-turn still leaves a resumable session. Drift: kill-mid-task integration test deferred to Phase E with rest of D-004 (needs the fixture-claude binary); setStatus + sessionId persistence half covered by 3 new sidecar-projects integration tests. pnpm verify GREEN (179 unit + 60 integration + 31 Rust = 270). Phase D: 6/6 — boundary self-check next."
+    },
     {
       "task_id": "D5",
       "completed_at": "2026-04-26T18:55:00Z",
