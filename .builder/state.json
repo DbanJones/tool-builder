@@ -1,12 +1,13 @@
 {
   "schema_version": 1,
   "project_path": ".",
-  "phase": "A",
-  "phase_started_at": "2026-04-25T18:09:00Z",
-  "tasks_total_in_phase": 5,
-  "tasks_completed_in_phase": 5,
+  "phase": "B",
+  "phase_started_at": "2026-04-26T10:30:00Z",
+  "phase_a_completed_at": "2026-04-26T10:30:00Z",
+  "tasks_total_in_phase": 6,
+  "tasks_completed_in_phase": 0,
   "current_task": null,
-  "next_task": "PHASE_A_BOUNDARY",
+  "next_task": "B1",
   "drift": {
     "blocker_count": 0,
     "non_blocker_count": 3,
