@@ -1,16 +1,15 @@
 "use client";
 
 import { CheckCircle2, Loader2, Send } from "lucide-react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { chatSend, type ChatChunk } from "@/lib/chat/client";
 import { ingestFile } from "@/lib/files/ingest";
 import type { IngestedFile } from "@/lib/files/types";
-import { orchestratorStart, type OrchestratorEvent } from "@/lib/orchestrator";
-import { translate } from "@/lib/orchestrator/translate";
 import type { QuestionId } from "@/lib/interview/library";
 import { checkReadiness, type ReadinessResult } from "@/lib/interview/readiness";
 import { rebuildSpec, type RebuildAnswer } from "@/lib/interview/rebuild-spec";
@@ -23,13 +22,6 @@ interface DisplayMessage {
   role: "user" | "assistant";
   text: string;
 }
-
-// Dev-only event shape used by the D1/D2 test panel: same as
-// OrchestratorEvent, but tool_use is enriched with the translated humanLine
-// so we can render both the novice line and the raw input side by side.
-type DevOrchestratorEvent =
-  | Exclude<OrchestratorEvent, { kind: "tool_use" }>
-  | { kind: "tool_use"; tool: string; raw_input: string; humanLine: string };
 
 interface AnswerRow {
   id: string;
@@ -91,13 +83,6 @@ function InterviewClient() {
     allowFreeform: boolean;
   } | null>(null);
   const [isPreparingBank, setIsPreparingBank] = useState(false);
-  // D1/D2 live-test trigger. Spawns the build subprocess against the project
-  // folder and dumps observed events here so we can verify the AC ("claude
-  // reads CLAUDE.md and emits a Plan block in <30s"). Each tool_use also
-  // gets a translated humanLine and is persisted to the actions table +
-  // .builder/history.log via the sidecar. Replaced by the real dashboard at D3.
-  const [orchEvents, setOrchEvents] = useState<readonly DevOrchestratorEvent[]>([]);
-  const [orchRunning, setOrchRunning] = useState(false);
   const sessionIdRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -156,37 +141,6 @@ function InterviewClient() {
     if (project) void refreshSpec();
   }, [project, refreshSpec]);
 
-  // D1/D2 dev trigger. Removed/replaced by the proper Build dashboard at D3.
-  // For each tool_use event, compute a humanLine via the translator and
-  // persist (DB row + history.log line) through the sidecar before rendering.
-  const startOrchestratorTest = useCallback(async (): Promise<void> => {
-    if (!project || orchRunning) return;
-    setOrchEvents([]);
-    setOrchRunning(true);
-    const historyLogPath = project.path.replace(/\/$/, "") + "/.builder/history.log";
-    const r = await orchestratorStart({
-      projectPath: project.path,
-      onEvent: (event) => {
-        if (event.kind === "tool_use") {
-          const humanLine = translate(event.tool, event.raw_input);
-          setOrchEvents((prev) => [...prev, { ...event, humanLine }]);
-          void sidecarCall("actions.append", {
-            projectId: project.id,
-            tool: event.tool,
-            rawInput: event.raw_input,
-            humanLine,
-            historyLogPath,
-          });
-        } else {
-          setOrchEvents((prev) => [...prev, event]);
-        }
-      },
-    });
-    r.mapErr((e) => {
-      setOrchEvents((prev) => [...prev, { kind: "error", message: e.message }]);
-    });
-    setOrchRunning(false);
-  }, [project, orchRunning]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -537,67 +491,28 @@ function InterviewClient() {
             {spec || "_(no answers recorded yet)_"}
           </pre>
           <div className="border-t bg-background p-3">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                D1 dev: orchestrator subprocess
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs text-muted-foreground">
+                Ready to build? Open the dashboard for live tail + controls.
               </p>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={!project || orchRunning}
-                onClick={() => void startOrchestratorTest()}
-              >
-                {orchRunning ? "Running..." : "Start build (test)"}
-              </Button>
-            </div>
-            <ul className="max-h-48 space-y-1 overflow-auto text-[11px]" aria-live="polite">
-              {orchEvents.length === 0 ? (
-                <li className="text-muted-foreground">
-                  No events yet. Click Start build to spawn claude in {project?.path ?? "the project folder"}.
-                </li>
+              {project ? (
+                <Link
+                  href={`/build?project=${project.id}`}
+                  className={buttonVariants({ size: "sm", variant: "outline" })}
+                >
+                  Open Build dashboard
+                </Link>
               ) : (
-                orchEvents.map((e, i) => <OrchestratorEventLine key={i} event={e} />)
+                <Button size="sm" variant="outline" disabled>
+                  Open Build dashboard
+                </Button>
               )}
-            </ul>
+            </div>
           </div>
         </aside>
       </div>
     </main>
   );
-}
-
-function OrchestratorEventLine({ event }: { event: DevOrchestratorEvent }) {
-  switch (event.kind) {
-    case "session":
-      return <li className="font-mono text-muted-foreground">session {event.id}</li>;
-    case "assistant_delta":
-      return (
-        <li className="whitespace-pre-wrap break-words">
-          <span className="text-muted-foreground">assistant: </span>
-          {event.text}
-        </li>
-      );
-    case "tool_use":
-      return (
-        <li>
-          <div>{event.humanLine}</div>
-          <div className="font-mono text-[10px] text-muted-foreground">
-            {event.tool} · {event.raw_input}
-          </div>
-        </li>
-      );
-    case "done":
-      return (
-        <li className="text-muted-foreground">
-          done — cost ${event.cost_usd?.toFixed(4) ?? "?"}, in {event.input_tokens ?? "?"} / out{" "}
-          {event.output_tokens ?? "?"}
-        </li>
-      );
-    case "rate_limit":
-      return <li className="text-yellow-700">rate limited: {event.message}</li>;
-    case "error":
-      return <li className="text-destructive">error: {event.message}</li>;
-  }
 }
 
 function MessageBubble({ message }: { message: DisplayMessage }) {

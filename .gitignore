@@ -9,9 +9,10 @@ out/
 src-tauri/target/
 target/
 
-# Build / dist
-dist/
-build/
+# Build / dist (root-level only — `app/build/` is the Build dashboard route,
+# which IS tracked).
+/dist/
+/build/
 
 # TypeScript incremental build cache (per tsconfig incremental: true)
 tsconfig.tsbuildinfo

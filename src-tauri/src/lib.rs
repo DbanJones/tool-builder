@@ -100,6 +100,74 @@ fn cli_is_authenticated() -> Result<bool, String> {
 // (see ADR-0004 + drift D-003 closed at A4b). The previous `audit_log_event`
 // Tauri command has been removed; lib/audit/index.ts calls sidecarCall directly.
 
+// Build dashboard readers (D3). Both commands read files from inside the
+// novice's project folder (binding rule 5: untrusted from the Builder's
+// perspective). They sanitise the requested path by joining `project_path` +
+// fixed sub-path; we never accept an arbitrary path from the webview.
+//
+// `read_target_state` returns `{project}/.builder/state.json` as raw text;
+// the webview wrapper validates with Zod. Returns Ok(None) when the file
+// doesn't exist (a freshly-created project has no orchestrator state yet),
+// matching the dashboard's "(no phase yet)" placeholder.
+//
+// `read_history_log_tail` returns the last N JSON lines from
+// `{project}/.builder/history.log`. Used to populate the live tail when
+// opening a paused project; new orchestrator events are appended live by D2.
+
+const HISTORY_LOG_MAX_BYTES: u64 = 16 * 1024 * 1024;
+
+#[tauri::command]
+fn read_target_state(project_path: String) -> Result<Option<String>, String> {
+  let project_root = expand_tilde(&project_path);
+  if !project_root.exists() {
+    return Err(format!(
+      "read_target_state: project folder not found: {}",
+      project_root.display()
+    ));
+  }
+  let state_path = project_root.join(".builder").join("state.json");
+  if !state_path.exists() {
+    return Ok(None);
+  }
+  fs::read_to_string(&state_path)
+    .map(Some)
+    .map_err(|e| format!("read_target_state: {e}"))
+}
+
+#[tauri::command]
+fn read_history_log_tail(project_path: String, limit: usize) -> Result<Vec<String>, String> {
+  let project_root = expand_tilde(&project_path);
+  if !project_root.exists() {
+    return Err(format!(
+      "read_history_log_tail: project folder not found: {}",
+      project_root.display()
+    ));
+  }
+  let log_path = project_root.join(".builder").join("history.log");
+  if !log_path.exists() {
+    return Ok(vec![]);
+  }
+  let metadata = fs::metadata(&log_path).map_err(|e| format!("stat history.log: {e}"))?;
+  if metadata.len() > HISTORY_LOG_MAX_BYTES {
+    return Err(format!(
+      "read_history_log_tail: history.log exceeds {} byte cap (got {})",
+      HISTORY_LOG_MAX_BYTES,
+      metadata.len()
+    ));
+  }
+  let text = fs::read_to_string(&log_path).map_err(|e| format!("read history.log: {e}"))?;
+  let mut lines: Vec<String> = text
+    .lines()
+    .filter(|l| !l.trim().is_empty())
+    .map(|l| l.to_string())
+    .collect();
+  if lines.len() > limit {
+    let drop = lines.len() - limit;
+    lines.drain(..drop);
+  }
+  Ok(lines)
+}
+
 // File ingestion save (C8). Decodes a base64-encoded blob from the webview
 // and writes it to {project_path}/inputs/{name}, returning the absolute
 // path. Per spec.md §6 size limits (B28): 25 MB documents, 10 MB images,
@@ -326,6 +394,8 @@ pub fn run() {
       cli_is_authenticated,
       project_create_folder,
       file_save_uploaded,
+      read_target_state,
+      read_history_log_tail,
       chat_send,
       orchestrator_start,
       sidecar_rpc
