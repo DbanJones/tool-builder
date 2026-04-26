@@ -1,10 +1,20 @@
 mod sidecar;
 
 use keyring::Entry;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::Manager;
 
 use sidecar::{sidecar_rpc, spawn_sidecar, SidecarState};
+
+// Bundled placeholder templates copied into every newly created project per
+// build-order.md A4c (placeholder content per human direction 2026-04-25).
+// `include_str!` paths are relative to this source file.
+const TEMPLATE_CLAUDE_MD: &str = include_str!("../templates/CLAUDE.md");
+const TEMPLATE_SPEC_MD: &str = include_str!("../templates/spec.md");
+const TEMPLATE_BUILDER_STATE: &str = include_str!("../templates/builder-state.json");
+const TEMPLATE_RULES_README: &str = include_str!("../templates/rules-README.md");
 
 // Builder-local keychain commands. See ADR-0003.
 //
@@ -86,6 +96,94 @@ fn cli_is_authenticated() -> Result<bool, String> {
 // (see ADR-0004 + drift D-003 closed at A4b). The previous `audit_log_event`
 // Tauri command has been removed; lib/audit/index.ts calls sidecarCall directly.
 
+// Project creation file-system work per build-order.md A4c and Flow B AC1-AC3.
+// The DB insert + audit row are handled by the sidecar (`projects.create`); the
+// webview orchestrates the two halves via lib/project/index.ts.
+//
+// Validation is intentionally strict: lowercase, alphanumeric plus dot/dash/
+// underscore, max 214 chars, must not start with `.` or `_`. Filesystem-safe
+// across all three platforms.
+
+fn is_valid_project_name(name: &str) -> bool {
+  if name.is_empty() || name.len() > 214 {
+    return false;
+  }
+  let mut chars = name.chars();
+  let first = match chars.next() {
+    Some(c) => c,
+    None => return false,
+  };
+  if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
+    return false;
+  }
+  chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '-' || c == '_')
+}
+
+fn expand_tilde(path: &str) -> PathBuf {
+  if let Some(rest) = path.strip_prefix("~/") {
+    if let Some(home) = std::env::var_os("HOME") {
+      return PathBuf::from(home).join(rest);
+    }
+  }
+  PathBuf::from(path)
+}
+
+#[tauri::command]
+fn project_create_folder(name: String, folder: String) -> Result<String, String> {
+  if !is_valid_project_name(&name) {
+    return Err(format!(
+      "invalid project name '{name}': must be 1-214 chars, lowercase, start with a letter or digit, contain only letters, digits, dots, hyphens, and underscores"
+    ));
+  }
+
+  let parent = expand_tilde(&folder);
+  fs::create_dir_all(&parent)
+    .map_err(|e| format!("failed to create parent folder {}: {e}", parent.display()))?;
+
+  let project_root = parent.join(&name);
+  if project_root.exists() {
+    return Err(format!(
+      "target folder already exists: {}",
+      project_root.display()
+    ));
+  }
+
+  fs::create_dir_all(&project_root)
+    .map_err(|e| format!("failed to create project folder {}: {e}", project_root.display()))?;
+  fs::create_dir_all(project_root.join(".builder"))
+    .map_err(|e| format!("failed to create .builder/: {e}"))?;
+  fs::create_dir_all(project_root.join("rules"))
+    .map_err(|e| format!("failed to create rules/: {e}"))?;
+
+  let claude_md_path = project_root.join("CLAUDE.md");
+  fs::write(&claude_md_path, TEMPLATE_CLAUDE_MD)
+    .map_err(|e| format!("failed to write CLAUDE.md: {e}"))?;
+  fs::write(project_root.join("spec.md"), TEMPLATE_SPEC_MD)
+    .map_err(|e| format!("failed to write spec.md: {e}"))?;
+  fs::write(project_root.join(".builder").join("state.json"), TEMPLATE_BUILDER_STATE)
+    .map_err(|e| format!("failed to write .builder/state.json: {e}"))?;
+  fs::write(project_root.join("rules").join("README.md"), TEMPLATE_RULES_README)
+    .map_err(|e| format!("failed to write rules/README.md: {e}"))?;
+
+  let git_init = Command::new("git")
+    .arg("init")
+    .arg("--quiet")
+    .current_dir(&project_root)
+    .output()
+    .map_err(|e| format!("failed to spawn git: {e}"))?;
+  if !git_init.status.success() {
+    return Err(format!(
+      "git init failed: {}",
+      String::from_utf8_lossy(&git_init.stderr)
+    ));
+  }
+
+  Path::new(&project_root)
+    .canonicalize()
+    .map(|p| p.display().to_string())
+    .map_err(|e| format!("failed to canonicalise project path: {e}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
@@ -123,6 +221,7 @@ pub fn run() {
       keychain_delete,
       cli_is_installed,
       cli_is_authenticated,
+      project_create_folder,
       sidecar_rpc
     ])
     .run(tauri::generate_context!())

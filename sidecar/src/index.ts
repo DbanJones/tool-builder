@@ -17,6 +17,7 @@ import { z } from "zod";
 
 import { initDb } from "./db.js";
 import { logEvent, listEvents } from "./handlers/audit.js";
+import { create as createProject, list as listProjects, get as getProject } from "./handlers/projects.js";
 
 const RequestSchema = z.object({
   id: z.string(),
@@ -71,6 +72,9 @@ const handlers: Record<string, Handler> = {
   ping: () => ({ pong: true, version: "0.1.0", at: new Date().toISOString() }),
   "audit.logEvent": logEvent,
   "audit.listEvents": listEvents,
+  "projects.create": createProject,
+  "projects.list": listProjects,
+  "projects.get": getProject,
 };
 
 const handleLine = async (line: string): Promise<void> => {
