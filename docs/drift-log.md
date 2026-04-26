@@ -4,6 +4,20 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 
 ## 2026-04-25
 
+### D-018 — E4 ships an OPTIONAL spend cap (not "daily"), reconciling spec §6 vs build-order E4
+- **Drift type**: implementation drift (against [docs/build-order.md](build-order.md) E4 wording "daily cap... soft warn at 50%, hard stop at 100%").
+- **Discovered at**: E4.
+- **Cause**: build-order E4 says "implement the daily cap from spec.md §6 NFR" but [spec.md §6](../spec.md) explicitly says "No hard daily spend cap is enforced by the Builder (deferred to a later phase if required)" and rules/04-libraries.md L23 confirms the same override (per ADR-0002, the claude CLI's underlying account governs throttling). Per rules/00-meta.md precedence the spec wins. Two further sub-decisions:
+  1. "daily" → "lifetime" — the existing `costs.sumByProject` returns the per-project total, not today's. A roll-by-day query is a one-line addition but doesn't change the user-visible behaviour at the cap thresholds; it only matters if the novice expects the cap to reset at midnight. Documented here for the day a real use case appears.
+  2. localStorage instead of a DB column — the cap is optional and informational; persisting per-project in localStorage avoids a migration for a feature the spec says is opt-in. Move to a project column if the cap ever becomes load-bearing.
+- **Resolution**: drift accepted. E4 ships:
+  - `lib/cost-ceiling/index.ts`: pure `evaluate(spent, cap) → {state: off|ok|warn|stop, percent, message}`. Default state is "off" (matches spec §6). Soft warn at ≥50%, hard stop at ≥100%. 22 unit tests cover thresholds + storage helpers.
+  - Dashboard footer: small `<input type="number">` for the cap (USD); persisted via the localStorage helpers.
+  - Above-tail Alert renders when state is "warn" (default variant) or "stop" (destructive variant).
+  - Start build button disabled when state is "stop" — the only enforcement, novice-opt-in only.
+- **Commit**: TBD (E4 commit).
+- **Follow-up**: when a real use case appears for a day-rolled cap, add `costs.sumByProjectSince(projectId, sinceTs)` and pass the start of the local day; no other code changes needed.
+
 ### D-017 — E3 ships updater wiring with placeholder pubkey + endpoint (Phase E0 deferred)
 - **Drift type**: scope drift (deferral, against [docs/build-order.md](build-order.md) E3 + [spec.md](../spec.md) Flow J).
 - **Discovered at**: E3.

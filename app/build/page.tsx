@@ -13,6 +13,12 @@ import {
   type HistoryActionEntry,
   type TargetState,
 } from "@/lib/build-state";
+import {
+  evaluate as evaluateCostCeiling,
+  readCapFromStorage,
+  writeCapToStorage,
+  type CostCeilingResult,
+} from "@/lib/cost-ceiling";
 import { deployToVercel, getVercelToken, isVercelInstalled } from "@/lib/deploy";
 import { exportToGithub, isGhInstalled } from "@/lib/export";
 import { appendDrift, listOpenDrifts, type DriftEvent } from "@/lib/drift";
@@ -94,6 +100,11 @@ function BuildClient() {
   // Initially loaded from project.currentSessionId so a paused project can
   // resume across an app restart.
   const sessionIdRef = useRef<string | null>(null);
+  // Optional spend cap (USD cents). null = "no cap" (the spec default per
+  // §6 + L23). Stored in localStorage per project so it survives reloads
+  // without needing a DB migration; if a real per-project setting is
+  // needed later, swap the storage backend without changing the UI.
+  const [costCap, setCostCap] = useState<number | null>(null);
   // Past per-turn elapsed durations (ms). Updated on each `done` event;
   // feeds the ETA estimator. v1 granularity is per-turn; D5 swaps to
   // per-task-id when phase markers are wired (drift D-014).
@@ -177,6 +188,20 @@ function BuildClient() {
   useEffect(() => {
     tailRef.current?.scrollTo({ top: tailRef.current.scrollHeight });
   }, [actions]);
+
+  // Load the saved cost cap when the project becomes available.
+  useEffect(() => {
+    if (project) {
+      setCostCap(readCapFromStorage(project.id));
+    }
+  }, [project]);
+
+  // Persist on change.
+  useEffect(() => {
+    if (project) writeCapToStorage(project.id, costCap);
+  }, [project, costCap]);
+
+  const ceiling: CostCeilingResult = evaluateCostCeiling(costSum?.usdCents ?? 0, costCap);
 
   const startBuild = useCallback(async (): Promise<void> => {
     if (!project || status.kind === "running") return;
@@ -406,7 +431,7 @@ function BuildClient() {
         <div className="flex items-center gap-2">
           <Button
             size="sm"
-            disabled={status.kind === "running"}
+            disabled={status.kind === "running" || ceiling.state === "stop"}
             onClick={() => void startBuild()}
           >
             {status.kind === "running" ? (
@@ -554,6 +579,17 @@ function BuildClient() {
               <AlertDescription>{exportStatus.message}</AlertDescription>
             </Alert>
           ) : null}
+          {ceiling.state === "warn" || ceiling.state === "stop" ? (
+            <Alert
+              variant={ceiling.state === "stop" ? "destructive" : "default"}
+              className="mx-4 mt-3 mb-1"
+            >
+              <AlertTitle>
+                {ceiling.state === "stop" ? "Spend cap reached" : "Approaching spend cap"}
+              </AlertTitle>
+              <AlertDescription>{ceiling.message}</AlertDescription>
+            </Alert>
+          ) : null}
           {recoveredFromCrash ? (
             <Alert className="mx-4 mt-3 mb-1">
               <AlertTitle>Recovered from crash</AlertTitle>
@@ -618,6 +654,8 @@ function BuildClient() {
         costSum={costSum}
         eta={liveEta}
         backHref={projectId ? `/interview?project=${projectId}` : "/"}
+        capUsdCents={costCap}
+        onCapChange={setCostCap}
       />
 
       <DeployModal
@@ -634,16 +672,21 @@ function StatusFooter({
   costSum,
   eta,
   backHref,
+  capUsdCents,
+  onCapChange,
 }: {
   targetState: TargetState | null;
   costSum: CostSum | null;
   eta: EtaResult;
   backHref: string;
+  capUsdCents: number | null;
+  onCapChange: (cap: number | null) => void;
 }) {
   const dollars = costSum ? (costSum.usdCents / 100).toFixed(2) : "0.00";
+  const capDollars = capUsdCents !== null ? (capUsdCents / 100).toFixed(2) : "";
   return (
-    <footer className="flex items-center justify-between border-t px-6 py-2 text-xs text-muted-foreground">
-      <div className="flex gap-6">
+    <footer className="flex items-center justify-between gap-4 border-t px-6 py-2 text-xs text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
         <span>
           Status: <span className="text-foreground">{targetState?.status ?? "unknown"}</span>
         </span>
@@ -659,6 +702,31 @@ function StatusFooter({
         <span>
           ETA per turn: <span className="text-foreground">{formatEta(eta.medianMs, eta.mode)}</span>
         </span>
+        <label className="flex items-center gap-1">
+          Cap $
+          <input
+            type="number"
+            min="0"
+            step="1"
+            value={capDollars}
+            placeholder="off"
+            onChange={(e) => {
+              const v = e.target.value.trim();
+              if (v === "") {
+                onCapChange(null);
+                return;
+              }
+              const dollars = Number.parseFloat(v);
+              if (!Number.isFinite(dollars) || dollars <= 0) {
+                onCapChange(null);
+                return;
+              }
+              onCapChange(Math.round(dollars * 100));
+            }}
+            aria-label="Optional spend cap in USD"
+            className="w-16 rounded border bg-background px-1 py-0.5 text-xs"
+          />
+        </label>
       </div>
       <Link href={backHref} className="underline">
         Back to interview
