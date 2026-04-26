@@ -147,7 +147,15 @@ pub fn parse_stream_line(line: &str) -> Vec<ChatChunk> {
           "tool_use" => {
             // We only forward calls to our own UI-facing tool. record_answer
             // and any other MCP tool calls run silently.
-            if block.get("name").and_then(|v| v.as_str()) == Some("offer_options") {
+            //
+            // claude prefixes MCP tool names: a tool named `offer_options`
+            // exposed by an MCP server registered as `builder-record-answer`
+            // arrives in stream-json as `mcp__builder-record-answer__offer_options`.
+            // Match either the bare name or the prefixed form.
+            let tool_name = block.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let is_offer_options = tool_name == "offer_options"
+              || tool_name.ends_with("__offer_options");
+            if is_offer_options {
               if let Some(input) = block.get("input") {
                 let question = input
                   .get("question")
@@ -240,11 +248,18 @@ pub async fn chat_send(
   // context. Per build-order.md B2 + ADR-0004. If either project_id or
   // project_path is missing, fall back to plain chat (preserves the A5
   // minimum chat path).
+  //
+  // In `-p` mode claude requires explicit `--allowed-tools` for any MCP tool
+  // it should be able to call without prompting. Tool names take the form
+  // `mcp__<server-key>__<tool-name>`; our server is `builder-record-answer`.
   if let (Some(pid), Some(ppath)) = (&project_id, &project_path) {
     let project_root = PathBuf::from(ppath);
     match build_mcp_config(pid, &project_root) {
       Ok(config_path) => {
         command.arg("--mcp-config").arg(&config_path);
+        command
+          .arg("--allowed-tools")
+          .arg("mcp__builder-record-answer__record_answer,mcp__builder-record-answer__offer_options");
       }
       Err(e) => {
         log::warn!("MCP config build failed; chat falls back to no-tools: {e}");
@@ -371,6 +386,27 @@ mod tests {
       }
       _ => panic!("wrong variant"),
     }
+  }
+
+  #[test]
+  fn parses_mcp_prefixed_offer_options_tool_use() {
+    // claude prefixes MCP tools as `mcp__<server-key>__<tool-name>`. The
+    // parser must recognise both the bare and prefixed forms.
+    let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"x","name":"mcp__builder-record-answer__offer_options","input":{"question":"q","options":["a","b","c"],"allow_freeform":true}}]}}"#;
+    match first(line) {
+      ChatChunk::OptionsOffered { options, .. } => {
+        assert_eq!(options, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+      }
+      _ => panic!("wrong variant"),
+    }
+  }
+
+  #[test]
+  fn ignores_other_mcp_prefixed_tool_calls() {
+    // record_answer (and any future MCP tool we expose) must NOT emit a
+    // chunk; UI-facing chunks come only from offer_options.
+    let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"x","name":"mcp__builder-record-answer__record_answer","input":{"question_id":"Q1","answer":"hi"}}]}}"#;
+    assert!(parse_stream_line(line).is_empty());
   }
 
   #[test]
