@@ -6,16 +6,16 @@
   "phase_a_completed_at": "2026-04-26T10:30:00Z",
   "phase_b_completed_at": "2026-04-26T11:45:00Z",
   "tasks_total_in_phase": 8,
-  "tasks_completed_in_phase": 5,
+  "tasks_completed_in_phase": 6,
   "current_task": null,
-  "next_task": "C6",
+  "next_task": "C7",
   "drift": {
     "blocker_count": 0,
-    "non_blocker_count": 10,
-    "last_check_at": "2026-04-26T16:35:00Z",
-    "notes": "Open drift in docs/drift-log.md: D-001, D-002, D-004, D-005, D-006, D-007, D-008, D-009, D-010, D-011 (SQL-dump data extraction deferred from C5). Closed: D-003."
+    "non_blocker_count": 11,
+    "last_check_at": "2026-04-26T16:40:00Z",
+    "notes": "Open drift in docs/drift-log.md: D-001, D-002, D-004, D-005, D-006, D-007, D-008, D-009, D-010, D-011, D-012 (Playwright screenshot path for fetchUrl deferred). Closed: D-003."
   },
-  "tests": { "passing": 161, "failing": 0, "skipped": 0, "breakdown": "119 TS unit + 26 TS integration + 16 Rust unit" },
+  "tests": { "passing": 165, "failing": 0, "skipped": 0, "breakdown": "119 TS unit + 30 TS integration + 16 Rust unit" },
   "cost_so_far_usd": 0.0,
   "tokens": { "input": 0, "output": 0 },
   "history": [

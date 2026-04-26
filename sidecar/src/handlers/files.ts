@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import { parse as parseCsv } from "csv-parse/sync";
 import * as yaml from "js-yaml";
+import { parse as parseHtml } from "node-html-parser";
 import sqlParserModule from "node-sql-parser";
 import { extractText as unpdfExtract } from "unpdf";
 import { z } from "zod";
@@ -783,4 +784,121 @@ export async function parseDataSample(rawParams: unknown): Promise<ParseDataSamp
   throw new Error(
     `parseDataSample: unsupported extension '.${ext}' (supported: csv, tsv, json). SQL dump support is deferred — see drift D-011.`,
   );
+}
+
+// ---------- Reference URL fetch (C6) ----------
+//
+// fetchUrl GETs the URL, parses the HTML, and returns the title, meta
+// description, h1/h2 outline, and a short body snippet. The build-order's
+// fuller "headless browser via Playwright + screenshot" flow is deferred
+// (drift D-012) — playwright is a 250+MB browser binary in the sidecar
+// and the textual extraction here covers the common case (novice drops
+// a reference URL into the file panel; chat can ask follow-up questions).
+
+const FetchUrlParamsSchema = z.object({
+  url: z.string().min(1),
+});
+
+const URL_FETCH_TIMEOUT_MS = 15_000;
+const BODY_SNIPPET_LEN = 600;
+
+export interface FetchUrlResult {
+  kind: IngestedFileKindLite;
+  url: string;
+  finalUrl: string;
+  status: number;
+  title: string | null;
+  description: string | null;
+  headings: string[];
+  bodySnippet: string;
+  summary: string;
+  sizeBytes: number;
+}
+
+function collapseWhitespace(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
+}
+
+function extractMetaDescription(root: ReturnType<typeof parseHtml>): string | null {
+  // Prefer og:description (richer when set), fall back to standard meta.
+  const og = root.querySelector('meta[property="og:description"]');
+  const ogContent = og?.getAttribute("content");
+  if (ogContent !== undefined && ogContent.trim().length > 0) return ogContent.trim();
+  const std = root.querySelector('meta[name="description"]');
+  const stdContent = std?.getAttribute("content");
+  if (stdContent !== undefined && stdContent.trim().length > 0) return stdContent.trim();
+  return null;
+}
+
+export async function fetchUrl(rawParams: unknown): Promise<FetchUrlResult> {
+  const { url } = FetchUrlParamsSchema.parse(rawParams);
+
+  // Validate it's a parseable http(s) URL before spawning a fetch.
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`fetchUrl: '${url}' is not a valid URL.`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`fetchUrl: only http(s) URLs are supported (got '${parsed.protocol}').`);
+  }
+
+  const response = await fetch(parsed.toString(), {
+    redirect: "follow",
+    signal: AbortSignal.timeout(URL_FETCH_TIMEOUT_MS),
+    headers: {
+      // Identify ourselves; some sites block unknown UAs.
+      "user-agent": "BuilderBot/0.1 (+https://github.com/airtec/tool-builder)",
+      accept: "text/html,application/xhtml+xml,*/*;q=0.8",
+    },
+  });
+
+  const html = await response.text();
+  const sizeBytes = html.length;
+  const root = parseHtml(html);
+
+  const titleEl = root.querySelector("title");
+  const title = titleEl ? collapseWhitespace(titleEl.text) || null : null;
+  const description = extractMetaDescription(root);
+
+  const headings: string[] = [];
+  for (const tag of ["h1", "h2"] as const) {
+    for (const node of root.querySelectorAll(tag)) {
+      const txt = collapseWhitespace(node.text);
+      if (txt.length > 0 && headings.length < 10) headings.push(txt);
+    }
+  }
+
+  // Strip script/style/svg from body before snippet extraction.
+  for (const tag of ["script", "style", "noscript", "svg"] as const) {
+    for (const node of root.querySelectorAll(tag)) node.remove();
+  }
+  const bodyText = collapseWhitespace(root.querySelector("body")?.text ?? root.text);
+  const bodySnippet =
+    bodyText.length <= BODY_SNIPPET_LEN
+      ? bodyText
+      : bodyText.slice(0, BODY_SNIPPET_LEN - 3) + "...";
+
+  const summary = [
+    title ? `${title}.` : null,
+    description,
+    headings.length > 0 ? `Headings: ${headings.slice(0, 5).join(" / ")}.` : null,
+  ]
+    .filter((s): s is string => s !== null && s.length > 0)
+    .join(" ")
+    .trim();
+
+  return {
+    kind: "url",
+    url,
+    finalUrl: response.url,
+    status: response.status,
+    title,
+    description,
+    headings,
+    bodySnippet,
+    summary: summary.length > 0 ? summary : "(no extractable summary; see bodySnippet)",
+    sizeBytes,
+  };
 }
