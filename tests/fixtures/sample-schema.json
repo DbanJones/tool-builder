@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Course",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string" },
+    "title": { "type": "string" },
+    "instructor": { "type": "string" },
+    "duration_minutes": { "type": "integer" },
+    "tags": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": ["id", "title"]
+}

@@ -1,9 +1,16 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
+import * as yaml from "js-yaml";
+import sqlParserModule from "node-sql-parser";
 import { extractText as unpdfExtract } from "unpdf";
 import { z } from "zod";
 
 import type { IngestedFileKindLite } from "./types-shim.js";
+
+// node-sql-parser is published as CommonJS; under ESM we have to import the
+// default and destructure. Named import would throw at runtime even though
+// TS would let it through.
+const { Parser: SqlParser } = sqlParserModule;
 
 // Extension -> kind mirror of lib/files/types.ts classifyByName, kept here so
 // the sidecar doesn't import from the main app. Keep these two in sync.
@@ -331,5 +338,228 @@ export async function summariseImage(rawParams: unknown): Promise<SummariseImage
 
   throw new Error(
     `summariseImage: all vision tiers failed. Set ANTHROPIC_API_KEY or DEEPSEEK_API_KEY for an API fallback if claude CLI does not support images on this version. Tier errors:\n${errors.join("\n")}`,
+  );
+}
+
+// ---------- Schema parsing (C4) ----------
+//
+// parseSchema dispatches by file extension:
+//   .sql  -> node-sql-parser; walks the AST to extract CREATE TABLE info.
+//   .json -> JSON.parse; treats top-level `properties` as a JSON-Schema-style
+//            description. Reclassifies as OpenAPI if it contains an `openapi`
+//            or `swagger` field.
+//   .yaml/.yml -> js-yaml.load; treated as OpenAPI if `openapi`/`swagger` field
+//            present, else unsupported.
+//   OpenAPI documents (JSON or YAML) are dereferenced via @apidevtools/swagger-parser
+//   for accurate path/method enumeration.
+//
+// Returns a normalised description that the chat UI can show as a one-line
+// summary plus a structured `details` blob for downstream use.
+
+const ParseSchemaParamsSchema = z.object({
+  path: z.string().min(1),
+});
+
+export type SchemaFormat = "sql" | "json-schema" | "openapi";
+
+export interface SchemaTable {
+  name: string;
+  columns: Array<{ name: string; type: string; nullable: boolean; primaryKey: boolean }>;
+}
+
+export interface SchemaJsonShape {
+  topLevelType: "object" | "array" | "string" | "number" | "boolean" | "unknown";
+  topLevelProperties: string[];
+}
+
+export interface SchemaOpenApiPath {
+  path: string;
+  methods: string[];
+}
+
+export interface ParseSchemaResult {
+  kind: IngestedFileKindLite;
+  format: SchemaFormat;
+  summary: string;
+  /** Filled when format = "sql". */
+  tables?: SchemaTable[];
+  /** Filled when format = "json-schema". */
+  jsonShape?: SchemaJsonShape;
+  /** Filled when format = "openapi". */
+  openapi?: { title: string; version: string; paths: SchemaOpenApiPath[] };
+  sizeBytes: number;
+}
+
+const SQL_EXTS = new Set(["sql"]);
+const JSON_EXTS = new Set(["json"]);
+const YAML_EXTS = new Set(["yaml", "yml"]);
+
+// node-sql-parser returns column references as either plain strings OR
+// expression objects of shape { expr: { type: "default", value: "<name>" } }
+// depending on the column reference style. Normalise to a string.
+type SqlColumnRef = string | { expr?: { value?: string } } | { value?: string };
+
+interface SqlAstCreateTable {
+  type: "create";
+  keyword: "table";
+  table?: Array<{ table: string }>;
+  create_definitions?: Array<{
+    resource?: string;
+    column?: { column: SqlColumnRef };
+    definition?: { dataType?: string };
+    nullable?: { type?: string; value?: string };
+    primary_key?: string | null;
+    unique?: string | null;
+  }>;
+}
+
+function readColumnName(ref: SqlColumnRef): string {
+  if (typeof ref === "string") return ref;
+  if ("expr" in ref && ref.expr?.value !== undefined) return ref.expr.value;
+  if ("value" in ref && ref.value !== undefined) return ref.value;
+  return "(unknown)";
+}
+
+function parseSqlSchema(sql: string): SchemaTable[] {
+  const parser = new SqlParser();
+  // Default to postgres dialect; node-sql-parser also supports mysql/sqlite/etc.
+  const ast = parser.astify(sql, { database: "postgresql" });
+  const statements = Array.isArray(ast) ? ast : [ast];
+  const tables: SchemaTable[] = [];
+  for (const stmt of statements as Array<unknown>) {
+    const s = stmt as SqlAstCreateTable;
+    if (s?.type !== "create" || s.keyword !== "table") continue;
+    const tableName = s.table?.[0]?.table ?? "(unknown)";
+    const columns: SchemaTable["columns"] = [];
+    for (const def of s.create_definitions ?? []) {
+      if (def.resource !== "column" || !def.column) continue;
+      const colName = readColumnName(def.column.column);
+      const dataType = def.definition?.dataType ?? "unknown";
+      // node-sql-parser puts NOT NULL at def.nullable.type === "not null".
+      const explicitNotNull = def.nullable?.type === "not null";
+      const primaryKey =
+        def.primary_key === "primary key" ||
+        (typeof def.primary_key === "string" && def.primary_key.toLowerCase().includes("primary"));
+      // Primary key columns are implicitly NOT NULL.
+      const nullable = !explicitNotNull && !primaryKey;
+      columns.push({ name: colName, type: dataType, nullable, primaryKey });
+    }
+    tables.push({ name: tableName, columns });
+  }
+  return tables;
+}
+
+function parseJsonShape(value: unknown): SchemaJsonShape {
+  let topLevelType: SchemaJsonShape["topLevelType"];
+  if (Array.isArray(value)) topLevelType = "array";
+  else if (value === null) topLevelType = "unknown";
+  else if (typeof value === "object") topLevelType = "object";
+  else if (typeof value === "string") topLevelType = "string";
+  else if (typeof value === "number") topLevelType = "number";
+  else if (typeof value === "boolean") topLevelType = "boolean";
+  else topLevelType = "unknown";
+
+  const props: string[] = [];
+  if (topLevelType === "object" && value !== null) {
+    const obj = value as Record<string, unknown>;
+    // JSON Schema convention: `properties` holds the field names.
+    const properties = obj.properties;
+    if (properties && typeof properties === "object" && !Array.isArray(properties)) {
+      props.push(...Object.keys(properties));
+    } else {
+      // Fall back to top-level keys for non-schema-shaped JSON.
+      props.push(...Object.keys(obj));
+    }
+  }
+  return { topLevelType, topLevelProperties: props };
+}
+
+interface OpenApiDoc {
+  openapi?: string;
+  swagger?: string;
+  info?: { title?: string; version?: string };
+  paths?: Record<string, Record<string, unknown>>;
+}
+
+async function parseOpenApi(
+  doc: unknown,
+): Promise<{ title: string; version: string; paths: SchemaOpenApiPath[] }> {
+  const SwaggerParserModule = await import("@apidevtools/swagger-parser");
+  const SwaggerParser = SwaggerParserModule.default;
+  // bundle() resolves $refs without strict validation; the upload may be
+  // a fragment so we tolerate non-strict docs. The cast to the function's
+  // own parameter type sidesteps the openapi-types Document constraint when
+  // the input is `unknown` (we already null-guarded above).
+  const bundled = (await SwaggerParser.bundle(
+    doc as Parameters<typeof SwaggerParser.bundle>[0],
+  )) as OpenApiDoc;
+  const paths: SchemaOpenApiPath[] = [];
+  for (const [pathKey, methodMap] of Object.entries(bundled.paths ?? {})) {
+    paths.push({
+      path: pathKey,
+      methods: Object.keys(methodMap).map((m) => m.toUpperCase()).sort(),
+    });
+  }
+  paths.sort((a, b) => a.path.localeCompare(b.path));
+  return {
+    title: bundled.info?.title ?? "(untitled)",
+    version: bundled.info?.version ?? "(no version)",
+    paths,
+  };
+}
+
+export async function parseSchema(rawParams: unknown): Promise<ParseSchemaResult> {
+  const { path } = ParseSchemaParamsSchema.parse(rawParams);
+  const ext = path.toLowerCase().split(".").pop() ?? "";
+  const stat = await fs.stat(path);
+  const sizeBytes = stat.size;
+
+  if (SQL_EXTS.has(ext)) {
+    const sql = await fs.readFile(path, "utf8");
+    const tables = parseSqlSchema(sql);
+    const summary =
+      tables.length === 0
+        ? "SQL file contained no CREATE TABLE statements."
+        : `SQL: ${tables.length} table${tables.length === 1 ? "" : "s"} (${tables.map((t) => t.name).join(", ")}).`;
+    return { kind: "schema", format: "sql", summary, tables, sizeBytes };
+  }
+
+  if (JSON_EXTS.has(ext)) {
+    const text = await fs.readFile(path, "utf8");
+    const parsed: unknown = JSON.parse(text);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const obj = parsed as { openapi?: unknown; swagger?: unknown };
+      if (obj.openapi !== undefined || obj.swagger !== undefined) {
+        const openapi = await parseOpenApi(parsed);
+        const summary = `OpenAPI ${openapi.title} v${openapi.version}: ${openapi.paths.length} path${openapi.paths.length === 1 ? "" : "s"}.`;
+        return { kind: "schema", format: "openapi", summary, openapi, sizeBytes };
+      }
+    }
+    const jsonShape = parseJsonShape(parsed);
+    const summary =
+      jsonShape.topLevelProperties.length === 0
+        ? `JSON Schema (${jsonShape.topLevelType}) with no top-level properties.`
+        : `JSON Schema (${jsonShape.topLevelType}): ${jsonShape.topLevelProperties.length} top-level field${jsonShape.topLevelProperties.length === 1 ? "" : "s"} (${jsonShape.topLevelProperties.slice(0, 5).join(", ")}${jsonShape.topLevelProperties.length > 5 ? ", ..." : ""}).`;
+    return { kind: "schema", format: "json-schema", summary, jsonShape, sizeBytes };
+  }
+
+  if (YAML_EXTS.has(ext)) {
+    const text = await fs.readFile(path, "utf8");
+    const parsed: unknown = yaml.load(text);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const obj = parsed as { openapi?: unknown; swagger?: unknown };
+      if (obj.openapi !== undefined || obj.swagger !== undefined) {
+        const openapi = await parseOpenApi(parsed);
+        const summary = `OpenAPI ${openapi.title} v${openapi.version}: ${openapi.paths.length} path${openapi.paths.length === 1 ? "" : "s"}.`;
+        return { kind: "schema", format: "openapi", summary, openapi, sizeBytes };
+      }
+    }
+    throw new Error(
+      `parseSchema: '${path}' is YAML but does not contain an 'openapi' or 'swagger' field. Only OpenAPI YAML is supported.`,
+    );
+  }
+
+  throw new Error(
+    `parseSchema: unsupported extension '.${ext}' (supported: sql, json, yaml, yml).`,
   );
 }
