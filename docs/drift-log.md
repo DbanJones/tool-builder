@@ -15,7 +15,7 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
   - Dashboard footer: small `<input type="number">` for the cap (USD); persisted via the localStorage helpers.
   - Above-tail Alert renders when state is "warn" (default variant) or "stop" (destructive variant).
   - Start build button disabled when state is "stop" — the only enforcement, novice-opt-in only.
-- **Commit**: TBD (E4 commit).
+- **Commit**: 51af9f3 (E4 commit).
 - **Follow-up**: when a real use case appears for a day-rolled cap, add `costs.sumByProjectSince(projectId, sinceTs)` and pass the start of the local day; no other code changes needed.
 
 ### D-017 — E3 ships updater wiring with placeholder pubkey + endpoint (Phase E0 deferred)

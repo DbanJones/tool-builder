@@ -8,19 +8,25 @@
   "phase_c_completed_at": "2026-04-26T17:00:00Z",
   "phase_d_completed_at": "2026-04-26T19:10:00Z",
   "tasks_total_in_phase": 6,
-  "tasks_completed_in_phase": 3,
+  "tasks_completed_in_phase": 4,
   "current_task": null,
-  "next_task": "E4",
+  "next_task": "E5",
   "drift": {
     "blocker_count": 0,
-    "non_blocker_count": 16,
+    "non_blocker_count": 17,
     "last_check_at": "2026-04-26T19:10:00Z",
-    "notes": "Open drift: D-001, D-002, D-004 to D-017 (16). Closed: D-003. Phase D boundary PASSED at 19:10:00Z (docs/spec-trace.md, commit dde2b50). E3 wired but pubkey + endpoint placeholder (D-017); ready to flip when E0 lands."
+    "notes": "Open drift: D-001, D-002, D-004 to D-018 (17). Closed: D-003. Phase D boundary PASSED at 19:10:00Z (docs/spec-trace.md, commit dde2b50). E3 wired but pubkey + endpoint placeholder (D-017); E4 ships optional spend cap (D-018, default off per spec §6)."
   },
-  "tests": { "passing": 312, "failing": 0, "skipped": 0, "breakdown": "208 TS unit + 60 TS integration + 44 Rust unit" },
+  "tests": { "passing": 334, "failing": 0, "skipped": 0, "breakdown": "230 TS unit + 60 TS integration + 44 Rust unit" },
   "cost_so_far_usd": 0.0,
   "tokens": { "input": 0, "output": 0 },
   "history": [
+    {
+      "task_id": "E4",
+      "completed_at": "2026-04-26T19:50:00Z",
+      "commit": "51af9f3",
+      "notes": "Optional spend cap. Reconciles build-order E4 ('daily cap, soft warn 50%, hard stop 100%') with spec.md §6 explicit 'No hard daily spend cap is enforced by the Builder' + L23 override (per ADR-0002 the claude CLI's underlying account governs throttling). Default: cap off (spec-aligned); novice opts in via a small input in the dashboard footer. lib/cost-ceiling/index.ts: pure evaluate(spent, cap) returning {state: off|ok|warn|stop, percent, message}; default state is 'off'; soft warn at >=50%, hard stop at >=100%. Defensive: NaN/negative spent treated as zero; null/undefined/<=0 cap returns 'off'. localStorage helpers (read/write/remove/scope-by-id). 22 unit tests cover all branches + storage. Dashboard footer: small <input type='number'> for the cap (USD); persists per-project to localStorage so a reload preserves it without a DB migration. Above-tail Alert when state is warn (default variant) or stop (destructive); Start build button disabled when stop. Drift D-018 logged: 'daily' → 'lifetime' (existing costs.sumByProject returns lifetime total) + localStorage instead of DB column. Both deferred to follow-up if a real use case appears. pnpm verify GREEN (230 unit + 60 integration + 44 Rust = 334). Phase E: 4/6."
+    },
     {
       "task_id": "E3",
       "completed_at": "2026-04-26T19:43:00Z",
