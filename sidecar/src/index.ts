@@ -18,6 +18,10 @@ import { z } from "zod";
 import { initDb } from "./db.js";
 import { append as appendAction, list as listActions } from "./handlers/actions.js";
 import { record as recordAnswer, list as listAnswers } from "./handlers/answers.js";
+import {
+  append as appendChatMessage,
+  list as listChatMessages,
+} from "./handlers/chat-messages.js";
 import { append as appendCost, sumByProject as sumCostsByProject } from "./handlers/costs.js";
 import {
   append as appendDrift,
@@ -106,6 +110,8 @@ const handlers: Record<string, Handler> = {
   "drift.append": appendDrift,
   "drift.resolve": resolveDrift,
   "drift.listOpen": listOpenDrifts,
+  "chatMessages.append": appendChatMessage,
+  "chatMessages.list": listChatMessages,
 };
 
 const handleLine = async (line: string): Promise<void> => {

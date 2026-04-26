@@ -143,6 +143,29 @@ function InterviewClient() {
     if (project) void refreshSpec();
   }, [project, refreshSpec]);
 
+  // UX2: rehydrate the chat scrollback from chatMessages.list whenever the
+  // project becomes available. Without this, a reload mid-interview shows
+  // an empty conversation even though the answers are persisted in the DB.
+  useEffect(() => {
+    if (!project) return;
+    void (async () => {
+      const r = await sidecarCall<Array<{ role: "user" | "assistant"; text: string }>>(
+        "chatMessages.list",
+        { projectId: project.id },
+      );
+      r.match(
+        (rows) => {
+          if (rows.length > 0) {
+            setMessages(rows.map((r) => ({ role: r.role, text: r.text })));
+          }
+        },
+        () => {
+          /* non-fatal — fresh empty chat is the right fallback */
+        },
+      );
+    })();
+  }, [project]);
+
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -173,6 +196,18 @@ function InterviewClient() {
         setStatus({ kind: "idle" });
         setIsPreparingBank(false);
         void refreshSpec();
+        // UX2: persist the just-finished assistant turn so it survives a reload.
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (project && last?.role === "assistant" && last.text.trim().length > 0) {
+            void sidecarCall("chatMessages.append", {
+              projectId: project.id,
+              role: "assistant",
+              text: last.text,
+            });
+          }
+          return prev;
+        });
         return;
       case "rate_limit":
         setStatus({ kind: "rate_limited", message: chunk.message });
@@ -193,6 +228,13 @@ function InterviewClient() {
     const isFirstTurn = sessionIdRef.current === null;
 
     setMessages((prev) => [...prev, { role: "user", text: trimmed }]);
+    // UX2: persist the user message immediately (independent of the
+    // assistant reply landing).
+    void sidecarCall("chatMessages.append", {
+      projectId: project.id,
+      role: "user",
+      text: trimmed,
+    });
     setInput("");
     setPendingOptions(null);
     setStatus({ kind: "streaming" });

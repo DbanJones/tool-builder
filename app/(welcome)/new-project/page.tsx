@@ -1,7 +1,8 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Loader2 } from "lucide-react";
+import { open } from "@tauri-apps/plugin-dialog";
+import { FolderOpen, Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
@@ -38,12 +39,25 @@ export default function NewProjectPage() {
   const {
     register,
     handleSubmit,
+    setValue,
     watch,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(FormSchema),
-    defaultValues: { folder: "~/Documents/ClaudeBuilds" },
+    defaultValues: {
+      folder: typeof window !== "undefined"
+        ? (window.localStorage.getItem("builder.lastProjectFolder") ?? "~/Documents/ClaudeBuilds")
+        : "~/Documents/ClaudeBuilds",
+    },
   });
+
+  const browseFolder = async (): Promise<void> => {
+    const picked = await open({ directory: true, multiple: false });
+    if (typeof picked === "string" && picked.length > 0) {
+      setValue("folder", picked, { shouldValidate: true, shouldDirty: true });
+      window.localStorage.setItem("builder.lastProjectFolder", picked);
+    }
+  };
 
   const watchedName = watch("name") ?? "";
   const sanitisedFolder = watchedName ? sanitiseProjectName(watchedName) : null;
@@ -115,14 +129,20 @@ export default function NewProjectPage() {
                 <label htmlFor="folder" className="text-sm font-medium">
                   Where to put it
                 </label>
-                <input
-                  id="folder"
-                  type="text"
-                  className="block w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                  aria-invalid={errors.folder !== undefined}
-                  aria-describedby={errors.folder ? "folder-error" : "folder-hint"}
-                  {...register("folder")}
-                />
+                <div className="flex gap-2">
+                  <input
+                    id="folder"
+                    type="text"
+                    className="block w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                    aria-invalid={errors.folder !== undefined}
+                    aria-describedby={errors.folder ? "folder-error" : "folder-hint"}
+                    {...register("folder")}
+                  />
+                  <Button type="button" variant="outline" onClick={() => void browseFolder()}>
+                    <FolderOpen className="mr-1 h-4 w-4" aria-hidden="true" />
+                    Browse
+                  </Button>
+                </div>
                 {errors.folder ? (
                   <p id="folder-error" className="text-sm text-destructive">
                     {errors.folder.message}
@@ -130,7 +150,7 @@ export default function NewProjectPage() {
                 ) : (
                   <p id="folder-hint" className="text-sm text-muted-foreground">
                     Default is <span className="font-mono">~/Documents/ClaudeBuilds</span>; the
-                    project folder will be created inside.
+                    project folder will be created inside. Your last choice is remembered.
                   </p>
                 )}
               </div>

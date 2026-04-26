@@ -484,6 +484,9 @@ pub fn run() {
       // tauri.conf.json — no code change. Drift D-017 documents the gap.
       app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
 
+      // Native folder picker for the new-project form (UX1).
+      app.handle().plugin(tauri_plugin_dialog::init())?;
+
       if cfg!(debug_assertions) {
         app.handle().plugin(
           tauri_plugin_log::Builder::default()
