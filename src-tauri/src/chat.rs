@@ -15,6 +15,8 @@ use tauri::ipc::Channel;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
+use crate::sidecar::project_root_from_cwd;
+
 const INTERVIEW_SYSTEM_PROMPT: &str = "You are the Builder's recursive interviewer. Your job is to populate the project's spec.md by asking the novice one question at a time from the kit's 28-question fast-path (plus high-stakes follow-ups when activated).
 
 The first turn is special:
@@ -36,13 +38,19 @@ How to record:
 Do not invent answers. If the novice's answer is unclear after one follow-up, mark it tentative and move on; the spec preview will show it as outstanding.";
 
 /// Generate the MCP config JSON that claude consumes via `--mcp-config`.
-/// Per ADR-0004 the MCP server is a separate Node entry point that opens its
-/// own better-sqlite3 connection on the same DB file the main sidecar uses.
-fn build_mcp_config(project_id: &str, project_root: &PathBuf) -> Result<PathBuf, String> {
-  let cwd = std::env::current_dir().map_err(|e| format!("cwd: {e}"))?;
-  let mcp_server_script = cwd.join("sidecar").join("dist").join("mcp-server.js");
-  let migrations_folder = cwd.join("sidecar").join("migrations");
-  let db_path = project_root.join(".builder").join("builder.db");
+/// Per ADR-0004 the MCP server is a separate Node entry point that opens
+/// its own better-sqlite3 connection against the SAME DB file the main
+/// sidecar uses (so answers + audit rows land in one place and the spec
+/// preview's `answers.list` query sees them).
+///
+/// All sidecar paths (script, migrations, DB) are anchored at the Builder
+/// project root, NOT cwd (which is src-tauri/ in dev) and NOT the novice's
+/// project root (which only owns the per-turn mcp-config.json file).
+fn build_mcp_config(project_id: &str, novice_project_root: &PathBuf) -> Result<PathBuf, String> {
+  let builder_root = project_root_from_cwd()?;
+  let mcp_server_script = builder_root.join("sidecar").join("dist").join("mcp-server.js");
+  let migrations_folder = builder_root.join("sidecar").join("migrations");
+  let db_path = builder_root.join(".builder").join("builder.db");
 
   if !mcp_server_script.exists() {
     return Err(format!(
@@ -65,12 +73,16 @@ fn build_mcp_config(project_id: &str, project_root: &PathBuf) -> Result<PathBuf,
     },
   });
 
-  let config_dir = project_root.join(".builder");
-  fs::create_dir_all(&config_dir)
-    .map_err(|e| format!("create .builder/: {e}"))?;
+  // The mcp-config.json itself lives under the novice's project .builder/
+  // — it's per-turn ephemeral state for that project, not a Builder asset.
+  let config_dir = novice_project_root.join(".builder");
+  fs::create_dir_all(&config_dir).map_err(|e| format!("create .builder/: {e}"))?;
   let config_path = config_dir.join("mcp-config.json");
-  fs::write(&config_path, serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?)
-    .map_err(|e| format!("write mcp config: {e}"))?;
+  fs::write(
+    &config_path,
+    serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?,
+  )
+  .map_err(|e| format!("write mcp config: {e}"))?;
   Ok(config_path)
 }
 

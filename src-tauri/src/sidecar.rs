@@ -33,7 +33,7 @@ impl SidecarState {
 
 /// Resolve the project root for dev. Tauri runs cargo from `src-tauri/`, so
 /// cwd ends in `src-tauri`; everywhere else cwd IS the project root.
-fn project_root_from_cwd() -> Result<PathBuf, String> {
+pub fn project_root_from_cwd() -> Result<PathBuf, String> {
   let cwd = std::env::current_dir().map_err(|e| format!("cwd: {e}"))?;
   if cwd.file_name().and_then(|n| n.to_str()) == Some("src-tauri") {
     cwd
