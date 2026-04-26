@@ -9,7 +9,7 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 - **Discovered at**: Phase D boundary self-check.
 - **Cause**: the dashboard achieves sub-200ms perceived latency via optimistic rendering (the live-tail row appears immediately on the orchestrator's `tool_use` event; the sidecar's `actions.append` write happens in parallel and is not awaited). No Vitest performance harness asserts this.
 - **Resolution**: drift accepted. The design path is correct (the slow part — file write — is off the critical path) but the budget is unverified.
-- **Commit**: TBD (Phase D boundary commit).
+- **Commit**: de3b0eb (Phase D boundary commit).
 - **Follow-up**: Phase E ticket adds a Vitest perf harness that fires N synthetic orchestrator events and asserts the time from event arrival to `actions.length` increment is < 200ms p95.
 
 ### D-015 — D5/D6 follow-ups: orchestrator-side report_drift + phase_complete MCP tools, echo-back modal, "task N" recovery suffix
@@ -21,7 +21,7 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
   - The orchestrator passes `--mcp-config` for this server when spawning claude.
   - The kickoff prompt instructs claude to call `phase_complete` at phase boundaries and `report_drift` whenever its `/recheck` finds blocker drift.
   - The dashboard shows the echo-back modal on `phase_complete`; the recovered-from-crash banner gains the "resumed at task N" suffix using the latest `phase` from state.json.
-- **Commit**: TBD (Phase D boundary commit).
+- **Commit**: de3b0eb (Phase D boundary commit).
 - **Follow-up**: Phase E ticket per the above.
 
 ### D-014 — D4 ETA observed at TURN granularity, not per-task
