@@ -7,19 +7,25 @@
   "phase_b_completed_at": "2026-04-26T11:45:00Z",
   "phase_c_completed_at": "2026-04-26T17:00:00Z",
   "tasks_total_in_phase": 6,
-  "tasks_completed_in_phase": 2,
+  "tasks_completed_in_phase": 3,
   "current_task": null,
-  "next_task": "D3",
+  "next_task": "D4",
   "drift": {
     "blocker_count": 0,
     "non_blocker_count": 12,
     "last_check_at": "2026-04-26T17:00:00Z",
     "notes": "Open drift in docs/drift-log.md: D-001, D-002, D-004, D-005, D-006, D-007, D-008, D-009, D-010, D-011, D-012, D-013. Closed: D-003. Phase C boundary PASSED at 17:00:00Z (docs/spec-trace.md, commit 00cd441)."
   },
-  "tests": { "passing": 221, "failing": 0, "skipped": 0, "breakdown": "144 TS unit + 46 TS integration + 31 Rust unit" },
+  "tests": { "passing": 231, "failing": 0, "skipped": 0, "breakdown": "154 TS unit + 46 TS integration + 31 Rust unit" },
   "cost_so_far_usd": 0.0,
   "tokens": { "input": 0, "output": 0 },
   "history": [
+    {
+      "task_id": "D3",
+      "completed_at": "2026-04-26T17:58:00Z",
+      "commit": "34b0bea",
+      "notes": "Build dashboard layout per kit §14.5.1. New route /build?project=<id> with header (project name + path + Start/Pause/Stop trio; Pause/Stop are D6 stubs), phase bar (computes pct = tasks_completed_in_phase / tasks_total_in_phase from state.json), recent-history sidebar (last 8 task ids reversed), live tail (auto-scrolling list of human-translated action lines with raw input below in mono), status footer (status + phase + cost/ETA placeholders for D4 + back-to-interview link). Reads existing artefacts on mount: sidecarCall(projects.get) for project, then readTargetState({project}/.builder/state.json) and readHistoryLogTail({project}/.builder/history.log, 200) so a paused project shows everything populated even before the orchestrator emits a new event. Start build button spawns the orchestrator; new tool_use events get translated and OPTIMISTICALLY appended to the live tail (sub-200ms latency budget per Flow F AC2; sidecar persists in parallel via actions.append). New Tauri commands read_target_state + read_history_log_tail in src-tauri/src/lib.rs path-sandbox to {project}/.builder/ (binding rule 5); 16 MB cap on history.log; both return Ok(None)/Ok([]) for missing files. New lib/build-state with Zod-validated readers (passthrough on TargetState for forward-compat; silently drops malformed history.log lines from a partial-write); 10 unit tests cover happy paths + missing file + malformed JSON + transport errors. Interview-page right aside no longer has the D1/D2 dev panel — replaced by an 'Open Build dashboard' Link styled via buttonVariants. .gitignore tightened: `dist/` and `build/` are now anchored (`/dist/`, `/build/`) so the new app/build/ route folder is tracked (was silently masked by the unanchored `build/` rule; caught by git status post-commit). pnpm verify GREEN (154 unit + 46 integration + 31 Rust = 231). Phase D: 3/6."
+    },
     {
       "task_id": "D2",
       "completed_at": "2026-04-26T17:50:00Z",
