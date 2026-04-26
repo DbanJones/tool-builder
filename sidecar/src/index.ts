@@ -16,6 +16,7 @@
 import { z } from "zod";
 
 import { initDb } from "./db.js";
+import { append as appendAction, list as listActions } from "./handlers/actions.js";
 import { record as recordAnswer, list as listAnswers } from "./handlers/answers.js";
 import { logEvent, listEvents } from "./handlers/audit.js";
 import { extractText, fetchUrl, parseDataSample, parseSchema, summariseImage } from "./handlers/files.js";
@@ -86,6 +87,8 @@ const handlers: Record<string, Handler> = {
   "files.parseDataSample": parseDataSample,
   "files.fetchUrl": fetchUrl,
   "files.guardPii": guardPii,
+  "actions.append": appendAction,
+  "actions.list": listActions,
 };
 
 const handleLine = async (line: string): Promise<void> => {

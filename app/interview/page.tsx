@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { chatSend, type ChatChunk } from "@/lib/chat/client";
 import { ingestFile } from "@/lib/files/ingest";
 import type { IngestedFile } from "@/lib/files/types";
+import { orchestratorStart, type OrchestratorEvent } from "@/lib/orchestrator";
 import type { QuestionId } from "@/lib/interview/library";
 import { checkReadiness, type ReadinessResult } from "@/lib/interview/readiness";
 import { rebuildSpec, type RebuildAnswer } from "@/lib/interview/rebuild-spec";
@@ -82,6 +83,12 @@ function InterviewClient() {
     allowFreeform: boolean;
   } | null>(null);
   const [isPreparingBank, setIsPreparingBank] = useState(false);
+  // D1 live-test trigger. Spawns the build subprocess against the project
+  // folder and dumps observed events here so we can verify the AC ("claude
+  // reads CLAUDE.md and emits a Plan block in <30s"). Replaced by the real
+  // dashboard at D3.
+  const [orchEvents, setOrchEvents] = useState<readonly OrchestratorEvent[]>([]);
+  const [orchRunning, setOrchRunning] = useState(false);
   const sessionIdRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -139,6 +146,23 @@ function InterviewClient() {
   useEffect(() => {
     if (project) void refreshSpec();
   }, [project, refreshSpec]);
+
+  // D1 dev trigger. Removed/replaced by the proper Build dashboard at D3.
+  const startOrchestratorTest = useCallback(async (): Promise<void> => {
+    if (!project || orchRunning) return;
+    setOrchEvents([]);
+    setOrchRunning(true);
+    const r = await orchestratorStart({
+      projectPath: project.path,
+      onEvent: (event) => {
+        setOrchEvents((prev) => [...prev, event]);
+      },
+    });
+    r.mapErr((e) => {
+      setOrchEvents((prev) => [...prev, { kind: "error", message: e.message }]);
+    });
+    setOrchRunning(false);
+  }, [project, orchRunning]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -488,10 +512,67 @@ function InterviewClient() {
           <pre className="flex-1 overflow-auto whitespace-pre-wrap break-words bg-muted/40 p-4 text-xs leading-relaxed">
             {spec || "_(no answers recorded yet)_"}
           </pre>
+          <div className="border-t bg-background p-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                D1 dev: orchestrator subprocess
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!project || orchRunning}
+                onClick={() => void startOrchestratorTest()}
+              >
+                {orchRunning ? "Running..." : "Start build (test)"}
+              </Button>
+            </div>
+            <ul className="max-h-48 space-y-1 overflow-auto text-[11px]" aria-live="polite">
+              {orchEvents.length === 0 ? (
+                <li className="text-muted-foreground">
+                  No events yet. Click Start build to spawn claude in {project?.path ?? "the project folder"}.
+                </li>
+              ) : (
+                orchEvents.map((e, i) => <OrchestratorEventLine key={i} event={e} />)
+              )}
+            </ul>
+          </div>
         </aside>
       </div>
     </main>
   );
+}
+
+function OrchestratorEventLine({ event }: { event: OrchestratorEvent }) {
+  switch (event.kind) {
+    case "session":
+      return <li className="font-mono text-muted-foreground">session {event.id}</li>;
+    case "assistant_delta":
+      return (
+        <li className="whitespace-pre-wrap break-words">
+          <span className="text-muted-foreground">assistant: </span>
+          {event.text}
+        </li>
+      );
+    case "tool_use":
+      return (
+        <li className="font-mono">
+          <span className="text-muted-foreground">tool </span>
+          <span className="font-semibold">{event.tool}</span>
+          <span className="text-muted-foreground"> {event.raw_input}</span>
+        </li>
+      );
+    case "done":
+      return (
+        <li className="text-muted-foreground">
+          done — cost ${event.cost_usd?.toFixed(4) ?? "?"}, in {event.input_tokens ?? "?"} / out{" "}
+          {event.output_tokens ?? "?"}
+        </li>
+      );
+    case "rate_limit":
+      return <li className="text-yellow-700">rate limited: {event.message}</li>;
+    case "error":
+      return <li className="text-destructive">error: {event.message}</li>;
+  }
 }
 
 function MessageBubble({ message }: { message: DisplayMessage }) {
