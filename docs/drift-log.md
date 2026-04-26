@@ -35,7 +35,7 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 - **Discovered at**: B1.
 - **Cause**: the build-order's B1 reads "Copy the kit's question library and decision table into `lib/interview/library.ts` as typed data". The original Build Spec Kit's authoritative library has not been sourced into this repo. Same pattern as the placeholder templates at A4c (per human direction 2026-04-25 to defer real content).
 - **Resolution**: drift accepted. `lib/interview/library.ts` ships 28 fast-path questions whose **ids and topics** are taken from `.builder/answers.json` (the recorded interview that produced spec.md), but whose **exact prompt strings** are inferred placeholder phrasing. Decision table is a thin starter set covering the most obvious mappings (PII, accessibility, webhooks, jobs, i18n). The schema is canonical and matches what the real kit will plug into.
-- **Commit**: TBD (B1 commit).
+- **Commit**: a534bd5 (B1 commit).
 - **Follow-up**: when the kit is sourced, replace `prompt` strings and extend the decision table; tests should still pass without schema changes.
 
 ### D-004 — Tauri-context E2E + integration tests deferred to Phase D (extended at A5)

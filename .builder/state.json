@@ -5,16 +5,16 @@
   "phase_started_at": "2026-04-26T10:30:00Z",
   "phase_a_completed_at": "2026-04-26T10:30:00Z",
   "tasks_total_in_phase": 6,
-  "tasks_completed_in_phase": 0,
+  "tasks_completed_in_phase": 1,
   "current_task": null,
-  "next_task": "B1",
+  "next_task": "B2",
   "drift": {
     "blocker_count": 0,
-    "non_blocker_count": 3,
-    "last_check_at": "2026-04-26T09:50:00Z",
-    "notes": "Open drift in docs/drift-log.md: D-001 (eslint-plugin-neverthrow gap, C11 enforced by convention), D-002 (shadcn primitives written manually because the shadcn CLI's nested pnpm spawn fails in this shell), D-004 (Welcome E2E deferred to Phase D pending tauri-driver setup). Closed at A4b: D-003 (audit destination, now Drizzle audit_log table via sidecar)."
+    "non_blocker_count": 4,
+    "last_check_at": "2026-04-26T10:35:00Z",
+    "notes": "Open drift in docs/drift-log.md: D-001 (eslint-plugin-neverthrow gap), D-002 (shadcn manual primitives), D-004 (Tauri-context E2E + integration deferred to Phase D), D-005 (question library + decision table inferred placeholders pending real kit). Closed: D-003."
   },
-  "tests": { "passing": 73, "failing": 0, "skipped": 0, "breakdown": "52 TS unit + 10 TS integration + 11 Rust unit" },
+  "tests": { "passing": 82, "failing": 0, "skipped": 0, "breakdown": "61 TS unit + 10 TS integration + 11 Rust unit" },
   "cost_so_far_usd": 0.0,
   "tokens": { "input": 0, "output": 0 },
   "history": [
@@ -33,7 +33,7 @@
     {
       "task_id": "B1",
       "completed_at": "2026-04-26T10:35:00Z",
-      "commit": "TBD",
+      "commit": "a534bd5",
       "notes": "Question library + decision table seeded into lib/interview/library.ts. 28 fast-path questions with ids and topics taken from .builder/answers.json; prompt strings are inferred placeholders (drift D-005 logged). Decision table starter set covers PII, accessibility, webhooks, jobs, i18n. 9 unit tests cover count, id uniqueness, format, and decision-table integrity. pnpm verify GREEN (61 unit + 10 integration). When the kit is sourced: replace prompt strings + extend table; tests should keep passing without schema changes."
     },
     {
