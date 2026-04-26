@@ -18,6 +18,7 @@ import { z } from "zod";
 import { initDb } from "./db.js";
 import { append as appendAction, list as listActions } from "./handlers/actions.js";
 import { record as recordAnswer, list as listAnswers } from "./handlers/answers.js";
+import { append as appendCost, sumByProject as sumCostsByProject } from "./handlers/costs.js";
 import { logEvent, listEvents } from "./handlers/audit.js";
 import { extractText, fetchUrl, parseDataSample, parseSchema, summariseImage } from "./handlers/files.js";
 import { guardPii } from "./handlers/pii.js";
@@ -89,6 +90,8 @@ const handlers: Record<string, Handler> = {
   "files.guardPii": guardPii,
   "actions.append": appendAction,
   "actions.list": listActions,
+  "costs.append": appendCost,
+  "costs.sumByProject": sumCostsByProject,
 };
 
 const handleLine = async (line: string): Promise<void> => {

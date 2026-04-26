@@ -13,6 +13,7 @@ import {
   type HistoryActionEntry,
   type TargetState,
 } from "@/lib/build-state";
+import { estimate, formatEta, type EtaResult } from "@/lib/eta";
 import { orchestratorStart, type OrchestratorEvent } from "@/lib/orchestrator";
 import { translate } from "@/lib/orchestrator/translate";
 import type { Project } from "@/lib/project";
@@ -29,6 +30,15 @@ const HISTORY_TAIL_LIMIT = 200;
 interface DashboardStatus {
   kind: "idle" | "running" | "rate_limited" | "error";
   message?: string;
+}
+
+// Mirrors sidecar/src/handlers/costs.ts CostSum. Re-declared here since the
+// sidecar doesn't currently emit TS types to the webview.
+interface CostSum {
+  turns: number;
+  inputTokens: number;
+  outputTokens: number;
+  usdCents: number;
 }
 
 export default function BuildPage() {
@@ -56,6 +66,12 @@ function BuildClient() {
   const [targetState, setTargetState] = useState<TargetState | null>(null);
   const [actions, setActions] = useState<readonly HistoryActionEntry[]>([]);
   const [status, setStatus] = useState<DashboardStatus>({ kind: "idle" });
+  const [costSum, setCostSum] = useState<CostSum | null>(null);
+  // Past per-turn elapsed durations (ms). Updated on each `done` event;
+  // feeds the ETA estimator. v1 granularity is per-turn; D5 swaps to
+  // per-task-id when phase markers are wired (drift D-014).
+  const [turnDurations, setTurnDurations] = useState<readonly number[]>([]);
+  const turnStartRef = useRef<number | null>(null);
   const tailRef = useRef<HTMLDivElement>(null);
 
   // Load project + state.json + history.log tail on mount.
@@ -95,6 +111,15 @@ function BuildClient() {
         (entries) => setActions(entries),
         (e) => setLoadError(`history.log: ${e.message}`),
       );
+
+      const costResult = await sidecarCall<CostSum>("costs.sumByProject", { projectId });
+      if (cancelled) return;
+      costResult.match(
+        (sum) => setCostSum(sum),
+        () => {
+          /* non-fatal — meter just shows "$0.00" */
+        },
+      );
     }
 
     return () => {
@@ -112,11 +137,41 @@ function BuildClient() {
     setStatus({ kind: "running" });
     const historyLogPath = project.path.replace(/\/$/, "") + "/.builder/history.log";
     let terminal: DashboardStatus = { kind: "idle" };
+    turnStartRef.current = Date.now();
 
     const r = await orchestratorStart({
       projectPath: project.path,
       onEvent: (event: OrchestratorEvent) => {
-        if (event.kind === "tool_use") {
+        if (event.kind === "session") {
+          // Reset the turn clock on the first event of the turn (mirrors
+          // claude's session.init arrival).
+          turnStartRef.current = Date.now();
+        } else if (event.kind === "done") {
+          if (turnStartRef.current !== null) {
+            const elapsed = Date.now() - turnStartRef.current;
+            setTurnDurations((prev) => [...prev, elapsed]);
+            turnStartRef.current = null;
+          }
+          // Persist the turn's cost row for the meter, then re-read the
+          // aggregate. Orchestrator currently spawns claude with --model
+          // sonnet; revisit when we wire per-task model selection.
+          void (async () => {
+            await sidecarCall("costs.append", {
+              projectId: project.id,
+              model: "sonnet",
+              inputTokens: event.input_tokens ?? 0,
+              outputTokens: event.output_tokens ?? 0,
+              costUsd: event.cost_usd ?? 0,
+            });
+            const sumRes = await sidecarCall<CostSum>("costs.sumByProject", {
+              projectId: project.id,
+            });
+            sumRes.match(
+              (sum) => setCostSum(sum),
+              () => undefined,
+            );
+          })();
+        } else if (event.kind === "tool_use") {
           const humanLine = translate(event.tool, event.raw_input);
           // Optimistic append. The sidecar persists in parallel; we don't
           // wait on it because the goal is sub-200ms tail latency (Flow F
@@ -155,6 +210,12 @@ function BuildClient() {
     });
     if (terminal.kind === "idle") setStatus({ kind: "idle" });
   }, [project, status.kind]);
+
+  // The in-progress turn's elapsed time (counted toward past_p90 only).
+  // For idle/finished states there's no in-flight turn, so 0 is correct
+  // (it can never exceed P90).
+  const inFlightElapsed = turnStartRef.current === null ? 0 : Date.now() - turnStartRef.current;
+  const liveEta = estimate(turnDurations, inFlightElapsed);
 
   if (loadError) {
     return (
@@ -272,22 +333,51 @@ function BuildClient() {
       </div>
 
       {/* Status footer */}
-      <footer className="flex items-center justify-between border-t px-6 py-2 text-xs text-muted-foreground">
-        <div className="flex gap-6">
-          <span>
-            Status: <span className="text-foreground">{targetState?.status ?? "unknown"}</span>
-          </span>
-          <span>
-            Phase: <span className="text-foreground">{targetState?.phase ?? "(none)"}</span>
-          </span>
-          <span>Cost: $0.00 (D4)</span>
-          <span>ETA: pending (D4)</span>
-        </div>
-        <Link href={projectId ? `/interview?project=${projectId}` : "/"} className="underline">
-          Back to interview
-        </Link>
-      </footer>
+      <StatusFooter
+        targetState={targetState}
+        costSum={costSum}
+        eta={liveEta}
+        backHref={projectId ? `/interview?project=${projectId}` : "/"}
+      />
     </main>
+  );
+}
+
+function StatusFooter({
+  targetState,
+  costSum,
+  eta,
+  backHref,
+}: {
+  targetState: TargetState | null;
+  costSum: CostSum | null;
+  eta: EtaResult;
+  backHref: string;
+}) {
+  const dollars = costSum ? (costSum.usdCents / 100).toFixed(2) : "0.00";
+  return (
+    <footer className="flex items-center justify-between border-t px-6 py-2 text-xs text-muted-foreground">
+      <div className="flex gap-6">
+        <span>
+          Status: <span className="text-foreground">{targetState?.status ?? "unknown"}</span>
+        </span>
+        <span>
+          Phase: <span className="text-foreground">{targetState?.phase ?? "(none)"}</span>
+        </span>
+        <span>
+          Cost: <span className="text-foreground">${dollars}</span>
+          {costSum ? (
+            <span> · {costSum.turns} turn{costSum.turns === 1 ? "" : "s"}, in {costSum.inputTokens} / out {costSum.outputTokens}</span>
+          ) : null}
+        </span>
+        <span>
+          ETA per turn: <span className="text-foreground">{formatEta(eta.medianMs, eta.mode)}</span>
+        </span>
+      </div>
+      <Link href={backHref} className="underline">
+        Back to interview
+      </Link>
+    </footer>
   );
 }
 
