@@ -7,10 +7,11 @@
   "phase_b_completed_at": "2026-04-26T11:45:00Z",
   "phase_c_completed_at": "2026-04-26T17:00:00Z",
   "phase_d_completed_at": "2026-04-26T19:10:00Z",
+  "phase_e_completed_at": "2026-04-26T20:05:00Z",
   "tasks_total_in_phase": 6,
   "tasks_completed_in_phase": 6,
   "current_task": null,
-  "next_task": "PHASE_E_BOUNDARY",
+  "next_task": "WAITING_ON_E0_AND_TESTERS",
   "drift": {
     "blocker_count": 0,
     "non_blocker_count": 19,
