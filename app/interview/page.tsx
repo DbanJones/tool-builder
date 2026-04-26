@@ -10,6 +10,7 @@ import { chatSend, type ChatChunk } from "@/lib/chat/client";
 import { ingestFile } from "@/lib/files/ingest";
 import type { IngestedFile } from "@/lib/files/types";
 import { orchestratorStart, type OrchestratorEvent } from "@/lib/orchestrator";
+import { translate } from "@/lib/orchestrator/translate";
 import type { QuestionId } from "@/lib/interview/library";
 import { checkReadiness, type ReadinessResult } from "@/lib/interview/readiness";
 import { rebuildSpec, type RebuildAnswer } from "@/lib/interview/rebuild-spec";
@@ -22,6 +23,13 @@ interface DisplayMessage {
   role: "user" | "assistant";
   text: string;
 }
+
+// Dev-only event shape used by the D1/D2 test panel: same as
+// OrchestratorEvent, but tool_use is enriched with the translated humanLine
+// so we can render both the novice line and the raw input side by side.
+type DevOrchestratorEvent =
+  | Exclude<OrchestratorEvent, { kind: "tool_use" }>
+  | { kind: "tool_use"; tool: string; raw_input: string; humanLine: string };
 
 interface AnswerRow {
   id: string;
@@ -83,11 +91,12 @@ function InterviewClient() {
     allowFreeform: boolean;
   } | null>(null);
   const [isPreparingBank, setIsPreparingBank] = useState(false);
-  // D1 live-test trigger. Spawns the build subprocess against the project
+  // D1/D2 live-test trigger. Spawns the build subprocess against the project
   // folder and dumps observed events here so we can verify the AC ("claude
-  // reads CLAUDE.md and emits a Plan block in <30s"). Replaced by the real
-  // dashboard at D3.
-  const [orchEvents, setOrchEvents] = useState<readonly OrchestratorEvent[]>([]);
+  // reads CLAUDE.md and emits a Plan block in <30s"). Each tool_use also
+  // gets a translated humanLine and is persisted to the actions table +
+  // .builder/history.log via the sidecar. Replaced by the real dashboard at D3.
+  const [orchEvents, setOrchEvents] = useState<readonly DevOrchestratorEvent[]>([]);
   const [orchRunning, setOrchRunning] = useState(false);
   const sessionIdRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -147,15 +156,30 @@ function InterviewClient() {
     if (project) void refreshSpec();
   }, [project, refreshSpec]);
 
-  // D1 dev trigger. Removed/replaced by the proper Build dashboard at D3.
+  // D1/D2 dev trigger. Removed/replaced by the proper Build dashboard at D3.
+  // For each tool_use event, compute a humanLine via the translator and
+  // persist (DB row + history.log line) through the sidecar before rendering.
   const startOrchestratorTest = useCallback(async (): Promise<void> => {
     if (!project || orchRunning) return;
     setOrchEvents([]);
     setOrchRunning(true);
+    const historyLogPath = project.path.replace(/\/$/, "") + "/.builder/history.log";
     const r = await orchestratorStart({
       projectPath: project.path,
       onEvent: (event) => {
-        setOrchEvents((prev) => [...prev, event]);
+        if (event.kind === "tool_use") {
+          const humanLine = translate(event.tool, event.raw_input);
+          setOrchEvents((prev) => [...prev, { ...event, humanLine }]);
+          void sidecarCall("actions.append", {
+            projectId: project.id,
+            tool: event.tool,
+            rawInput: event.raw_input,
+            humanLine,
+            historyLogPath,
+          });
+        } else {
+          setOrchEvents((prev) => [...prev, event]);
+        }
       },
     });
     r.mapErr((e) => {
@@ -542,7 +566,7 @@ function InterviewClient() {
   );
 }
 
-function OrchestratorEventLine({ event }: { event: OrchestratorEvent }) {
+function OrchestratorEventLine({ event }: { event: DevOrchestratorEvent }) {
   switch (event.kind) {
     case "session":
       return <li className="font-mono text-muted-foreground">session {event.id}</li>;
@@ -555,10 +579,11 @@ function OrchestratorEventLine({ event }: { event: OrchestratorEvent }) {
       );
     case "tool_use":
       return (
-        <li className="font-mono">
-          <span className="text-muted-foreground">tool </span>
-          <span className="font-semibold">{event.tool}</span>
-          <span className="text-muted-foreground"> {event.raw_input}</span>
+        <li>
+          <div>{event.humanLine}</div>
+          <div className="font-mono text-[10px] text-muted-foreground">
+            {event.tool} · {event.raw_input}
+          </div>
         </li>
       );
     case "done":

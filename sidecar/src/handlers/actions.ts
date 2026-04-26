@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+
 import { and, asc, desc, eq, gt } from "drizzle-orm";
 import { ulid } from "ulid";
 import { z } from "zod";
@@ -17,6 +20,12 @@ const AppendParamsSchema = z.object({
   phase: z.string().nullable().optional(),
   taskId: z.string().nullable().optional(),
   ts: z.number().int().optional(),
+  // Per CLAUDE.md binding rule 7: every Claude Code tool call is mirrored as
+  // a JSON line in {project}/.builder/history.log so the dashboard's live
+  // tail can read from a single canonical source. The orchestrator passes
+  // the absolute path; null/omitted skips the file write (used by handler
+  // unit tests so they don't touch disk).
+  historyLogPath: z.string().nullable().optional(),
 });
 
 /**
@@ -51,7 +60,40 @@ export function append(rawParams: unknown): Action {
   if (!inserted) {
     throw new Error("insert returned no rows");
   }
+
+  if (params.historyLogPath) {
+    appendHistoryLogLine(params.historyLogPath, inserted);
+  }
+
   return inserted;
+}
+
+function appendHistoryLogLine(logPath: string, row: Action): void {
+  // Best-effort: a write failure must not roll back the DB row, but we do
+  // surface it via stderr so the orchestrator (and the dashboard health
+  // banner) can notice. A live tail that misses one line is recoverable;
+  // a transactional rollback would lose the action entirely.
+  try {
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    const line = JSON.stringify({
+      id: row.id,
+      ts: row.ts,
+      tool: row.tool,
+      rawInput: row.rawInput,
+      humanLine: row.humanLine,
+      phase: row.phase,
+      taskId: row.taskId,
+    });
+    fs.appendFileSync(logPath, line + "\n", { encoding: "utf8" });
+  } catch (e) {
+    process.stderr.write(
+      JSON.stringify({
+        level: "warn",
+        message: `actions.append: history.log write failed: ${e instanceof Error ? e.message : String(e)}`,
+        at: new Date().toISOString(),
+      }) + "\n",
+    );
+  }
 }
 
 const ListParamsSchema = z.object({

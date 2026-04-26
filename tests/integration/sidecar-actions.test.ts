@@ -214,4 +214,59 @@ describe("sidecar actions pipeline (integration)", () => {
     const r = await harness.call("actions.append", { projectId, tool: "", rawInput: "{}" });
     expect(r.ok).toBe(false);
   });
+
+  it("mirrors the row to {historyLogPath} as a JSON line when the path is provided (binding rule 7)", async () => {
+    const logPath = path.join(tempDir, "test-history.log");
+    const r = await harness.call<Action>("actions.append", {
+      projectId,
+      tool: "Read",
+      rawInput: JSON.stringify({ file_path: "spec.md" }),
+      humanLine: "Reading spec.md",
+      historyLogPath: logPath,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+
+    expect(fs.existsSync(logPath)).toBe(true);
+    const content = fs.readFileSync(logPath, "utf8");
+    const lines = content.trim().split("\n");
+    const last = lines[lines.length - 1];
+    expect(last).toBeDefined();
+    if (!last) return;
+    const parsed = JSON.parse(last) as { tool: string; humanLine: string; id: string };
+    expect(parsed.tool).toBe("Read");
+    expect(parsed.humanLine).toBe("Reading spec.md");
+    expect(parsed.id).toBe(r.result.id);
+  });
+
+  it("creates the parent directory of historyLogPath if it does not exist", async () => {
+    const logPath = path.join(tempDir, "deep", "nested", "history.log");
+    const r = await harness.call<Action>("actions.append", {
+      projectId,
+      tool: "Bash",
+      rawInput: JSON.stringify({ command: "ls" }),
+      historyLogPath: logPath,
+    });
+    expect(r.ok).toBe(true);
+    expect(fs.existsSync(logPath)).toBe(true);
+  });
+
+  it("survives a write failure on history.log (DB row still inserted)", async () => {
+    // Pointing the log at a path that traverses through a regular file forces
+    // mkdir to fail — mirrors real-world cases like a permissions glitch on
+    // the novice's machine. The DB insert must still succeed.
+    const sentinelFile = path.join(tempDir, "blocking-file");
+    fs.writeFileSync(sentinelFile, "x");
+    const logPath = path.join(sentinelFile, "child", "history.log");
+    const r = await harness.call<Action>("actions.append", {
+      projectId,
+      tool: "Edit",
+      rawInput: JSON.stringify({ file_path: "x" }),
+      historyLogPath: logPath,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.result.tool).toBe("Edit");
+    expect(fs.existsSync(logPath)).toBe(false);
+  });
 });
