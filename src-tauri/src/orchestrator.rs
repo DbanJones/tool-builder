@@ -33,6 +33,16 @@ For this first turn:
 
 Be terse. The novice is non-technical. Use plain language. Reference file paths when relevant.";
 
+/// One item in claude's TodoWrite plan. The dashboard renders these as a
+/// checklist so the novice sees the pathway to completion + what's blocked.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct TodoItem {
+  pub content: String,
+  pub status: String, // "pending" | "in_progress" | "completed"
+  #[serde(rename = "activeForm")]
+  pub active_form: String,
+}
+
 /// One observable event from the build subprocess. Mirrors ChatChunk in
 /// shape but covers the full tool-call surface (every tool, not just our
 /// UI tool), since the dashboard's live tail and `actions` table need it all.
@@ -49,6 +59,10 @@ pub enum OrchestratorEvent {
   /// tools). `raw_input` is the JSON-encoded input as a string so the UI can
   /// route it through the D2 translator without double-decoding.
   ToolUse { tool: String, raw_input: String },
+  /// Specialised view of claude's built-in `TodoWrite` tool. Emitted in
+  /// addition to ToolUse so the dashboard can render the plan as a
+  /// checklist without re-parsing the raw_input client-side.
+  TodosUpdated { todos: Vec<TodoItem> },
   /// claude's `result.success`. Emitted once at the end of a successful turn.
   Done {
     cost_usd: Option<f64>,
@@ -120,6 +134,16 @@ pub fn parse_orchestrator_line(line: &str) -> Vec<OrchestratorEvent> {
               .get("input")
               .map(|v| v.to_string())
               .unwrap_or_else(|| "{}".to_string());
+            // Specialised view of TodoWrite for the dashboard plan panel.
+            if tool == "TodoWrite" {
+              if let Some(todos_val) = block.get("input").and_then(|i| i.get("todos")) {
+                let todos: Vec<TodoItem> =
+                  serde_json::from_value(todos_val.clone()).unwrap_or_default();
+                if !todos.is_empty() {
+                  events.push(OrchestratorEvent::TodosUpdated { todos });
+                }
+              }
+            }
             events.push(OrchestratorEvent::ToolUse { tool, raw_input });
           }
           _ => {}
@@ -362,6 +386,39 @@ mod tests {
       }
       _ => panic!("wrong variant"),
     }
+  }
+
+  #[test]
+  fn parses_todo_write_tool_use_into_todos_updated_chunk() {
+    let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"x","name":"TodoWrite","input":{"todos":[{"content":"Read CLAUDE.md","status":"completed","activeForm":"Reading CLAUDE.md"},{"content":"Scaffold app/","status":"in_progress","activeForm":"Scaffolding app/"},{"content":"Run tests","status":"pending","activeForm":"Running tests"}]}}]}}"#;
+    let events = parse_orchestrator_line(line);
+    // Both TodosUpdated AND ToolUse should fire (so the live tail still
+    // gets the row, AND the plan panel updates).
+    assert_eq!(events.len(), 2);
+    match &events[0] {
+      OrchestratorEvent::TodosUpdated { todos } => {
+        assert_eq!(todos.len(), 3);
+        assert_eq!(todos[0].content, "Read CLAUDE.md");
+        assert_eq!(todos[0].status, "completed");
+        assert_eq!(todos[1].status, "in_progress");
+        assert_eq!(todos[1].active_form, "Scaffolding app/");
+        assert_eq!(todos[2].status, "pending");
+      }
+      _ => panic!("expected TodosUpdated first"),
+    }
+    match &events[1] {
+      OrchestratorEvent::ToolUse { tool, .. } => assert_eq!(tool, "TodoWrite"),
+      _ => panic!("expected ToolUse second"),
+    }
+  }
+
+  #[test]
+  fn todo_write_with_empty_todos_array_skips_todos_updated() {
+    let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"x","name":"TodoWrite","input":{"todos":[]}}]}}"#;
+    let events = parse_orchestrator_line(line);
+    // ToolUse fires but TodosUpdated does not (empty list = no change).
+    assert_eq!(events.len(), 1);
+    matches!(&events[0], OrchestratorEvent::ToolUse { .. });
   }
 
   #[test]

@@ -8,10 +8,17 @@ import { ResultAsync } from "neverthrow";
 // `tool_use.raw_input` is a JSON-encoded string (not a parsed object) so the
 // D2 translator can preserve key order and the dashboard can show it verbatim
 // without a re-encode hop.
+export interface TodoItem {
+  content: string;
+  status: "pending" | "in_progress" | "completed";
+  activeForm: string;
+}
+
 export type OrchestratorEvent =
   | { kind: "session"; id: string }
   | { kind: "assistant_delta"; text: string }
   | { kind: "tool_use"; tool: string; raw_input: string }
+  | { kind: "todos_updated"; todos: TodoItem[] }
   | {
       kind: "done";
       cost_usd: number | null;

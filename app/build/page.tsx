@@ -23,7 +23,12 @@ import { deployToVercel, getVercelToken, isVercelInstalled } from "@/lib/deploy"
 import { exportToGithub, isGhInstalled } from "@/lib/export";
 import { appendDrift, listOpenDrifts, type DriftEvent } from "@/lib/drift";
 import { estimate, formatEta, type EtaResult } from "@/lib/eta";
-import { orchestratorStart, orchestratorStop, type OrchestratorEvent } from "@/lib/orchestrator";
+import {
+  orchestratorStart,
+  orchestratorStop,
+  type OrchestratorEvent,
+  type TodoItem,
+} from "@/lib/orchestrator";
 import { translate } from "@/lib/orchestrator/translate";
 import { hasMadeSentryDecision } from "@/lib/telemetry";
 
@@ -83,6 +88,11 @@ function BuildClient() {
   const [status, setStatus] = useState<DashboardStatus>({ kind: "idle" });
   const [costSum, setCostSum] = useState<CostSum | null>(null);
   const [openDrifts, setOpenDrifts] = useState<readonly DriftEvent[]>([]);
+  // BD1 plan panel: latest TodoWrite snapshot + the human line of the most
+  // recent tool call ("Now doing"). Drives the right-hand checklist + the
+  // status strip under the header so the novice always sees the pathway.
+  const [plan, setPlan] = useState<readonly TodoItem[]>([]);
+  const [nowDoing, setNowDoing] = useState<string | null>(null);
   // True when the project's persisted status was "building" but no
   // subprocess is alive on app open — Flow H AC4. Cleared on Resume/Stop.
   const [recoveredFromCrash, setRecoveredFromCrash] = useState(false);
@@ -273,8 +283,11 @@ function BuildClient() {
               () => undefined,
             );
           })();
+        } else if (event.kind === "todos_updated") {
+          setPlan(event.todos);
         } else if (event.kind === "tool_use") {
           const humanLine = translate(event.tool, event.raw_input);
+          setNowDoing(humanLine);
           // Optimistic append. The sidecar persists in parallel; we don't
           // wait on it because the goal is sub-200ms tail latency (Flow F
           // AC2 — measurement deferred until D4).
@@ -532,28 +545,71 @@ function BuildClient() {
       {/* Phase bar */}
       <PhaseBar state={targetState} />
 
-      {/* Task lane + Live tail */}
-      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[260px_1fr]">
-        <aside className="hidden border-r p-4 lg:block">
-          <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Current task
-          </h2>
-          <p className="text-sm">{targetState?.current_task ?? targetState?.next_task ?? "(no task in progress)"}</p>
+      {/* Now-doing strip — derived from the most recent tool call. */}
+      {nowDoing && status.kind === "running" ? (
+        <div className="flex items-center gap-2 border-b bg-primary/5 px-6 py-1.5 text-xs">
+          <Loader2 className="h-3 w-3 animate-spin text-primary motion-reduce:animate-none" />
+          <span className="font-semibold uppercase tracking-wide text-muted-foreground">
+            Now doing
+          </span>
+          <span className="truncate text-foreground">{nowDoing}</span>
+        </div>
+      ) : null}
 
-          <h2 className="mt-6 mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Recent history
-          </h2>
-          <ul className="space-y-1 text-xs">
-            {(targetState?.history ?? []).slice(-8).reverse().map((h) => (
-              <li key={h.task_id} className="font-mono">
-                <span className="text-muted-foreground">{h.task_id}</span>
-                {h.commit ? <span className="text-muted-foreground"> · {h.commit.slice(0, 7)}</span> : null}
-              </li>
-            ))}
-            {(targetState?.history ?? []).length === 0 ? (
-              <li className="text-muted-foreground">(no history yet)</li>
-            ) : null}
-          </ul>
+      {/* Plan + Live tail */}
+      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[300px_1fr]">
+        <aside className="hidden min-h-0 flex-col border-r lg:flex">
+          <div className="border-b px-4 py-3">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Plan {plan.length > 0 ? `· ${plan.filter((t) => t.status === "completed").length} / ${plan.length}` : null}
+            </h2>
+            <p className="text-[11px] text-muted-foreground">
+              Claude maintains this via TodoWrite as the build progresses.
+            </p>
+          </div>
+          <div className="flex-1 overflow-auto p-4">
+            {plan.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                No plan yet. Once Claude calls TodoWrite, the steps will appear here with status.
+              </p>
+            ) : (
+              <ol className="space-y-2 text-xs">
+                {plan.map((todo, i) => (
+                  <li
+                    key={`${i}-${todo.content}`}
+                    className={
+                      "flex items-start gap-2 " +
+                      (todo.status === "completed" ? "text-muted-foreground line-through" : "")
+                    }
+                  >
+                    <PlanStatusIcon status={todo.status} />
+                    <span className="flex-1">
+                      {todo.status === "in_progress" ? (
+                        <span className="font-medium">{todo.activeForm}</span>
+                      ) : (
+                        todo.content
+                      )}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
+          {(targetState?.history ?? []).length > 0 ? (
+            <div className="border-t px-4 py-3">
+              <h3 className="mb-1 text-[11px] uppercase tracking-wide text-muted-foreground">
+                Recent commits
+              </h3>
+              <ul className="space-y-0.5 text-[11px]">
+                {(targetState?.history ?? []).slice(-5).reverse().map((h) => (
+                  <li key={h.task_id} className="font-mono text-muted-foreground">
+                    {h.task_id}
+                    {h.commit ? ` · ${h.commit.slice(0, 7)}` : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </aside>
 
         <section className="flex min-h-0 flex-col">
@@ -647,6 +703,60 @@ function BuildClient() {
               </ul>
             )}
           </div>
+
+          {/* BD2: send a message to the running build subprocess. */}
+          <BuildChatInput
+            disabled={!project || status.kind === "running" || sessionIdRef.current === null}
+            disabledReason={
+              !project
+                ? "Project loading"
+                : sessionIdRef.current === null
+                  ? "Start a build first to open a session"
+                  : status.kind === "running"
+                    ? "Wait for the current turn to finish"
+                    : null
+            }
+            onSend={async (text) => {
+              if (!project) return;
+              setStatus({ kind: "running" });
+              setNowDoing(`You said: ${text}`);
+              const r = await orchestratorStart({
+                projectPath: project.path,
+                sessionId: sessionIdRef.current,
+                prompt: text,
+                onEvent: (event: OrchestratorEvent) => {
+                  if (event.kind === "session") {
+                    sessionIdRef.current = event.id;
+                  } else if (event.kind === "todos_updated") {
+                    setPlan(event.todos);
+                  } else if (event.kind === "tool_use") {
+                    const humanLine = translate(event.tool, event.raw_input);
+                    setNowDoing(humanLine);
+                    setActions((prev) => [
+                      ...prev,
+                      {
+                        id: `pending-${Date.now()}-${Math.random()}`,
+                        ts: Date.now(),
+                        tool: event.tool,
+                        rawInput: event.raw_input,
+                        humanLine,
+                        phase: null,
+                        taskId: null,
+                      },
+                    ]);
+                  } else if (event.kind === "rate_limit") {
+                    setStatus({ kind: "rate_limited", message: event.message });
+                  } else if (event.kind === "error") {
+                    setStatus({ kind: "error", message: event.message });
+                  }
+                },
+              });
+              r.match(
+                () => setStatus((prev) => (prev.kind === "running" ? { kind: "idle" } : prev)),
+                (e) => setStatus({ kind: "error", message: e.message }),
+              );
+            }}
+          />
 
           {status.kind === "rate_limited" ? (
             <Alert className="mx-4 mb-3">
@@ -747,6 +857,81 @@ function StatusFooter({
         Back to interview
       </Link>
     </footer>
+  );
+}
+
+function BuildChatInput({
+  disabled,
+  disabledReason,
+  onSend,
+}: {
+  disabled: boolean;
+  disabledReason: string | null;
+  onSend: (text: string) => Promise<void> | void;
+}) {
+  const [text, setText] = useState("");
+  const send = (): void => {
+    const trimmed = text.trim();
+    if (trimmed.length === 0 || disabled) return;
+    setText("");
+    void onSend(trimmed);
+  };
+  return (
+    <div className="border-t bg-background px-4 py-2">
+      <div className="flex items-end gap-2">
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              send();
+            }
+          }}
+          placeholder={
+            disabled
+              ? (disabledReason ?? "Cannot send right now")
+              : "Tell Claude something. Enter to send, Shift+Enter for newline."
+          }
+          rows={2}
+          disabled={disabled}
+          aria-label="Send a message to the running build"
+          className="block flex-1 resize-none rounded-md border bg-background px-3 py-2 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50"
+        />
+        <Button size="sm" disabled={disabled || text.trim().length === 0} onClick={send}>
+          Send
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function PlanStatusIcon({ status }: { status: TodoItem["status"] }) {
+  if (status === "completed") {
+    return (
+      <span
+        aria-label="completed"
+        className="mt-0.5 inline-flex h-3 w-3 shrink-0 items-center justify-center rounded-full bg-green-600 text-white"
+      >
+        <svg className="h-2 w-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+      </span>
+    );
+  }
+  if (status === "in_progress") {
+    return (
+      <Loader2
+        aria-label="in progress"
+        className="mt-0.5 h-3 w-3 shrink-0 animate-spin text-primary motion-reduce:animate-none"
+      />
+    );
+  }
+  return (
+    <span
+      aria-label="pending"
+      className="mt-0.5 inline-block h-3 w-3 shrink-0 rounded-full border border-muted-foreground/40"
+    />
   );
 }
 
