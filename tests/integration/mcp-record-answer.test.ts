@@ -191,6 +191,37 @@ describe("MCP record_answer tool (integration)", () => {
     expect(row.source).toBe("chat");
     expect(row.rationale).toBe("Direct quote from the novice's first message.");
     expect(row.answerText).toMatch(/desktop app/);
+
+    // Per Flow C AC6: the same transaction emits an `answer_recorded` audit
+    // row whose targetId points at the answer just inserted.
+    interface AuditRow {
+      id: string;
+      action: string;
+      targetId: string | null;
+      payload: string;
+      actorId: string;
+      createdAt: number;
+    }
+    const events = await mainSidecar.call<AuditRow[]>("audit.listEvents", { limit: 50 });
+    expect(events.ok).toBe(true);
+    if (!events.ok) return;
+    const auditRow = events.result.find(
+      (e) => e.action === "answer_recorded" && e.targetId === row.id,
+    );
+    expect(auditRow, "expected an answer_recorded audit row paired with the answer").toBeDefined();
+    if (!auditRow) return;
+    const auditPayload = JSON.parse(auditRow.payload) as {
+      projectId: string;
+      questionId: string;
+      confidence: string;
+      source: string;
+    };
+    expect(auditPayload).toEqual({
+      projectId: project.id,
+      questionId: "Q1",
+      confidence: "confident",
+      source: "chat",
+    });
   });
 
   it("MCP server rejects an unknown tool name", async () => {

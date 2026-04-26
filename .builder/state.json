@@ -1,18 +1,19 @@
 {
   "schema_version": 1,
   "project_path": ".",
-  "phase": "B",
-  "phase_started_at": "2026-04-26T10:30:00Z",
+  "phase": "C",
+  "phase_started_at": "2026-04-26T11:45:00Z",
   "phase_a_completed_at": "2026-04-26T10:30:00Z",
-  "tasks_total_in_phase": 6,
-  "tasks_completed_in_phase": 6,
+  "phase_b_completed_at": "2026-04-26T11:45:00Z",
+  "tasks_total_in_phase": 8,
+  "tasks_completed_in_phase": 0,
   "current_task": null,
-  "next_task": "PHASE_B_BOUNDARY",
+  "next_task": "C1",
   "drift": {
     "blocker_count": 0,
     "non_blocker_count": 7,
-    "last_check_at": "2026-04-26T11:30:00Z",
-    "notes": "Open drift in docs/drift-log.md: D-001, D-002, D-004, D-005 (extended at B3), D-006, D-007 (spec preview diff), D-008 (Promptfoo eval deferred). Closed: D-003."
+    "last_check_at": "2026-04-26T11:45:00Z",
+    "notes": "Open drift in docs/drift-log.md: D-001, D-002, D-004, D-005 (extended at B3), D-006, D-007, D-008. Closed: D-003. AC6 audit gap addressed at B6.1 follow-up (transactional answer_recorded audit row)."
   },
   "tests": { "passing": 101, "failing": 0, "skipped": 0, "breakdown": "78 TS unit + 12 TS integration + 11 Rust unit" },
   "cost_so_far_usd": 0.0,

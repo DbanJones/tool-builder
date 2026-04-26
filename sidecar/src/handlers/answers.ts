@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { getDb } from "../db.js";
 import { answers, type Answer } from "../schema/answers.js";
+import { auditLog } from "../schema/audit-log.js";
 
 const RecordParamsSchema = z.object({
   projectId: z.string().min(1),
@@ -18,6 +19,9 @@ const RecordParamsSchema = z.object({
  * Record an answer for a question on a project. Returns the inserted row.
  * Both the main sidecar (via JSON-RPC method `answers.record`) and the MCP
  * server (via the `record_answer` tool) call into this same function.
+ *
+ * Per Flow C AC6, every recorded answer also writes a paired `answer_recorded`
+ * audit row in the same transaction (so the two never disagree).
  */
 export function record(rawParams: unknown): Answer {
   const params = RecordParamsSchema.parse(rawParams);
@@ -25,25 +29,43 @@ export function record(rawParams: unknown): Answer {
   const id = ulid();
   const now = Date.now();
 
-  const [inserted] = db
-    .insert(answers)
-    .values({
-      id,
-      projectId: params.projectId,
-      questionId: params.questionId,
-      answerText: params.answerText,
-      confidence: params.confidence,
-      source: params.source,
-      rationale: params.rationale ?? null,
-      createdAt: now,
-    })
-    .returning()
-    .all();
+  return db.transaction((tx) => {
+    const [inserted] = tx
+      .insert(answers)
+      .values({
+        id,
+        projectId: params.projectId,
+        questionId: params.questionId,
+        answerText: params.answerText,
+        confidence: params.confidence,
+        source: params.source,
+        rationale: params.rationale ?? null,
+        createdAt: now,
+      })
+      .returning()
+      .all();
 
-  if (!inserted) {
-    throw new Error("insert returned no rows");
-  }
-  return inserted;
+    if (!inserted) {
+      throw new Error("insert returned no rows");
+    }
+
+    tx.insert(auditLog)
+      .values({
+        id: ulid(),
+        action: "answer_recorded",
+        targetId: inserted.id,
+        payload: JSON.stringify({
+          projectId: inserted.projectId,
+          questionId: inserted.questionId,
+          confidence: inserted.confidence,
+          source: inserted.source,
+        }),
+        createdAt: now,
+      })
+      .run();
+
+    return inserted;
+  });
 }
 
 const ListParamsSchema = z.object({
