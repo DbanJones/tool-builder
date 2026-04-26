@@ -4,16 +4,16 @@
   "phase": "A",
   "phase_started_at": "2026-04-25T18:09:00Z",
   "tasks_total_in_phase": 5,
-  "tasks_completed_in_phase": 4,
+  "tasks_completed_in_phase": 5,
   "current_task": null,
-  "next_task": "A5",
+  "next_task": "PHASE_A_BOUNDARY",
   "drift": {
     "blocker_count": 0,
     "non_blocker_count": 3,
     "last_check_at": "2026-04-26T09:50:00Z",
     "notes": "Open drift in docs/drift-log.md: D-001 (eslint-plugin-neverthrow gap, C11 enforced by convention), D-002 (shadcn primitives written manually because the shadcn CLI's nested pnpm spawn fails in this shell), D-004 (Welcome E2E deferred to Phase D pending tauri-driver setup). Closed at A4b: D-003 (audit destination, now Drizzle audit_log table via sidecar)."
   },
-  "tests": { "passing": 57, "failing": 0, "skipped": 0 },
+  "tests": { "passing": 73, "failing": 0, "skipped": 0, "breakdown": "52 TS unit + 10 TS integration + 11 Rust unit" },
   "cost_so_far_usd": 0.0,
   "tokens": { "input": 0, "output": 0 },
   "history": [
@@ -28,6 +28,12 @@
       "completed_at": "2026-04-25T18:30:00Z",
       "commit": "06df4c4",
       "notes": "OS keychain wrapper. keyring-rs 3.6.3 in src-tauri (per ADR-0003), exposed via three Tauri IPC commands (keychain_get/set/delete). lib/keychain/index.ts wraps invoke() in ResultAsync<T, KeychainError>. 8 unit tests pass with mocked invoke. cargo check green in 43.81s (first build). Real-keychain integration test deferred to a Phase-D follow-up that adds macOS+Windows CI runners."
+    },
+    {
+      "task_id": "A5",
+      "completed_at": "2026-04-26T10:15:00Z",
+      "commit": "TBD",
+      "notes": "Minimum chat per ADR-0002. tokio added as a Tauri dep (process + io-util + rt + macros features). New module src-tauri/src/chat.rs: ChatChunk discriminated enum (session | assistant_delta | done | rate_limit | error), parse_stream_line() pure parser for claude --output-format stream-json events, detect_rate_limit() heuristic on stderr, chat_send Tauri command using tokio Command + Tauri 2 Channel<T> for async streaming. Session resumption via --resume <id> for multi-turn context. lib/chat/client.ts wraps the Channel + invoke pattern returning ResultAsync. app/(interview)/page.tsx implements the chat UI: streaming bubbles (assistant_delta merges into the last assistant message), rate-limit banner, error banner, send-on-Enter (Shift+Enter for newline), aria-live status. 11 Rust tests for the parser/rate-limit detection (cargo test). 5 TS tests for the chat client wrapper (mocked Channel + invoke). pnpm verify GREEN (52 unit + 10 integration). cargo check + cargo test GREEN. E2E + rate-limit integration test deferred to Phase D under D-004 (now extended to cover A5's E2E + integration). Phase A is now 5/5 — phase boundary check follows."
     },
     {
       "task_id": "A4c",

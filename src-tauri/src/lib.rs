@@ -1,3 +1,4 @@
+mod chat;
 mod sidecar;
 
 use keyring::Entry;
@@ -6,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::Manager;
 
+use chat::chat_send;
 use sidecar::{sidecar_rpc, spawn_sidecar, SidecarState};
 
 // Bundled placeholder templates copied into every newly created project per
@@ -222,6 +224,7 @@ pub fn run() {
       cli_is_installed,
       cli_is_authenticated,
       project_create_folder,
+      chat_send,
       sidecar_rpc
     ])
     .run(tauri::generate_context!())

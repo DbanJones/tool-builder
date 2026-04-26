@@ -30,10 +30,16 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 - **Closure commit**: cbb8128 (A4b commit).
 - **Note**: O8 also asks for `.builder/builder.log` daily rotation. The audit destination is now the DB; the application log file (Tauri's `tauri-plugin-log` output) is a separate concern and remains at the OS log dir for now. Tracked separately if/when needed.
 
-### D-004 — Welcome E2E (`tests/e2e/welcome.spec.ts`) deferred from A3 to Phase D
-- **Drift type**: scope drift (deferral, against the A3 plan in [docs/build-order.md](build-order.md)).
-- **Discovered at**: A3.
-- **Cause**: the E2E in build-order.md A3 wants Playwright driving the Welcome screen against a stubbed `claude` binary on PATH. To do that with the real Tauri webview requires `tauri-driver` (a separate setup); to do it against `pnpm dev` requires mocking Tauri `invoke` at the Playwright boundary, which is non-trivial and gives a less faithful test than the production transport. Both paths were larger than fit in A3's scope.
-- **Resolution**: drift accepted. A3 ships unit-test coverage of the same logical surface: 7 unit tests in `lib/cli-detection/index.test.ts` cover all three states (`missing`, `unauthenticated`, `ready`) plus error paths, with the `invoke` boundary mocked. A real-binary E2E lands in Phase D when `tauri-driver` is set up.
-- **Commit**: 81bbc66 (A3 commit).
-- **Follow-up**: Phase D ticket to install `tauri-driver`, write `tests/e2e/welcome.spec.ts` with a fixture `claude` binary on a per-test PATH.
+### D-004 — Tauri-context E2E + integration tests deferred to Phase D (extended at A5)
+- **Drift type**: scope drift (deferral, against the A3 + A5 plans in [docs/build-order.md](build-order.md)).
+- **Discovered at**: A3, extended at A5.
+- **Cause**: tests that exercise the real Tauri webview (Welcome E2E from A3, chat smoke E2E from A5, rate-limit integration test from A5) all need `tauri-driver` (a separate setup) or full webview/IPC mocking, both of which are larger than fit inside the originating tasks. The "stubbed `claude` binary on PATH" part is straightforward (a small shell script); the harness around it is the work.
+- **Resolution**: drift accepted across both tasks. The logical surface is covered by smaller-scope tests with mocked boundaries:
+  - A3: 7 unit tests in `lib/cli-detection/index.test.ts` cover all three Welcome states with `invoke` mocked.
+  - A5: 11 Rust tests in `src-tauri/src/chat.rs` cover the stream-json parser and rate-limit detector with raw lines as fixtures; 5 unit tests in `lib/chat/client.test.ts` cover the Channel-based wrapper with `invoke` and `Channel` mocked.
+  Real-binary E2E and rate-limit integration land in Phase D when `tauri-driver` is set up.
+- **Commits**: 81bbc66 (A3 origin); A5 extends scope (this commit).
+- **Follow-up**: Phase D ticket to install `tauri-driver` + fixture `claude` binary, write:
+  - `tests/e2e/welcome.spec.ts` covering all three Welcome states.
+  - `tests/e2e/chat-smoke.spec.ts` for the happy chat path.
+  - `tests/integration/chat-rate-limit.test.ts` for the rate-limit path with a stubbed `claude` returning the rate-limit error.
