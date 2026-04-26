@@ -33,7 +33,7 @@
     {
       "task_id": "B3",
       "completed_at": "2026-04-26T11:00:00Z",
-      "commit": "TBD",
+      "commit": "1b8050c",
       "notes": "Spec rebuild from answers. lib/interview/rebuild-spec.ts: pure deterministic rebuildSpec(answers, options?) returning markdown; section emitters for §1 Problem, §2 Scope (top flows from Q15), §3 Flows (Q16 ACs), §4 Data model (deferred), §5 Integrations (Q17), §6 NFRs (Q14/21/22/23/24/26/27), §7 Active rules (decision table activation), §8 Interview progress (counts + outstanding). Output is byte-for-byte stable (no timestamps in body). 8 unit tests including 3 snapshot tests on minimal/partial/full fixture answer sets, decision-table activation assertions, progress counts, and unknown-questionId rejection. Drift D-005 extended to subsume the missing kit spec template."
     },
     {
