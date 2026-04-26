@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2, Send } from "lucide-react";
+import { CheckCircle2, Loader2, Send } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 
@@ -8,6 +8,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { chatSend, type ChatChunk } from "@/lib/chat/client";
 import type { QuestionId } from "@/lib/interview/library";
+import { checkReadiness, type ReadinessResult } from "@/lib/interview/readiness";
 import { rebuildSpec, type RebuildAnswer } from "@/lib/interview/rebuild-spec";
 import type { Project } from "@/lib/project";
 import { sidecarCall } from "@/lib/sidecar/client";
@@ -68,6 +69,8 @@ function InterviewClient() {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [input, setInput] = useState("");
   const [status, setStatus] = useState<Status>({ kind: "idle" });
+  const [readiness, setReadiness] = useState<ReadinessResult>(() => checkReadiness([]));
+  const [echoBackConfirmed, setEchoBackConfirmed] = useState(false);
   const sessionIdRef = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -100,25 +103,25 @@ function InterviewClient() {
     };
   }, [projectId]);
 
-  // Pull answers from the sidecar and rebuild the spec preview.
+  // Pull answers from the sidecar and rebuild the spec preview + readiness.
   const refreshSpec = useCallback(async (): Promise<void> => {
     if (!projectId) return;
     const r = await sidecarCall<AnswerRow[]>("answers.list", { projectId });
     r.match(
       (rows) => {
+        const rebuildAnswers = rows.map(rowToRebuildAnswer);
         try {
-          setSpec(rebuildSpec(rows.map(rowToRebuildAnswer)));
+          setSpec(rebuildSpec(rebuildAnswers));
         } catch (e) {
-          setSpec(
-            `# Spec preview error\n\n${e instanceof Error ? e.message : String(e)}`,
-          );
+          setSpec(`# Spec preview error\n\n${e instanceof Error ? e.message : String(e)}`);
         }
+        setReadiness(checkReadiness(rebuildAnswers, { echoBackConfirmed }));
       },
       () => {
         // Quietly ignore; transient sidecar issues will retry on next chat turn.
       },
     );
-  }, [projectId]);
+  }, [projectId, echoBackConfirmed]);
 
   // Initial spec render once the project is loaded.
   useEffect(() => {
@@ -200,14 +203,46 @@ function InterviewClient() {
 
   return (
     <main className="grid h-screen grid-rows-[auto_1fr] bg-background">
-      <header className="border-b px-6 py-4">
-        <h1 className="text-lg font-semibold">
-          Interview{project ? ` — ${project.name}` : ""}
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Tell Claude what you want to build. As you answer, the spec on the right rebuilds in real
-          time.
-        </p>
+      <header className="flex items-center justify-between gap-4 border-b px-6 py-4">
+        <div className="min-w-0">
+          <h1 className="text-lg font-semibold">
+            Interview{project ? ` — ${project.name}` : ""}
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Tell Claude what you want to build. As you answer, the spec on the right rebuilds in
+            real time.
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-3">
+          <span
+            className="text-sm text-muted-foreground"
+            aria-label="Fast-path interview progress"
+          >
+            {readiness.fastPathAnswered} / {readiness.fastPathTotal} answered
+          </span>
+          <Button
+            type="button"
+            disabled={!readiness.ready}
+            title={readiness.ready ? "Start the build" : readiness.reason}
+            onClick={() => {
+              if (readiness.ready) {
+                // The build dashboard lands at Phase D; for now, mark the user's intent.
+                window.alert(
+                  "Start build is wired in Phase D. The interview is complete and the spec is ready.",
+                );
+              } else if (readiness.fastPathAnswered === readiness.fastPathTotal) {
+                setEchoBackConfirmed(true);
+              }
+            }}
+          >
+            <CheckCircle2 className="mr-2 h-4 w-4" aria-hidden="true" />
+            {readiness.ready
+              ? "Start build"
+              : readiness.fastPathAnswered === readiness.fastPathTotal
+                ? "Confirm echo-back"
+                : "Start build"}
+          </Button>
+        </div>
       </header>
 
       <div className="grid min-h-0 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_400px]">
