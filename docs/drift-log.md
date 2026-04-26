@@ -46,7 +46,7 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 - **Discovered at**: C6.
 - **Cause**: spinning a headless Chromium in the sidecar adds 250+MB of browser binaries, ~2s of cold-boot per page, and a meaningful packaging burden for production installers (Phase E concern). For the common case of "novice drops a reference URL into the file panel", the textual extraction (title, meta description, h1/h2 outline, body snippet) is enough to seed the chat with context.
 - **Resolution**: drift accepted. C6 ships `files.fetchUrl({url})` with HTML fetch + node-html-parser extraction. Returns title, og:description (preferred) or meta description (fallback), up to 10 h1/h2 headings, and a 600-char body snippet (script/style/svg stripped). No screenshot, no JS rendering. The image-vision pipeline at C3 stays available for the screenshot path if/when we wire it.
-- **Commit**: TBD (C6 commit).
+- **Commit**: 470da84 (C6 commit).
 - **Follow-up**: Phase D / E task to add Playwright with `browser-fetch` + screenshot output; route through `files.summariseImage` (C3) for the visual half. Likely valuable when the kit's question library starts asking for "design references" or similar.
 
 ### D-011 — SQL-dump data extraction deferred from C5
