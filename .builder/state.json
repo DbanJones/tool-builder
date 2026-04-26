@@ -5,14 +5,14 @@
   "phase_started_at": "2026-04-26T10:30:00Z",
   "phase_a_completed_at": "2026-04-26T10:30:00Z",
   "tasks_total_in_phase": 6,
-  "tasks_completed_in_phase": 3,
+  "tasks_completed_in_phase": 4,
   "current_task": null,
-  "next_task": "B4",
+  "next_task": "B5",
   "drift": {
     "blocker_count": 0,
-    "non_blocker_count": 5,
-    "last_check_at": "2026-04-26T10:30:00Z",
-    "notes": "Open drift in docs/drift-log.md: D-001, D-002, D-004, D-005 (now extended to also cover the spec template at B3), D-006. Closed: D-003."
+    "non_blocker_count": 6,
+    "last_check_at": "2026-04-26T11:15:00Z",
+    "notes": "Open drift in docs/drift-log.md: D-001, D-002, D-004, D-005 (extended at B3), D-006, D-007 (spec preview diff highlighting deferred to Phase D). Closed: D-003."
   },
   "tests": { "passing": 93, "failing": 0, "skipped": 0, "breakdown": "70 TS unit + 12 TS integration + 11 Rust unit" },
   "cost_so_far_usd": 0.0,
@@ -29,6 +29,12 @@
       "completed_at": "2026-04-25T18:30:00Z",
       "commit": "06df4c4",
       "notes": "OS keychain wrapper. keyring-rs 3.6.3 in src-tauri (per ADR-0003), exposed via three Tauri IPC commands (keychain_get/set/delete). lib/keychain/index.ts wraps invoke() in ResultAsync<T, KeychainError>. 8 unit tests pass with mocked invoke. cargo check green in 43.81s (first build). Real-keychain integration test deferred to a Phase-D follow-up that adds macOS+Windows CI runners."
+    },
+    {
+      "task_id": "B4",
+      "completed_at": "2026-04-26T11:15:00Z",
+      "commit": "TBD",
+      "notes": "Live spec preview panel in the interview screen. Two-column layout (chat left, spec right; right panel hides under lg breakpoint). New project context wiring: new-project form on success routes to /interview?project=<id>; interview page reads ?project param via Next 15 useSearchParams (wrapped in Suspense per the App Router rules). Loads project via sidecarCall('projects.get'); on load and after each chat 'done' chunk, calls sidecarCall('answers.list') and rebuildSpec() to refresh the preview pane. Chat send now passes project_id + project_path so the MCP record_answer wiring activates. Spec rendered as monospaced <pre>; markdown rendering + diff highlighting deferred (drift D-007). pnpm verify GREEN (70 unit + 12 integration). No new automated tests for the UI change at this stage; live verification deferred to user pnpm tauri dev."
     },
     {
       "task_id": "B3",

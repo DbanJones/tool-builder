@@ -30,6 +30,14 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 - **Closure commit**: cbb8128 (A4b commit).
 - **Note**: O8 also asks for `.builder/builder.log` daily rotation. The audit destination is now the DB; the application log file (Tauri's `tauri-plugin-log` output) is a separate concern and remains at the OS log dir for now. Tracked separately if/when needed.
 
+### D-007 — Spec-preview diff highlighting deferred from B4
+- **Drift type**: scope drift (deferral, against the B4 plan in [docs/build-order.md](build-order.md)).
+- **Discovered at**: B4.
+- **Cause**: build-order's B4 says "Use a Markdown renderer that highlights diffs between renders." Two non-trivial pieces: pick + integrate a Markdown renderer (react-markdown + sanitiser, or remark/rehype pipeline), and compute + render diffs (diff-match-patch or similar, scoped per section). Either alone is fine; both at once for B4 stretches the task. Both are presentation polish, not behaviour.
+- **Resolution**: drift accepted. B4 ships the spec preview as monospaced `<pre>`-rendered raw markdown that updates after every chat turn (which is the load-bearing part: "preview reflects current spec"). Markdown rendering and diff highlighting land in a Phase D polish task.
+- **Commit**: TBD (B4 commit).
+- **Follow-up**: Phase D ticket adds react-markdown + a small section-level diff that flashes changed sections for ~3s, per the spec's UX intent.
+
 ### D-006 — `.builder/answers.json` legacy file mirror skipped
 - **Drift type**: implementation drift (against [docs/build-order.md](build-order.md) B2 wording: "On tool call, the MCP handler writes to `.builder/answers.json` and appends to the answers table.").
 - **Discovered at**: B2.

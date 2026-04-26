@@ -48,8 +48,8 @@ export default function NewProjectPage() {
     setSubmissionError(null);
     const result = await createProject(values.name, values.folder);
     result.match(
-      () => {
-        router.push("/");
+      (project) => {
+        router.push(`/interview?project=${encodeURIComponent(project.id)}`);
       },
       (error) => {
         setSubmissionError(error.message);
