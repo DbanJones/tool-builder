@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { invoke, Channel } from "@tauri-apps/api/core";
-import { orchestratorStart, type OrchestratorEvent } from "./index";
+import { orchestratorStart, orchestratorStop, type OrchestratorEvent } from "./index";
 
 vi.mock("@tauri-apps/api/core", () => {
   class FakeChannel<T> {
@@ -123,6 +123,22 @@ describe("orchestratorStart", () => {
       },
     });
     expect(received[0]?.kind).toBe("rate_limit");
+  });
+
+  describe("orchestratorStop", () => {
+    it("invokes the orchestrator_stop Tauri command with no args", async () => {
+      mockInvoke.mockResolvedValueOnce(undefined);
+      const r = await orchestratorStop();
+      expect(r.isOk()).toBe(true);
+      expect(mockInvoke).toHaveBeenCalledWith("orchestrator_stop");
+    });
+
+    it("returns Transport error when the kill fails", async () => {
+      mockInvoke.mockRejectedValueOnce(new Error("permission denied"));
+      const r = await orchestratorStop();
+      expect(r.isErr()).toBe(true);
+      if (r.isErr()) expect(r.error.kind).toBe("Transport");
+    });
   });
 
   it("forwards error events from a non-zero subprocess exit", async () => {

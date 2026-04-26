@@ -18,9 +18,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Mutex;
 use tauri::ipc::Channel;
+use tauri::Manager;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
+use tokio::process::{Child, Command};
 
 const ORCHESTRATOR_KICKOFF_PROMPT: &str = "You are the Builder's build-phase agent. The novice has finished the interview and clicked 'Start build'. Your job is to drive the build of their target app from this project folder.
 
@@ -165,14 +167,29 @@ fn expand_tilde(path: &str) -> PathBuf {
   PathBuf::from(path)
 }
 
+/// Per-app state holding the in-flight orchestrator child process so
+/// `orchestrator_stop` can kill it. Only one build subprocess runs at a
+/// time (single-novice desktop app); the Mutex<Option<Child>> shape is
+/// the simplest way to express "0 or 1 alive".
+pub struct OrchestratorState {
+  child: Mutex<Option<Child>>,
+}
+
+impl OrchestratorState {
+  pub fn new() -> Self {
+    Self { child: Mutex::new(None) }
+  }
+}
+
 /// Spawn the build subprocess in `project_path`, stream events, return when
 /// the subprocess exits. The caller (webview) supplies a Channel; events
 /// arrive in the order they were observed.
 ///
 /// `session_id` is None on the first turn (a fresh build kickoff) and Some
-/// on subsequent turns to continue the same context (used at D5/D6).
+/// on subsequent turns to continue the same context (used by Flow H resume).
 #[tauri::command]
 pub async fn orchestrator_start(
+  app: tauri::AppHandle,
   project_path: String,
   prompt: Option<String>,
   session_id: Option<String>,
@@ -221,6 +238,15 @@ pub async fn orchestrator_start(
     .take()
     .ok_or_else(|| "claude stderr missing".to_string())?;
 
+  // Hand the child over to the OrchestratorState so orchestrator_stop can
+  // kill it. We can't keep `child` here AND in the state at the same time,
+  // so we move it in and pull it back at the end via .take().
+  if let Some(state) = app.try_state::<OrchestratorState>() {
+    if let Ok(mut guard) = state.child.lock() {
+      *guard = Some(child);
+    }
+  }
+
   let mut reader = BufReader::new(stdout).lines();
   while let Some(line) = reader
     .next_line()
@@ -233,6 +259,18 @@ pub async fn orchestrator_start(
         .map_err(|e| format!("channel send: {e}"))?;
     }
   }
+
+  // Take the child back out of state to read stderr + wait. If
+  // orchestrator_stop already pulled it out, the process is gone — surface
+  // a clean done with no rate-limit/error.
+  let mut child = match app
+    .try_state::<OrchestratorState>()
+    .and_then(|s| s.child.lock().ok().map(|mut g| g.take()))
+    .flatten()
+  {
+    Some(c) => c,
+    None => return Ok(()),
+  };
 
   let mut stderr_text = String::new();
   let _ = tokio::io::AsyncReadExt::read_to_string(&mut stderr, &mut stderr_text).await;
@@ -253,6 +291,20 @@ pub async fn orchestrator_start(
     }
   }
 
+  Ok(())
+}
+
+/// Kill the in-flight build subprocess. Used by Flow H Stop and as the
+/// "force-kill" half of Pause when the novice doesn't want to wait for the
+/// current turn to finish naturally. No-op when no child is running.
+#[tauri::command]
+pub async fn orchestrator_stop(state: tauri::State<'_, OrchestratorState>) -> Result<(), String> {
+  let child_opt = state.child.lock().map_err(|e| format!("lock: {e}"))?.take();
+  if let Some(mut child) = child_opt {
+    // start_kill is non-blocking; the read loop in orchestrator_start will
+    // see EOF on stdout and tear down the rest of the pipeline naturally.
+    child.start_kill().map_err(|e| format!("start_kill: {e}"))?;
+  }
   Ok(())
 }
 

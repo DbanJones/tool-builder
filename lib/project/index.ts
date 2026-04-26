@@ -9,6 +9,7 @@ export interface Project {
   path: string;
   status: "interviewing" | "ready" | "building" | "paused" | "done";
   currentPhase: "A" | "B" | "C" | "D" | "E" | null;
+  currentSessionId: string | null;
   createdAt: number;
   updatedAt: number;
   lastOpenedAt: number;

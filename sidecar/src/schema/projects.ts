@@ -9,6 +9,9 @@ export const projects = sqliteTable("projects", {
     enum: ["interviewing", "ready", "building", "paused", "done"],
   }).notNull(),
   currentPhase: text("current_phase", { enum: ["A", "B", "C", "D", "E"] }),
+  // claude session id from the latest turn — used by `--resume` so a paused
+  // build can continue from where it left off (Flow H AC1/AC3).
+  currentSessionId: text("current_session_id"),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
   lastOpenedAt: integer("last_opened_at").notNull(),

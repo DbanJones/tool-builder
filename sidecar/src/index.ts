@@ -27,7 +27,12 @@ import {
 import { logEvent, listEvents } from "./handlers/audit.js";
 import { extractText, fetchUrl, parseDataSample, parseSchema, summariseImage } from "./handlers/files.js";
 import { guardPii } from "./handlers/pii.js";
-import { create as createProject, list as listProjects, get as getProject } from "./handlers/projects.js";
+import {
+  create as createProject,
+  list as listProjects,
+  get as getProject,
+  setStatus as setProjectStatus,
+} from "./handlers/projects.js";
 
 const RequestSchema = z.object({
   id: z.string(),
@@ -85,6 +90,7 @@ const handlers: Record<string, Handler> = {
   "projects.create": createProject,
   "projects.list": listProjects,
   "projects.get": getProject,
+  "projects.setStatus": setProjectStatus,
   "answers.record": recordAnswer,
   "answers.list": listAnswers,
   "files.extractText": extractText,

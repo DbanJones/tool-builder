@@ -1,0 +1,1 @@
+ALTER TABLE `projects` ADD `current_session_id` text;

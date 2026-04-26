@@ -9,7 +9,7 @@ use std::process::Command;
 use tauri::Manager;
 
 use chat::chat_send;
-use orchestrator::orchestrator_start;
+use orchestrator::{orchestrator_start, orchestrator_stop, OrchestratorState};
 use sidecar::{sidecar_rpc, spawn_sidecar, SidecarState};
 
 // Bundled placeholder templates copied into every newly created project per
@@ -471,6 +471,7 @@ pub fn run() {
       }
 
       app.manage(state);
+      app.manage(OrchestratorState::new());
 
       if cfg!(debug_assertions) {
         app.handle().plugin(
@@ -494,6 +495,7 @@ pub fn run() {
       append_drift_log_line,
       chat_send,
       orchestrator_start,
+      orchestrator_stop,
       sidecar_rpc
     ])
     .run(tauri::generate_context!())

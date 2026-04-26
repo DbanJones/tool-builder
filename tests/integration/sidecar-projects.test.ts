@@ -184,4 +184,45 @@ describe("sidecar projects pipeline (integration)", () => {
     const r = await harness.call("projects.create", { name: "", path: "/tmp/x" });
     expect(r.ok).toBe(false);
   });
+
+  it("projects.setStatus transitions interviewing → building → paused, persisting current_session_id", async () => {
+    const created = await harness.call<Project>("projects.create", {
+      name: "lifecycle-test",
+      path: "/tmp/lifecycle",
+    });
+    if (!created.ok) throw new Error("seed failed");
+    const id = created.result.id;
+    expect(created.result.status).toBe("interviewing");
+
+    const start = await harness.call<Project>("projects.setStatus", {
+      id,
+      status: "building",
+      currentSessionId: "claude-session-abc",
+      currentPhase: "A",
+    });
+    expect(start.ok).toBe(true);
+    if (!start.ok) return;
+    expect(start.result.status).toBe("building");
+
+    const paused = await harness.call<Project & { currentSessionId: string | null }>(
+      "projects.setStatus",
+      { id, status: "paused" },
+    );
+    expect(paused.ok).toBe(true);
+    if (!paused.ok) return;
+    expect(paused.result.status).toBe("paused");
+    // currentSessionId from the building call must persist (the pause call
+    // didn't touch it) so resume can use it.
+    expect(paused.result.currentSessionId).toBe("claude-session-abc");
+  });
+
+  it("projects.setStatus rejects an unknown id", async () => {
+    const r = await harness.call("projects.setStatus", { id: "01NONEXISTENT", status: "paused" });
+    expect(r.ok).toBe(false);
+  });
+
+  it("projects.setStatus rejects an invalid status enum", async () => {
+    const r = await harness.call("projects.setStatus", { id: "anything", status: "exploding" });
+    expect(r.ok).toBe(false);
+  });
 });

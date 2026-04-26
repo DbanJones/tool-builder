@@ -78,3 +78,45 @@ export function get(rawParams: unknown): Project | null {
   const [row] = db.select().from(projects).where(eq(projects.id, params.id)).all();
   return row ?? null;
 }
+
+const SetStatusParamsSchema = z.object({
+  id: z.string().min(1),
+  status: z.enum(["interviewing", "ready", "building", "paused", "done"]),
+  // Optional: only mutated when the caller passes them (so a "pause"
+  // call after the turn finishes can carry the latest session id, but a
+  // pure status flip doesn't blank a previous one by accident).
+  currentSessionId: z.string().nullable().optional(),
+  currentPhase: z.enum(["A", "B", "C", "D", "E"]).nullable().optional(),
+});
+
+/**
+ * Mutate the project's lifecycle state. Used by Flow H (pause/resume/stop)
+ * and by the orchestrator to record the claude session id between turns
+ * so resume works (--resume <id>).
+ */
+export function setStatus(rawParams: unknown): Project {
+  const params = SetStatusParamsSchema.parse(rawParams);
+  const db = getDb();
+  const now = Date.now();
+
+  const patch: Partial<typeof projects.$inferInsert> = {
+    status: params.status,
+    updatedAt: now,
+  };
+  if (params.currentSessionId !== undefined) {
+    patch.currentSessionId = params.currentSessionId;
+  }
+  if (params.currentPhase !== undefined) {
+    patch.currentPhase = params.currentPhase;
+  }
+
+  const [updated] = db
+    .update(projects)
+    .set(patch)
+    .where(eq(projects.id, params.id))
+    .returning()
+    .all();
+
+  if (!updated) throw new Error(`projects.setStatus: no project with id '${params.id}'`);
+  return updated;
+}

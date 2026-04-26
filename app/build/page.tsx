@@ -15,7 +15,7 @@ import {
 } from "@/lib/build-state";
 import { appendDrift, listOpenDrifts, type DriftEvent } from "@/lib/drift";
 import { estimate, formatEta, type EtaResult } from "@/lib/eta";
-import { orchestratorStart, type OrchestratorEvent } from "@/lib/orchestrator";
+import { orchestratorStart, orchestratorStop, type OrchestratorEvent } from "@/lib/orchestrator";
 
 import { DriftBanner } from "./components/drift-banner";
 import { translate } from "@/lib/orchestrator/translate";
@@ -71,6 +71,13 @@ function BuildClient() {
   const [status, setStatus] = useState<DashboardStatus>({ kind: "idle" });
   const [costSum, setCostSum] = useState<CostSum | null>(null);
   const [openDrifts, setOpenDrifts] = useState<readonly DriftEvent[]>([]);
+  // True when the project's persisted status was "building" but no
+  // subprocess is alive on app open — Flow H AC4. Cleared on Resume/Stop.
+  const [recoveredFromCrash, setRecoveredFromCrash] = useState(false);
+  // The latest claude session id observed during the run, used by Resume.
+  // Initially loaded from project.currentSessionId so a paused project can
+  // resume across an app restart.
+  const sessionIdRef = useRef<string | null>(null);
   // Past per-turn elapsed durations (ms). Updated on each `done` event;
   // feeds the ETA estimator. v1 granularity is per-turn; D5 swaps to
   // per-task-id when phase markers are wired (drift D-014).
@@ -95,6 +102,16 @@ function BuildClient() {
             return;
           }
           setProject(p);
+          sessionIdRef.current = p.currentSessionId;
+          // Crash recovery (Flow H AC3 + AC4): the only writer of the
+          // "building" status is startBuild; if we open the dashboard and
+          // it's still set, the previous app process died mid-build. Mark
+          // the project as paused so the next Start/Resume click is a
+          // deliberate decision.
+          if (p.status === "building") {
+            setRecoveredFromCrash(true);
+            void sidecarCall<Project>("projects.setStatus", { id: p.id, status: "paused" });
+          }
           void hydrateBuildArtefacts(p.id, p.path);
         },
         (e) => setLoadError(e.message),
@@ -148,17 +165,30 @@ function BuildClient() {
   const startBuild = useCallback(async (): Promise<void> => {
     if (!project || status.kind === "running") return;
     setStatus({ kind: "running" });
+    setRecoveredFromCrash(false);
+    // Mark the project as building BEFORE we spawn so a hard crash mid-turn
+    // is detectable on next mount (the only writer of "building" is here).
+    void sidecarCall("projects.setStatus", { id: project.id, status: "building" });
     const historyLogPath = project.path.replace(/\/$/, "") + "/.builder/history.log";
     let terminal: DashboardStatus = { kind: "idle" };
     turnStartRef.current = Date.now();
+    const sessionIdAtStart = sessionIdRef.current;
 
     const r = await orchestratorStart({
       projectPath: project.path,
+      sessionId: sessionIdAtStart,
       onEvent: (event: OrchestratorEvent) => {
         if (event.kind === "session") {
           // Reset the turn clock on the first event of the turn (mirrors
-          // claude's session.init arrival).
+          // claude's session.init arrival). Persist the session id so a
+          // pause / crash followed by Resume can pass --resume <id>.
           turnStartRef.current = Date.now();
+          sessionIdRef.current = event.id;
+          void sidecarCall("projects.setStatus", {
+            id: project.id,
+            status: "building",
+            currentSessionId: event.id,
+          });
         } else if (event.kind === "done") {
           if (turnStartRef.current !== null) {
             const elapsed = Date.now() - turnStartRef.current;
@@ -227,8 +257,39 @@ function BuildClient() {
       terminal = { kind: "error", message: e.message };
       setStatus(terminal);
     });
-    if (terminal.kind === "idle") setStatus({ kind: "idle" });
+    if (terminal.kind === "idle") {
+      setStatus({ kind: "idle" });
+      // Natural turn end: park the project in "paused" so the novice's next
+      // click is a deliberate Resume, not an accidental new turn.
+      void sidecarCall("projects.setStatus", { id: project.id, status: "paused" });
+    }
   }, [project, status.kind]);
+
+  // Pause = ask the orchestrator to stop after the current turn naturally
+  // ends, AND mark the project as paused. The current turn is already
+  // turn-bounded in `-p` mode, so this is effectively "don't auto-resume".
+  // (For interactive multi-tool turns we'd need the kit's "finish current
+  // tool then halt" semantics; out of scope for D6.)
+  const pauseBuild = useCallback(async (): Promise<void> => {
+    if (!project) return;
+    await orchestratorStop();
+    setStatus({ kind: "idle" });
+    await sidecarCall("projects.setStatus", { id: project.id, status: "paused" });
+  }, [project]);
+
+  // Stop = kill the subprocess AND drop the session id so the next start is
+  // a fresh kickoff (not a resume of the current build).
+  const stopBuild = useCallback(async (): Promise<void> => {
+    if (!project) return;
+    await orchestratorStop();
+    sessionIdRef.current = null;
+    setStatus({ kind: "idle" });
+    await sidecarCall("projects.setStatus", {
+      id: project.id,
+      status: "ready",
+      currentSessionId: null,
+    });
+  }, [project]);
 
   // The in-progress turn's elapsed time (counted toward past_p90 only).
   // For idle/finished states there's no in-flight turn, so 0 is correct
@@ -271,14 +332,26 @@ function BuildClient() {
               </>
             ) : (
               <>
-                <Play className="mr-1 h-3 w-3" /> Start build
+                <Play className="mr-1 h-3 w-3" />
+                {sessionIdRef.current ? "Resume build" : "Start build"}
               </>
             )}
           </Button>
-          <Button size="sm" variant="outline" disabled title="D6: pause/resume">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={status.kind !== "running"}
+            onClick={() => void pauseBuild()}
+            title="Pause after the current turn"
+          >
             <Pause className="h-3 w-3" />
           </Button>
-          <Button size="sm" variant="outline" disabled title="D6: stop">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void stopBuild()}
+            title="Stop the build (drops the session)"
+          >
             <Square className="h-3 w-3" />
           </Button>
           <Button
@@ -334,6 +407,15 @@ function BuildClient() {
         </aside>
 
         <section className="flex min-h-0 flex-col">
+          {recoveredFromCrash ? (
+            <Alert className="mx-4 mt-3 mb-1">
+              <AlertTitle>Recovered from crash</AlertTitle>
+              <AlertDescription>
+                The previous session ended unexpectedly. Click Resume build to continue from where it
+                left off, or Stop to drop the session and start fresh.
+              </AlertDescription>
+            </Alert>
+          ) : null}
           {openDrifts.length > 0 && openDrifts[0] ? (
             <DriftBanner
               event={openDrifts[0]}

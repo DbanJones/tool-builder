@@ -45,8 +45,7 @@ const fromInvokeError = (e: unknown): OrchestratorError => ({
  * `claude` CLI (per ADR-0002). Streams events to `onEvent`; the returned
  * promise resolves when the subprocess exits.
  *
- * At D1 this fires a single kickoff turn. D5/D6 add multi-turn resume,
- * pause, and crash recovery on top of the same Rust command.
+ * Pass `sessionId` to resume a previous turn (Flow H: pause/resume).
  */
 export function orchestratorStart(
   options: OrchestratorStartOptions,
@@ -62,4 +61,12 @@ export function orchestratorStart(
     }),
     fromInvokeError,
   );
+}
+
+/**
+ * Kill the in-flight build subprocess (Flow H Stop, and the force-kill
+ * half of Pause). No-op when no build is running.
+ */
+export function orchestratorStop(): ResultAsync<void, OrchestratorError> {
+  return ResultAsync.fromPromise(invoke<void>("orchestrator_stop"), fromInvokeError);
 }
