@@ -75,6 +75,11 @@ function InterviewClient() {
   const [readiness, setReadiness] = useState<ReadinessResult>(() => checkReadiness([]));
   const [echoBackConfirmed, setEchoBackConfirmed] = useState(false);
   const [files, setFiles] = useState<readonly IngestedFile[]>([]);
+  const [pendingOptions, setPendingOptions] = useState<{
+    question: string;
+    options: readonly string[];
+    allowFreeform: boolean;
+  } | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -150,6 +155,13 @@ function InterviewClient() {
           return [...prev, { role: "assistant", text: chunk.text }];
         });
         return;
+      case "options_offered":
+        setPendingOptions({
+          question: chunk.question,
+          options: chunk.options,
+          allowFreeform: chunk.allow_freeform,
+        });
+        return;
       case "done":
         setStatus({ kind: "idle" });
         void refreshSpec();
@@ -163,14 +175,16 @@ function InterviewClient() {
     }
   };
 
-  const handleSend = async (): Promise<void> => {
-    const trimmed = input.trim();
+  const handleSend = async (textOverride?: string): Promise<void> => {
+    const raw = textOverride ?? input;
+    const trimmed = raw.trim();
     if (trimmed.length === 0) return;
     if (status.kind === "streaming") return;
     if (!project) return;
 
     setMessages((prev) => [...prev, { role: "user", text: trimmed }]);
     setInput("");
+    setPendingOptions(null);
     setStatus({ kind: "streaming" });
 
     const result = await chatSend({
@@ -189,6 +203,18 @@ function InterviewClient() {
         setStatus({ kind: "error", message: error.message });
       },
     );
+  };
+
+  const handleOptionPick = (option: string): void => {
+    if (pendingOptions === null) return;
+    if (pendingOptions.allowFreeform) {
+      // Pre-fill the textarea so the novice can edit before sending.
+      setInput(option);
+      setPendingOptions(null);
+    } else {
+      // Strict-pick: send immediately on click.
+      void handleSend(option);
+    }
   };
 
   const isStreaming = status.kind === "streaming";
@@ -288,6 +314,31 @@ function InterviewClient() {
               )}
             </div>
           </div>
+
+          {pendingOptions !== null && (
+            <div className="border-t bg-muted/40 px-6 py-3">
+              <div className="mx-auto w-full max-w-2xl">
+                <p className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">
+                  Pick one{pendingOptions.allowFreeform ? " (or type your own below)" : ""}
+                </p>
+                <div className="flex flex-wrap gap-2" role="group" aria-label="Answer options">
+                  {pendingOptions.options.map((opt) => (
+                    <Button
+                      key={opt}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        handleOptionPick(opt);
+                      }}
+                    >
+                      {opt}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="border-t px-6 py-4">
             <div className="mx-auto flex w-full max-w-2xl gap-2">

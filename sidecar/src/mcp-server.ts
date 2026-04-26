@@ -113,30 +113,81 @@ server.setRequestHandler(ListToolsRequestSchema, () => ({
         required: ["question_id", "answer"],
       },
     },
+    {
+      name: "offer_options",
+      description:
+        "Present the novice with a set of click-to-pick answer options for a closed question (yes/no, single-select from a known list, etc.). The Builder UI renders each option as a button next to the chat input; if allow_freeform is true the novice can also type their own answer. Use this for any question where the answer space is small and well-defined; for open-ended questions (elevator pitch, lists of flows) do not call this tool — the novice will write a paragraph.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          question: {
+            type: "string",
+            description:
+              "The question being asked, in plain language, repeated here for clarity (the same text typically also appears in your chat message).",
+          },
+          options: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "The candidate answers, in the order you want them shown. Keep each option short (under 30 characters when possible).",
+          },
+          allow_freeform: {
+            type: "boolean",
+            description:
+              "Whether the novice may type their own answer alongside picking an option. Default true; only set false when no other answer is sensible (e.g. an enum that the build pipeline depends on).",
+          },
+        },
+        required: ["question", "options"],
+      },
+    },
   ],
 }));
 
+const OfferOptionsArgsSchema = z.object({
+  question: z.string().min(1),
+  options: z.array(z.string().min(1)).min(1).max(20),
+  allow_freeform: z.boolean().optional(),
+});
+
 server.setRequestHandler(CallToolRequestSchema, (request) => {
-  if (request.params.name !== "record_answer") {
-    throw new Error(`unknown tool: ${request.params.name}`);
+  if (request.params.name === "record_answer") {
+    const params = RecordAnswerArgsSchema.parse(request.params.arguments ?? {});
+    const inserted = recordAnswer({
+      projectId: args.projectId,
+      questionId: params.question_id,
+      answerText: params.answer,
+      confidence: params.confidence ?? "tentative",
+      source: "chat",
+      rationale: params.rationale ?? null,
+    });
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Recorded answer ${inserted.id} for ${inserted.questionId} (confidence=${inserted.confidence}).`,
+        },
+      ],
+    };
   }
-  const params = RecordAnswerArgsSchema.parse(request.params.arguments ?? {});
-  const inserted = recordAnswer({
-    projectId: args.projectId,
-    questionId: params.question_id,
-    answerText: params.answer,
-    confidence: params.confidence ?? "tentative",
-    source: "chat",
-    rationale: params.rationale ?? null,
-  });
-  return {
-    content: [
-      {
-        type: "text",
-        text: `Recorded answer ${inserted.id} for ${inserted.questionId} (confidence=${inserted.confidence}).`,
-      },
-    ],
-  };
+
+  if (request.params.name === "offer_options") {
+    // The MCP server's only job for offer_options is to validate the args
+    // and return success — the actual UI surfacing happens in the Tauri
+    // shell's stream-json parser, which sees the tool_use call and emits
+    // an OptionsOffered chunk to the webview. We return a confirmation so
+    // claude knows the options were accepted and can continue its turn.
+    const params = OfferOptionsArgsSchema.parse(request.params.arguments ?? {});
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Offered ${String(params.options.length)} options to the novice; awaiting their pick.`,
+        },
+      ],
+    };
+  }
+
+  throw new Error(`unknown tool: ${request.params.name}`);
 });
 
 const transport = new StdioServerTransport();

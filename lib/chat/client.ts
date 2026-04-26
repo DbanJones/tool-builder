@@ -8,6 +8,12 @@ export type ChatChunk =
   | { kind: "session"; id: string }
   | { kind: "assistant_delta"; text: string }
   | {
+      kind: "options_offered";
+      question: string;
+      options: string[];
+      allow_freeform: boolean;
+    }
+  | {
       kind: "done";
       cost_usd: number | null;
       input_tokens: number | null;
