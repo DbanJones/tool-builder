@@ -32,7 +32,7 @@
     {
       "task_id": "A4b",
       "completed_at": "2026-04-26T09:50:00Z",
-      "commit": "TBD",
+      "commit": "cbb8128",
       "notes": "DB schemas + handlers + audit migration. drizzle-orm 0.45.2, drizzle-kit 0.31.10, better-sqlite3 12.9.0 (native compile clean), ulid 3.0.2 added to sidecar. Schemas at sidecar/src/schema/{projects,audit-log}.ts per spec.md §4 + B1/B3. First migration generated: sidecar/migrations/0000_tricky_killmonger.sql. sidecar/src/db.ts handles connection + drizzle migrate runner; pragma WAL + foreign_keys ON. sidecar/src/handlers/audit.ts implements logEvent + listEvents with Zod-validated params. sidecar/src/index.ts parses --db-path and --migrations-folder CLI args, calls initDb on startup, registers audit.* methods. lib/audit/index.ts now calls sidecarCall('audit.logEvent') directly; src-tauri/src/lib.rs's audit_log_event command deleted. Drift D-003 closed. Integration test tests/integration/sidecar-audit.test.ts spawns the sidecar against a temp DB and proves the round-trip (4 tests, all green). pnpm verify GREEN (28 unit + 5 integration). cargo check GREEN 2.28s. A4c (project_create flow) is the last A4 sub-task."
     },
     {
