@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2, Pause, Play, Rocket, Square } from "lucide-react";
+import { GitBranch, Loader2, Pause, Play, Rocket, Square } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
@@ -14,6 +14,7 @@ import {
   type TargetState,
 } from "@/lib/build-state";
 import { deployToVercel, getVercelToken, isVercelInstalled } from "@/lib/deploy";
+import { exportToGithub, isGhInstalled } from "@/lib/export";
 import { appendDrift, listOpenDrifts, type DriftEvent } from "@/lib/drift";
 import { estimate, formatEta, type EtaResult } from "@/lib/eta";
 import { orchestratorStart, orchestratorStop, type OrchestratorEvent } from "@/lib/orchestrator";
@@ -78,6 +79,12 @@ function BuildClient() {
   const [recoveredFromCrash, setRecoveredFromCrash] = useState(false);
   const [deployModalOpen, setDeployModalOpen] = useState(false);
   const [deployStatus, setDeployStatus] = useState<
+    | { kind: "idle" }
+    | { kind: "running" }
+    | { kind: "success"; url: string }
+    | { kind: "error"; message: string }
+  >({ kind: "idle" });
+  const [exportStatus, setExportStatus] = useState<
     | { kind: "idle" }
     | { kind: "running" }
     | { kind: "success"; url: string }
@@ -338,6 +345,35 @@ function BuildClient() {
     );
   }, [project]);
 
+  // Push to GitHub (Flow I AC8). Auth handled by `gh auth login`; we
+  // surface a clear error if the CLI isn't installed or not authenticated.
+  const exportToGithubFlow = useCallback(async (): Promise<void> => {
+    if (!project) return;
+    const installed = await isGhInstalled();
+    if (installed.isErr() || !installed.value) {
+      setExportStatus({
+        kind: "error",
+        message: "gh CLI not found on PATH. Install it from cli.github.com and run `gh auth login`.",
+      });
+      return;
+    }
+    setExportStatus({ kind: "running" });
+    const r = await exportToGithub({
+      projectPath: project.path,
+      projectId: project.id,
+      repoName: project.name,
+    });
+    r.match(
+      (result) => {
+        setExportStatus({ kind: "success", url: result.repoUrl });
+        if (typeof navigator !== "undefined" && navigator.clipboard) {
+          void navigator.clipboard.writeText(result.repoUrl);
+        }
+      },
+      (e) => setExportStatus({ kind: "error", message: e.message }),
+    );
+  }, [project]);
+
   // The in-progress turn's elapsed time (counted toward past_p90 only).
   // For idle/finished states there's no in-flight turn, so 0 is correct
   // (it can never exceed P90).
@@ -415,6 +451,20 @@ function BuildClient() {
             )}
             Deploy
           </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void exportToGithubFlow()}
+            disabled={exportStatus.kind === "running"}
+            title="Push the project folder to a private GitHub repo"
+          >
+            {exportStatus.kind === "running" ? (
+              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+            ) : (
+              <GitBranch className="mr-1 h-3 w-3" />
+            )}
+            Push to GitHub
+          </Button>
           {process.env.NODE_ENV !== "production" ? (
             <Button
               size="sm"
@@ -485,6 +535,23 @@ function BuildClient() {
             <Alert variant="destructive" className="mx-4 mt-3 mb-1">
               <AlertTitle>Deploy failed</AlertTitle>
               <AlertDescription>{deployStatus.message}</AlertDescription>
+            </Alert>
+          ) : null}
+          {exportStatus.kind === "success" ? (
+            <Alert className="mx-4 mt-3 mb-1">
+              <AlertTitle>Pushed to GitHub</AlertTitle>
+              <AlertDescription>
+                Copied to clipboard:{" "}
+                <a href={exportStatus.url} target="_blank" rel="noopener noreferrer" className="underline">
+                  {exportStatus.url}
+                </a>
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          {exportStatus.kind === "error" ? (
+            <Alert variant="destructive" className="mx-4 mt-3 mb-1">
+              <AlertTitle>GitHub push failed</AlertTitle>
+              <AlertDescription>{exportStatus.message}</AlertDescription>
             </Alert>
           ) : null}
           {recoveredFromCrash ? (
