@@ -98,6 +98,70 @@ fn cli_is_authenticated() -> Result<bool, String> {
 // (see ADR-0004 + drift D-003 closed at A4b). The previous `audit_log_event`
 // Tauri command has been removed; lib/audit/index.ts calls sidecarCall directly.
 
+// File ingestion save (C8). Decodes a base64-encoded blob from the webview
+// and writes it to {project_path}/inputs/{name}, returning the absolute
+// path. Per spec.md §6 size limits (B28): 25 MB documents, 10 MB images,
+// 5 MB schemas, 100 MB data samples. Enforced as a single 25 MB cap here
+// and refined per-kind in a later pass when the UI knows the kind.
+
+const MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
+
+#[tauri::command]
+fn file_save_uploaded(
+  project_path: String,
+  name: String,
+  content_base64: String,
+) -> Result<String, String> {
+  use base64::Engine;
+
+  // Validate name: no path separators, no leading dot, no parent traversal.
+  if name.contains('/') || name.contains('\\') || name.starts_with('.') || name == ".." {
+    return Err(format!("file_save_uploaded: invalid file name '{name}'"));
+  }
+  if name.is_empty() || name.len() > 255 {
+    return Err("file_save_uploaded: file name must be 1-255 characters".to_string());
+  }
+
+  let bytes = base64::engine::general_purpose::STANDARD
+    .decode(content_base64.as_bytes())
+    .map_err(|e| format!("file_save_uploaded: base64 decode failed: {e}"))?;
+  if bytes.len() > MAX_UPLOAD_BYTES {
+    return Err(format!(
+      "file_save_uploaded: file too large ({} bytes, max {})",
+      bytes.len(),
+      MAX_UPLOAD_BYTES
+    ));
+  }
+
+  let project_root = expand_tilde(&project_path);
+  if !project_root.exists() {
+    return Err(format!(
+      "file_save_uploaded: project folder not found: {}",
+      project_root.display()
+    ));
+  }
+
+  let inputs_dir = project_root.join("inputs");
+  fs::create_dir_all(&inputs_dir)
+    .map_err(|e| format!("file_save_uploaded: create inputs/: {e}"))?;
+
+  let target = inputs_dir.join(&name);
+  // Refuse to overwrite (caller can choose to send a renamed copy if they want).
+  if target.exists() {
+    return Err(format!(
+      "file_save_uploaded: '{}' already exists; rename the file or remove the existing copy first",
+      target.display()
+    ));
+  }
+
+  fs::write(&target, &bytes).map_err(|e| format!("file_save_uploaded: write: {e}"))?;
+
+  target
+    .canonicalize()
+    .map(|p| p.display().to_string())
+    .map_err(|e| format!("file_save_uploaded: canonicalise: {e}"))
+}
+
 // Project creation file-system work per build-order.md A4c and Flow B AC1-AC3.
 // The DB insert + audit row are handled by the sidecar (`projects.create`); the
 // webview orchestrates the two halves via lib/project/index.ts.
@@ -259,6 +323,7 @@ pub fn run() {
       cli_is_installed,
       cli_is_authenticated,
       project_create_folder,
+      file_save_uploaded,
       chat_send,
       sidecar_rpc
     ])

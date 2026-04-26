@@ -4,6 +4,14 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 
 ## 2026-04-25
 
+### D-013 — Chat-message + answer-merging side effects + PII confirm modal deferred from C8
+- **Drift type**: scope drift (deferral, against the C8 plan in [docs/build-order.md](build-order.md) section 14.4.2: "after a file lands, ingest it... post a chat message confirming what we extracted; pause-and-ask if PII detected").
+- **Discovered at**: C8.
+- **Cause**: build-order's C8 covers four loosely-coupled responsibilities: (1) save the file to `{project}/inputs/`, (2) dispatch to the right sidecar handler by kind and run the PII guard, (3) inject a synthetic chat message ("I see you uploaded X — should I proceed on that basis?") that the orchestrator can answer-merge into the spec, (4) render a PII confirmation modal blocking next-send when the guard flags content. Items (3) and (4) each require new wiring: (3) needs a "system message injection" path through `chat_send` plus a way for the interview's `record_answer` flow to consume the file's summary as if the novice had typed it; (4) needs a Radix Dialog with focus trap + masked-hits preview + "send anyway / replace" actions. Both add real surface area beyond the C2-C7 pipeline already shipped.
+- **Resolution**: drift accepted. C8 ships items (1) and (2): `lib/files/ingest.ts::ingestFile` saves via the new `file_save_uploaded` Tauri command, dispatches by `IngestedFileKind`, runs `files.guardPii` on extracted text, and returns `{ summary, hasPiiWarning, storedPath }` to the file panel. The summary + PII warning render inline in the file row (status icon flips to a yellow `AlertTriangle` when `hasPiiWarning === true`). The file panel surfaces what was extracted; the chat-message injection and modal-confirm flows land later.
+- **Commit**: TBD (C8 commit).
+- **Follow-up**: Phase D ticket adds (a) a `chat.injectSystemMessage` path that posts a "I see you uploaded {name}: {summary}. Proceed on that basis?" message into the interview turn list, route the novice's yes/no through `record_answer` so the file's content lands in the spec; (b) a `<PiiConfirmDialog>` Radix Dialog gated on `files.some(f => f.hasPiiWarning)` that blocks the next chat send until the novice confirms, with a "redact and send" path that swaps in the synthetic-redacted text returned by `files.guardPii`.
+
 ### D-001 — `eslint-plugin-neverthrow` `must-use-result` enforcement gap
 - **Drift type**: silent assumption drift (against [CLAUDE.md](../CLAUDE.md) binding rule indirectly via [rules/03-code.md](../rules/03-code.md) C11).
 - **Discovered at**: A2 (keychain wrapper) when wiring the rule for the first Result-returning module.

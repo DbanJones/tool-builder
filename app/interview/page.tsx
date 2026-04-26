@@ -7,6 +7,7 @@ import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { chatSend, type ChatChunk } from "@/lib/chat/client";
+import { ingestFile } from "@/lib/files/ingest";
 import type { IngestedFile } from "@/lib/files/types";
 import type { QuestionId } from "@/lib/interview/library";
 import { checkReadiness, type ReadinessResult } from "@/lib/interview/readiness";
@@ -424,8 +425,55 @@ function InterviewClient() {
 
           <FilePanel
             files={files}
-            onDrop={(added) => {
+            onDrop={(added, rawFiles) => {
               setFiles((prev) => [...prev, ...added]);
+              if (!project) return;
+              // Kick off ingest per file in parallel; update each row's
+              // status as the orchestrator progresses.
+              for (let i = 0; i < added.length; i++) {
+                const ingested = added[i];
+                const raw = rawFiles[i];
+                if (ingested === undefined || raw === undefined) continue;
+                const fileId = ingested.id;
+                setFiles((prev) =>
+                  prev.map((f) =>
+                    f.id === fileId
+                      ? { ...f, status: "processing" as const, statusMessage: "Reading..." }
+                      : f,
+                  ),
+                );
+                void (async () => {
+                  const r = await ingestFile(raw, project.path);
+                  r.match(
+                    (result) => {
+                      setFiles((prev) =>
+                        prev.map((f) => {
+                          if (f.id !== fileId) return f;
+                          // Strip statusMessage (exactOptionalPropertyTypes
+                          // forbids setting an optional field to undefined).
+                          const rest: IngestedFile = { ...f };
+                          delete (rest as { statusMessage?: string }).statusMessage;
+                          return {
+                            ...rest,
+                            status: "done" as const,
+                            summary: result.summary,
+                            hasPiiWarning: result.hasPiiWarning,
+                          };
+                        }),
+                      );
+                    },
+                    (error) => {
+                      setFiles((prev) =>
+                        prev.map((f) =>
+                          f.id === fileId
+                            ? { ...f, status: "error" as const, statusMessage: error.message }
+                            : f,
+                        ),
+                      );
+                    },
+                  );
+                })();
+              }
             }}
           />
         </section>

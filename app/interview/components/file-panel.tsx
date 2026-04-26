@@ -15,7 +15,10 @@ import { classifyByName, type IngestedFile, type IngestedFileKind } from "@/lib/
 
 interface FilePanelProps {
   files: readonly IngestedFile[];
-  onDrop: (newFiles: readonly IngestedFile[]) => void;
+  // The raw File[] is passed alongside so the parent can stream bytes through
+  // the ingest orchestrator (which needs File.arrayBuffer for the base64 hop).
+  // The two arrays are index-aligned: rawFiles[i] is the source of newFiles[i].
+  onDrop: (newFiles: readonly IngestedFile[], rawFiles: readonly File[]) => void;
 }
 
 function makeId(): string {
@@ -83,7 +86,7 @@ export function FilePanel({ files, onDrop }: FilePanelProps) {
       status: "pending",
       droppedAt: now,
     }));
-    onDrop(newFiles);
+    onDrop(newFiles, items);
   };
 
   return (
