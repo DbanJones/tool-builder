@@ -13,8 +13,11 @@ import {
   type HistoryActionEntry,
   type TargetState,
 } from "@/lib/build-state";
+import { appendDrift, listOpenDrifts, type DriftEvent } from "@/lib/drift";
 import { estimate, formatEta, type EtaResult } from "@/lib/eta";
 import { orchestratorStart, type OrchestratorEvent } from "@/lib/orchestrator";
+
+import { DriftBanner } from "./components/drift-banner";
 import { translate } from "@/lib/orchestrator/translate";
 import type { Project } from "@/lib/project";
 import { sidecarCall } from "@/lib/sidecar/client";
@@ -67,6 +70,7 @@ function BuildClient() {
   const [actions, setActions] = useState<readonly HistoryActionEntry[]>([]);
   const [status, setStatus] = useState<DashboardStatus>({ kind: "idle" });
   const [costSum, setCostSum] = useState<CostSum | null>(null);
+  const [openDrifts, setOpenDrifts] = useState<readonly DriftEvent[]>([]);
   // Past per-turn elapsed durations (ms). Updated on each `done` event;
   // feeds the ETA estimator. v1 granularity is per-turn; D5 swaps to
   // per-task-id when phase markers are wired (drift D-014).
@@ -91,13 +95,13 @@ function BuildClient() {
             return;
           }
           setProject(p);
-          void hydrateBuildArtefacts(p.path);
+          void hydrateBuildArtefacts(p.id, p.path);
         },
         (e) => setLoadError(e.message),
       );
     })();
 
-    async function hydrateBuildArtefacts(projectPath: string): Promise<void> {
+    async function hydrateBuildArtefacts(pid: string, projectPath: string): Promise<void> {
       const stateResult = await readTargetState(projectPath);
       if (cancelled) return;
       stateResult.match(
@@ -112,12 +116,21 @@ function BuildClient() {
         (e) => setLoadError(`history.log: ${e.message}`),
       );
 
-      const costResult = await sidecarCall<CostSum>("costs.sumByProject", { projectId });
+      const costResult = await sidecarCall<CostSum>("costs.sumByProject", { projectId: pid });
       if (cancelled) return;
       costResult.match(
         (sum) => setCostSum(sum),
         () => {
           /* non-fatal — meter just shows "$0.00" */
+        },
+      );
+
+      const driftResult = await listOpenDrifts(pid);
+      if (cancelled) return;
+      driftResult.match(
+        (events) => setOpenDrifts(events),
+        () => {
+          /* non-fatal — banner just doesn't render */
         },
       );
     }
@@ -153,8 +166,9 @@ function BuildClient() {
             turnStartRef.current = null;
           }
           // Persist the turn's cost row for the meter, then re-read the
-          // aggregate. Orchestrator currently spawns claude with --model
-          // sonnet; revisit when we wire per-task model selection.
+          // aggregate AND re-poll open drifts (claude may have appended
+          // some during the turn via its own /recheck pass — D5b).
+          // Orchestrator currently spawns claude with --model sonnet.
           void (async () => {
             await sidecarCall("costs.append", {
               projectId: project.id,
@@ -168,6 +182,11 @@ function BuildClient() {
             });
             sumRes.match(
               (sum) => setCostSum(sum),
+              () => undefined,
+            );
+            const driftRes = await listOpenDrifts(project.id);
+            driftRes.match(
+              (events) => setOpenDrifts(events),
               () => undefined,
             );
           })();
@@ -262,6 +281,28 @@ function BuildClient() {
           <Button size="sm" variant="outline" disabled title="D6: stop">
             <Square className="h-3 w-3" />
           </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            title="Inject a test drift event (D5 dev trigger; removed when D5b wires the report_drift MCP tool)"
+            onClick={() => {
+              if (!project) return;
+              void (async () => {
+                const r = await appendDrift({
+                  projectId: project.id,
+                  phase: targetState?.phase ?? "phase-1",
+                  kind: "implementation",
+                  description: "Test drift injected from the dashboard for D5 verification",
+                });
+                r.match(
+                  (created) => setOpenDrifts((prev) => [...prev, created]),
+                  () => undefined,
+                );
+              })();
+            }}
+          >
+            Inject drift
+          </Button>
         </div>
       </header>
 
@@ -293,6 +334,16 @@ function BuildClient() {
         </aside>
 
         <section className="flex min-h-0 flex-col">
+          {openDrifts.length > 0 && openDrifts[0] ? (
+            <DriftBanner
+              event={openDrifts[0]}
+              projectPath={project.path}
+              totalOpen={openDrifts.length}
+              onResolved={(resolved) =>
+                setOpenDrifts((prev) => prev.filter((d) => d.id !== resolved.id))
+              }
+            />
+          ) : null}
           <div className="border-b px-4 py-2">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               Live tail · {actions.length} action{actions.length === 1 ? "" : "s"}

@@ -168,6 +168,101 @@ fn read_history_log_tail(project_path: String, limit: usize) -> Result<Vec<Strin
   Ok(lines)
 }
 
+// Drift-log writer (D5). Appends a markdown block to the novice's
+// {project}/docs/drift-log.md, creating the file (with the same header the
+// Builder's own drift-log uses) if it doesn't yet exist. Path-sandboxed:
+// the webview supplies project_path; we always write to {project}/docs/.
+
+const DRIFT_LOG_HEADER: &str = "# Drift log\n\nPer rules/07-self-check.md SC26: every correction or accepted drift is logged here with date, AC id or scope item, drift type, resolution, and commit hash. This is the audit trail.\n\n";
+
+#[tauri::command]
+fn append_drift_log_line(
+  project_path: String,
+  drift_id: String,
+  kind: String,
+  description: String,
+  resolution: String,
+  commit_hash: Option<String>,
+) -> Result<String, String> {
+  let project_root = expand_tilde(&project_path);
+  if !project_root.exists() {
+    return Err(format!(
+      "append_drift_log_line: project folder not found: {}",
+      project_root.display()
+    ));
+  }
+  let docs_dir = project_root.join("docs");
+  fs::create_dir_all(&docs_dir).map_err(|e| format!("create docs/: {e}"))?;
+  let log_path = docs_dir.join("drift-log.md");
+
+  // Seed the file with the same header the Builder's own drift-log uses
+  // when it doesn't yet exist.
+  if !log_path.exists() {
+    fs::write(&log_path, DRIFT_LOG_HEADER).map_err(|e| format!("seed drift-log: {e}"))?;
+  }
+
+  let now = chrono_now_iso8601();
+  let commit_line = commit_hash
+    .as_deref()
+    .filter(|c| !c.trim().is_empty())
+    .map(|c| format!("- **Commit**: {c}\n"))
+    .unwrap_or_default();
+  let block = format!(
+    "\n### {drift_id} — {description}\n- **Drift type**: {kind}.\n- **Resolved**: {now}.\n- **Resolution**: {resolution}.\n{commit_line}"
+  );
+
+  let mut existing = fs::read_to_string(&log_path).map_err(|e| format!("read drift-log: {e}"))?;
+  existing.push_str(&block);
+  fs::write(&log_path, existing).map_err(|e| format!("write drift-log: {e}"))?;
+
+  log_path
+    .canonicalize()
+    .map(|p| p.display().to_string())
+    .map_err(|e| format!("canonicalise: {e}"))
+}
+
+// Lightweight ISO 8601 timestamp without a chrono dep — std::time only.
+fn chrono_now_iso8601() -> String {
+  use std::time::{SystemTime, UNIX_EPOCH};
+  let secs = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .map(|d| d.as_secs())
+    .unwrap_or(0);
+  // Use a fixed-format date; second-precision is fine for an audit line.
+  // We avoid pulling chrono just for this.
+  format!("{}Z", iso8601_from_unix_secs(secs))
+}
+
+fn iso8601_from_unix_secs(secs: u64) -> String {
+  // Days since 1970-01-01 (Unix epoch)
+  let days = (secs / 86400) as i64;
+  let rem = secs % 86400;
+  let hour = rem / 3600;
+  let min = (rem % 3600) / 60;
+  let sec = rem % 60;
+  let (year, month, day) = civil_from_days(days);
+  format!(
+    "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
+    year, month, day, hour, min, sec
+  )
+}
+
+// Howard Hinnant's date algorithm (public domain) — converts days since
+// 1970-01-01 (Gregorian) to (year, month, day).
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+  let z = z + 719468;
+  let era = if z >= 0 { z / 146097 } else { (z - 146096) / 146097 };
+  let doe = (z - era * 146097) as u64;
+  let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  let y = yoe as i64 + era * 400;
+  let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  let mp = (5 * doy + 2) / 153;
+  let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+  let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+  let y = if m <= 2 { y + 1 } else { y };
+  (y, m, d)
+}
+
 // File ingestion save (C8). Decodes a base64-encoded blob from the webview
 // and writes it to {project_path}/inputs/{name}, returning the absolute
 // path. Per spec.md §6 size limits (B28): 25 MB documents, 10 MB images,
@@ -396,6 +491,7 @@ pub fn run() {
       file_save_uploaded,
       read_target_state,
       read_history_log_tail,
+      append_drift_log_line,
       chat_send,
       orchestrator_start,
       sidecar_rpc
