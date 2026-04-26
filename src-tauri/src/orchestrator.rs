@@ -216,13 +216,26 @@ pub async fn orchestrator_start(
   // Subsequent turns reuse the same model via --resume.
   command.arg("--model").arg("sonnet");
 
-  // Auto-accept file edits + tool calls within the project folder. Without
-  // this the spawned claude prompts the user (via its own permission UI)
-  // for every Edit/Write/Bash call, which is unworkable for an autonomous
-  // build. cwd is already path-sandboxed to the novice's project folder
-  // (the only place the build subprocess should be writing); the claude
-  // CLI's own per-tool guards still apply for things outside cwd.
-  command.arg("--permission-mode").arg("acceptEdits");
+  // Bypass Claude Code's interactive permission prompts. The orchestrator
+  // is the trust boundary: the novice explicitly clicked Start build,
+  // there is no UI surface to approve per-tool prompts in our headless
+  // setup, and `acceptEdits` only auto-approves writes WITHIN cwd — any
+  // Bash command or write to a sibling folder still hangs waiting for an
+  // approval that can never come.
+  //
+  // Risks of bypassPermissions are scoped by:
+  //   - cwd is set to the novice's chosen project folder (the agent
+  //     naturally operates here).
+  //   - The novice can hit Stop in the dashboard to kill the subprocess.
+  //   - The user already had to opt in by creating a project + clicking
+  //     Start build; the Builder is single-user and runs locally.
+  command.arg("--permission-mode").arg("bypassPermissions");
+
+  // Tell claude explicitly what its project root is. With bypassPermissions
+  // this is mostly informational (no permission gating), but it surfaces
+  // the right path in claude's own self-reporting + lets it know which
+  // directory to anchor relative paths against.
+  command.arg("--add-dir").arg(&cwd);
 
   if let Some(sid) = &session_id {
     command.arg("--resume").arg(sid);
