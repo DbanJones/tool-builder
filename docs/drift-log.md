@@ -30,6 +30,17 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 - **Closure commit**: cbb8128 (A4b commit).
 - **Note**: O8 also asks for `.builder/builder.log` daily rotation. The audit destination is now the DB; the application log file (Tauri's `tauri-plugin-log` output) is a separate concern and remains at the OS log dir for now. Tracked separately if/when needed.
 
+### D-010 — Image vision integration tests deferred from C3 (mock-server infra needed)
+- **Drift type**: scope drift (deferral, against the C3 plan in [docs/build-order.md](build-order.md): "round-trip a fixture wireframe; summary mentions the visible elements").
+- **Discovered at**: C3.
+- **Cause**: the `summariseImage` handler is a three-tier fallback (claude CLI -> Anthropic Messages API -> DeepSeek API per the human's 2026-04-26 direction). Testing the CLI tier in isolation needs a fixture `claude` binary on a per-test PATH that returns a controllable JSON response; testing the API tiers cleanly without spending real money or leaking keys needs a local HTTP mock server that pretends to be `api.anthropic.com` and `api.deepseek.com`. Both are doable but each is its own initiative — out of scope for C3 alongside writing the handler itself.
+- **Resolution**: drift accepted. C3 ships:
+  - `summariseImage` handler with all three tiers implemented and registered in the sidecar (`files.summariseImage`).
+  - Clear error path when all tiers fail, telling the user which env vars to set.
+  - Manual verification by the user: drop an image into the file panel (once C8 wires the upload flow), check that a summary comes back via whichever tier their machine has.
+- **Commit**: TBD (C3 commit).
+- **Follow-up**: Phase D ticket adds (a) a fixture `claude` binary that returns a fixed JSON response, used by Vitest with PATH override; (b) a Vitest setup that intercepts `fetch` to api.anthropic.com / api.deepseek.com and returns canned responses; then 3 tests covering each tier's success path plus the all-fail error message.
+
 ### D-009 — DOCX + PDF extraction integration tests deferred from C2 (binary fixtures missing)
 - **Drift type**: scope drift (deferral, against the C2 plan in [docs/build-order.md](build-order.md): "round-trip a fixture PRD; extracted text contains expected paragraphs").
 - **Discovered at**: C2.

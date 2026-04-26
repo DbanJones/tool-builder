@@ -6,14 +6,14 @@
   "phase_a_completed_at": "2026-04-26T10:30:00Z",
   "phase_b_completed_at": "2026-04-26T11:45:00Z",
   "tasks_total_in_phase": 8,
-  "tasks_completed_in_phase": 2,
+  "tasks_completed_in_phase": 3,
   "current_task": null,
-  "next_task": "C3",
+  "next_task": "C4",
   "drift": {
     "blocker_count": 0,
-    "non_blocker_count": 8,
-    "last_check_at": "2026-04-26T12:05:00Z",
-    "notes": "Open drift in docs/drift-log.md: D-001, D-002, D-004, D-005, D-006, D-007, D-008, D-009 (DOCX + PDF extraction integration tests deferred until binary fixtures sourced). Closed: D-003. AC6 audit gap closed at B6.1."
+    "non_blocker_count": 9,
+    "last_check_at": "2026-04-26T12:15:00Z",
+    "notes": "Open drift in docs/drift-log.md: D-001, D-002, D-004, D-005, D-006, D-007, D-008, D-009, D-010 (image vision integration tests deferred; mock-server infra needed). Closed: D-003."
   },
   "tests": { "passing": 123, "failing": 0, "skipped": 0, "breakdown": "95 TS unit + 17 TS integration + 11 Rust unit" },
   "cost_so_far_usd": 0.0,
@@ -30,6 +30,12 @@
       "completed_at": "2026-04-25T18:30:00Z",
       "commit": "06df4c4",
       "notes": "OS keychain wrapper. keyring-rs 3.6.3 in src-tauri (per ADR-0003), exposed via three Tauri IPC commands (keychain_get/set/delete). lib/keychain/index.ts wraps invoke() in ResultAsync<T, KeychainError>. 8 unit tests pass with mocked invoke. cargo check green in 43.81s (first build). Real-keychain integration test deferred to a Phase-D follow-up that adds macOS+Windows CI runners."
+    },
+    {
+      "task_id": "C3",
+      "completed_at": "2026-04-26T12:15:00Z",
+      "commit": "TBD",
+      "notes": "Image vision (PNG/JPG/WEBP/GIF) per build-order.md C3 + human's 2026-04-26 fallback direction. New sidecar handler files.summariseImage with three tiers: (1) claude CLI via @path attachment syntax; (2) Anthropic Messages API with image content block (if ANTHROPIC_API_KEY env var set); (3) DeepSeek API with OpenAI-compatible image_url block (if DEEPSEEK_API_KEY env var set). Tier 1 preferred because it inherits the user's existing claude auth. Returns {kind, summary, via, sizeBytes} where `via` records which tier produced the answer. Clear error path when all tiers fail listing each tier's failure. 60s timeout per tier. Drift D-010: integration tests deferred (need fixture claude binary + fetch interception infra). Manual verification when C8 wires the upload flow."
     },
     {
       "task_id": "C2",
