@@ -8,19 +8,25 @@
   "phase_c_completed_at": "2026-04-26T17:00:00Z",
   "phase_d_completed_at": "2026-04-26T19:10:00Z",
   "tasks_total_in_phase": 6,
-  "tasks_completed_in_phase": 5,
+  "tasks_completed_in_phase": 6,
   "current_task": null,
-  "next_task": "E6",
+  "next_task": "PHASE_E_BOUNDARY",
   "drift": {
     "blocker_count": 0,
-    "non_blocker_count": 18,
+    "non_blocker_count": 19,
     "last_check_at": "2026-04-26T19:10:00Z",
-    "notes": "Open drift: D-001, D-002, D-004 to D-019 (18). Closed: D-003. Phase D boundary PASSED at 19:10:00Z. E3 wired with placeholder pubkey (D-017); E4 ships optional spend cap (D-018); E5 ships consent capture, SDK integration deferred (D-019)."
+    "notes": "Open drift: D-001, D-002, D-004 to D-020 (19). Closed: D-003. Phase D boundary PASSED at 19:10:00Z. E3/E5 wiring shipped with placeholder/SDK-deferred halves (D-017, D-019); E4 ships optional spend cap (D-018); E6 marketing site shipped with placeholder downloads (D-020). Phase E ready for boundary check."
   },
   "tests": { "passing": 350, "failing": 0, "skipped": 0, "breakdown": "246 TS unit + 60 TS integration + 44 Rust unit" },
   "cost_so_far_usd": 0.0,
   "tokens": { "input": 0, "output": 0 },
   "history": [
+    {
+      "task_id": "E6",
+      "completed_at": "2026-04-26T20:01:00Z",
+      "commit": "08cce5a",
+      "notes": "Marketing site per build-order E6. Real download links + screen recording deferred per drift D-020 (depend on Phase E0 signed installers + a real demo capture). New apps/marketing/ — minimal Next.js 15 + React 19 + Tailwind sibling project; NOT a pnpm workspace member; install + run via `pnpm install && pnpm dev` inside the dir; serves on port 3001 to avoid clashing with the root Builder dev server. app/page.tsx: hero (title + subtitle) + 90s-demo placeholder block + three download cards (macOS/Windows/Linux) gated on DOWNLOAD_LINKS_PENDING flag (currently true; flip when E0 ships). Three 'what you get' feature cards. Footer with GitHub link. Root tsconfig.json + eslint.config.js excludes apps/marketing so the Builder's strict mode doesn't trip on the marketing site's looser settings. pnpm verify GREEN (246 unit + 60 integration + 44 Rust = 350; no new tests — marketing is presentational). Phase E: 6/6 — boundary self-check next."
+    },
     {
       "task_id": "E5",
       "completed_at": "2026-04-26T19:55:00Z",

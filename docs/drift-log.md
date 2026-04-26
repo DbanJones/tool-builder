@@ -12,7 +12,7 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
   - `apps/marketing/` — minimal Next.js 15 + React 19 + Tailwind sibling project (NOT a pnpm workspace member; runs via `pnpm install && pnpm dev` from inside the dir; serves on port 3001 to avoid clashing with the root Builder dev server).
   - `apps/marketing/app/page.tsx` — hero + 90s-demo placeholder block + three download cards (macOS/Windows/Linux) gated on a `DOWNLOAD_LINKS_PENDING` flag (currently true). When E0 ships, flip the flag and set the URLs.
   - Root `tsconfig.json` excludes `apps/marketing` so the Builder's strict typecheck doesn't trip on the marketing site's looser settings; ESLint config does the same.
-- **Commit**: TBD (E6 commit).
+- **Commit**: 08cce5a (E6 commit).
 - **Follow-up**:
   1. After E0: replace the placeholder download URLs with real signed-installer URLs and flip `DOWNLOAD_LINKS_PENDING = false`.
   2. After a real build run: capture a 90s screen recording (Loom / OBS), put `demo.mp4` in `apps/marketing/public/`, and set `SCREEN_RECORDING_URL = "/demo.mp4"`.
