@@ -4,6 +4,26 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 
 ## 2026-04-25
 
+### D-016 — Live-tail latency budget (Flow F AC2 < 200ms) is unverified
+- **Drift type**: nfr drift (verification gap, against [spec.md](../spec.md) §6 + Flow F AC2).
+- **Discovered at**: Phase D boundary self-check.
+- **Cause**: the dashboard achieves sub-200ms perceived latency via optimistic rendering (the live-tail row appears immediately on the orchestrator's `tool_use` event; the sidecar's `actions.append` write happens in parallel and is not awaited). No Vitest performance harness asserts this.
+- **Resolution**: drift accepted. The design path is correct (the slow part — file write — is off the critical path) but the budget is unverified.
+- **Commit**: TBD (Phase D boundary commit).
+- **Follow-up**: Phase E ticket adds a Vitest perf harness that fires N synthetic orchestrator events and asserts the time from event arrival to `actions.length` increment is < 200ms p95.
+
+### D-015 — D5/D6 follow-ups: orchestrator-side report_drift + phase_complete MCP tools, echo-back modal, "task N" recovery suffix
+- **Drift type**: scope drift (deferrals, against [docs/build-order.md](build-order.md) D5 second bullet + spec.md Flows E AC1 / F AC5 / H AC4).
+- **Discovered at**: Phase D boundary self-check.
+- **Cause**: D5 originally scoped to ship the drift banner UI + the drift_events table + drift-log writer (the load-bearing AC) as a single < 400-line slice (binding rule 9). The orchestrator-side automation (report_drift MCP tool + phase_complete marker) was deferred so the slice fit. Same shape applies to Flow E AC1's echo-back modal (deferred under "phase boundary modal" wording) and Flow H AC4's "task N" suffix (depends on F AC5's phase markers, so can't ship before them).
+- **Resolution**: drift accepted. The dev "Inject drift" button (now NODE_ENV-guarded as of this audit) gives us manual AC coverage. Phase E follow-up wires:
+  - A new Builder MCP server `builder-orchestrator` exposing `report_drift({phase, kind, description})` and `phase_complete({phase, summary})` tools.
+  - The orchestrator passes `--mcp-config` for this server when spawning claude.
+  - The kickoff prompt instructs claude to call `phase_complete` at phase boundaries and `report_drift` whenever its `/recheck` finds blocker drift.
+  - The dashboard shows the echo-back modal on `phase_complete`; the recovered-from-crash banner gains the "resumed at task N" suffix using the latest `phase` from state.json.
+- **Commit**: TBD (Phase D boundary commit).
+- **Follow-up**: Phase E ticket per the above.
+
 ### D-014 — D4 ETA observed at TURN granularity, not per-task
 - **Drift type**: implementation drift (against [docs/build-order.md](build-order.md) D4: "kit section 14.5.3 estimator with median, P90, online updates").
 - **Discovered at**: D4.

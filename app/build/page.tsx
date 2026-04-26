@@ -354,28 +354,30 @@ function BuildClient() {
           >
             <Square className="h-3 w-3" />
           </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            title="Inject a test drift event (D5 dev trigger; removed when D5b wires the report_drift MCP tool)"
-            onClick={() => {
-              if (!project) return;
-              void (async () => {
-                const r = await appendDrift({
-                  projectId: project.id,
-                  phase: targetState?.phase ?? "phase-1",
-                  kind: "implementation",
-                  description: "Test drift injected from the dashboard for D5 verification",
-                });
-                r.match(
-                  (created) => setOpenDrifts((prev) => [...prev, created]),
-                  () => undefined,
-                );
-              })();
-            }}
-          >
-            Inject drift
-          </Button>
+          {process.env.NODE_ENV !== "production" ? (
+            <Button
+              size="sm"
+              variant="outline"
+              title="DEV ONLY: inject a test drift event (D5 trigger; removed when D5b wires the report_drift MCP tool)"
+              onClick={() => {
+                if (!project) return;
+                void (async () => {
+                  const r = await appendDrift({
+                    projectId: project.id,
+                    phase: targetState?.phase ?? "phase-1",
+                    kind: "implementation",
+                    description: "Test drift injected from the dashboard for D5 verification",
+                  });
+                  r.match(
+                    (created) => setOpenDrifts((prev) => [...prev, created]),
+                    () => undefined,
+                  );
+                })();
+              }}
+            >
+              Inject drift (dev)
+            </Button>
+          ) : null}
         </div>
       </header>
 
