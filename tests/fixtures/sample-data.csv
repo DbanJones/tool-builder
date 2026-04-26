@@ -1,0 +1,6 @@
+id,email,signed_up_at,credits,is_admin,display_name
+01ULID0001,alice@example.com,2025-01-04,12,false,Alice
+01ULID0002,bob@example.com,2025-01-05,7,false,Bob
+01ULID0003,carol@example.com,2025-01-06,42,true,Carol
+01ULID0004,dan@example.com,2025-01-07,0,false,
+01ULID0005,erin@example.com,2025-01-08,19,false,Erin

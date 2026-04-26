@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
+import { parse as parseCsv } from "csv-parse/sync";
 import * as yaml from "js-yaml";
 import sqlParserModule from "node-sql-parser";
 import { extractText as unpdfExtract } from "unpdf";
@@ -561,5 +562,225 @@ export async function parseSchema(rawParams: unknown): Promise<ParseSchemaResult
 
   throw new Error(
     `parseSchema: unsupported extension '.${ext}' (supported: sql, json, yaml, yml).`,
+  );
+}
+
+// ---------- Data sample (C5) ----------
+//
+// Reads the first SAMPLE_ROW_LIMIT rows of a CSV or array-of-objects JSON,
+// infers a column type per field, and emits a candidate Drizzle SQLite
+// schema as a TS snippet. SQL-dump support (extracting INSERT data + the
+// embedded CREATE TABLE) is deferred — drift D-011 — pointing the user
+// at parseSchema for the schema half in the meantime.
+
+const ParseDataSampleParamsSchema = z.object({
+  path: z.string().min(1),
+});
+
+const SAMPLE_ROW_LIMIT = 100;
+
+export type DataInferredType =
+  | "integer"
+  | "number"
+  | "boolean"
+  | "date"
+  | "text"
+  | "unknown";
+
+export interface DataColumnSummary {
+  name: string;
+  inferredType: DataInferredType;
+  nonNullCount: number;
+  nullCount: number;
+  examples: string[];
+}
+
+export interface ParseDataSampleResult {
+  kind: IngestedFileKindLite;
+  format: "csv" | "json-data";
+  totalRowsObserved: number;
+  sampledRows: number;
+  columns: DataColumnSummary[];
+  /** A Drizzle TS snippet the chat can show to the novice. */
+  candidateDrizzleSchema: string;
+  summary: string;
+  sizeBytes: number;
+}
+
+const INTEGER_RX = /^-?\d+$/;
+const NUMBER_RX = /^-?\d+(\.\d+)?([eE][-+]?\d+)?$/;
+const ISO_DATE_RX = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[-+]\d{2}:?\d{2})?)?$/;
+
+function inferOne(value: string): DataInferredType {
+  if (value === "" || value.toLowerCase() === "null") return "unknown";
+  if (value === "true" || value === "false") return "boolean";
+  if (INTEGER_RX.test(value)) return "integer";
+  if (NUMBER_RX.test(value)) return "number";
+  if (ISO_DATE_RX.test(value)) return "date";
+  return "text";
+}
+
+// Widen integer -> number -> text; boolean stays unless mixed; date stays
+// unless mixed. unknown defers to whatever the next non-null gives us.
+function widen(a: DataInferredType, b: DataInferredType): DataInferredType {
+  if (a === "unknown") return b;
+  if (b === "unknown") return a;
+  if (a === b) return a;
+  if ((a === "integer" && b === "number") || (a === "number" && b === "integer")) return "number";
+  return "text";
+}
+
+function inferColumn(values: string[]): DataInferredType {
+  let result: DataInferredType = "unknown";
+  for (const v of values) {
+    result = widen(result, inferOne(v));
+  }
+  return result;
+}
+
+function drizzleType(inferred: DataInferredType): string {
+  switch (inferred) {
+    case "integer":
+      return "integer";
+    case "number":
+      return "real";
+    case "boolean":
+      return 'integer({ mode: "boolean" })';
+    case "date":
+      return "integer"; // unix ms; mode: 'timestamp_ms' once we know caller wants Date objects
+    case "text":
+    case "unknown":
+      return "text";
+  }
+}
+
+function safeIdentifier(raw: string): string {
+  // Lowercase, snake_case-ish, non-ascii stripped. Matches the broader
+  // "filesystem-safe identifier" rule we use for project names.
+  const lowered = raw.toLowerCase().trim();
+  const collapsed = lowered.replace(/[^a-z0-9_]+/g, "_").replace(/_+/g, "_");
+  const trimmed = collapsed.replace(/^_+|_+$/g, "");
+  return trimmed.length > 0 ? trimmed : "col";
+}
+
+function buildDrizzleSchema(tableName: string, columns: DataColumnSummary[]): string {
+  const lines = [
+    `import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";`,
+    "",
+    `export const ${safeIdentifier(tableName)} = sqliteTable("${safeIdentifier(tableName)}", {`,
+  ];
+  for (const c of columns) {
+    const colId = safeIdentifier(c.name);
+    const t = drizzleType(c.inferredType);
+    lines.push(`  ${colId}: ${t}("${colId}"),`);
+  }
+  lines.push("});");
+  return lines.join("\n");
+}
+
+function parseCsvSample(text: string): { rows: Record<string, string>[]; total: number } {
+  // csv-parse/sync streams the whole file but we slice afterwards. For
+  // very large CSVs we'd switch to the streaming API + early-stop.
+  const all = parseCsv(text, { columns: true, skip_empty_lines: true }) as Record<string, string>[];
+  return { rows: all.slice(0, SAMPLE_ROW_LIMIT), total: all.length };
+}
+
+function parseJsonDataSample(value: unknown): { rows: Record<string, string>[]; total: number } {
+  if (!Array.isArray(value)) {
+    throw new Error("parseDataSample: JSON file is not an array of objects.");
+  }
+  const objs = value.filter((v): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v));
+  if (objs.length === 0) {
+    throw new Error("parseDataSample: JSON array contains no objects.");
+  }
+  // Stringify field values so the type inference shares one code path.
+  const rows = objs.slice(0, SAMPLE_ROW_LIMIT).map((o) => {
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(o)) {
+      out[k] = v === null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v);
+    }
+    return out;
+  });
+  return { rows, total: objs.length };
+}
+
+function summariseColumns(rows: Record<string, string>[]): DataColumnSummary[] {
+  if (rows.length === 0) return [];
+  // Use first row's keys as the column set; non-uniform CSVs are not common.
+  const first = rows[0];
+  if (first === undefined) return [];
+  const cols: DataColumnSummary[] = [];
+  for (const name of Object.keys(first)) {
+    const values: string[] = [];
+    let nonNullCount = 0;
+    let nullCount = 0;
+    for (const row of rows) {
+      const v = row[name] ?? "";
+      if (v === "" || v.toLowerCase() === "null") {
+        nullCount++;
+      } else {
+        nonNullCount++;
+        values.push(v);
+      }
+    }
+    const inferredType = inferColumn(values);
+    cols.push({
+      name,
+      inferredType,
+      nonNullCount,
+      nullCount,
+      examples: values.slice(0, 3),
+    });
+  }
+  return cols;
+}
+
+export async function parseDataSample(rawParams: unknown): Promise<ParseDataSampleResult> {
+  const { path } = ParseDataSampleParamsSchema.parse(rawParams);
+  const ext = path.toLowerCase().split(".").pop() ?? "";
+  const stat = await fs.stat(path);
+  const sizeBytes = stat.size;
+
+  if (ext === "csv" || ext === "tsv") {
+    const text = await fs.readFile(path, "utf8");
+    const { rows, total } = parseCsvSample(text);
+    const columns = summariseColumns(rows);
+    const tableName = path.split("/").pop()?.replace(/\.[^.]+$/, "") ?? "data";
+    const candidateDrizzleSchema = buildDrizzleSchema(tableName, columns);
+    const summary = `${ext.toUpperCase()}: ${total} row${total === 1 ? "" : "s"} observed (sampled ${rows.length}); ${columns.length} columns.`;
+    return {
+      kind: "data",
+      format: "csv",
+      totalRowsObserved: total,
+      sampledRows: rows.length,
+      columns,
+      candidateDrizzleSchema,
+      summary,
+      sizeBytes,
+    };
+  }
+
+  if (ext === "json") {
+    const text = await fs.readFile(path, "utf8");
+    const parsed: unknown = JSON.parse(text);
+    const { rows, total } = parseJsonDataSample(parsed);
+    const columns = summariseColumns(rows);
+    const tableName = path.split("/").pop()?.replace(/\.[^.]+$/, "") ?? "data";
+    const candidateDrizzleSchema = buildDrizzleSchema(tableName, columns);
+    const summary = `JSON data: ${total} object${total === 1 ? "" : "s"} observed (sampled ${rows.length}); ${columns.length} keys.`;
+    return {
+      kind: "data",
+      format: "json-data",
+      totalRowsObserved: total,
+      sampledRows: rows.length,
+      columns,
+      candidateDrizzleSchema,
+      summary,
+      sizeBytes,
+    };
+  }
+
+  throw new Error(
+    `parseDataSample: unsupported extension '.${ext}' (supported: csv, tsv, json). SQL dump support is deferred — see drift D-011.`,
   );
 }

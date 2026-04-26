@@ -41,6 +41,14 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 - **Commit**: 85fbb25 (C3 commit).
 - **Follow-up**: Phase D ticket adds (a) a fixture `claude` binary that returns a fixed JSON response, used by Vitest with PATH override; (b) a Vitest setup that intercepts `fetch` to api.anthropic.com / api.deepseek.com and returns canned responses; then 3 tests covering each tier's success path plus the all-fail error message.
 
+### D-011 — SQL-dump data extraction deferred from C5
+- **Drift type**: scope drift (deferral, against the C5 plan in [docs/build-order.md](build-order.md): "Data sample (CSV, JSON, SQL dump)").
+- **Discovered at**: C5.
+- **Cause**: SQL dumps mix CREATE TABLE statements (already handled by `files.parseSchema` at C4) with INSERT row data. Extracting inserted values requires either a full SQL parser pass over potentially large dumps or a streaming `INSERT` regex with column-order tracking; both add real complexity without a clear novice use case for v1.
+- **Resolution**: drift accepted. C5 ships CSV (and TSV) + JSON-array-of-objects via `files.parseDataSample`. SQL dumps continue to route to `files.parseSchema` for the schema half; the row data half is deferred. The error message in `parseDataSample` for unsupported extensions explicitly points at this drift entry.
+- **Commit**: TBD (C5 commit).
+- **Follow-up**: when the kit's question library starts asking for sample data shape, reassess. Likely a Phase D / E task once a real novice use case appears.
+
 ### D-009 — DOCX + PDF extraction integration tests deferred from C2 (binary fixtures missing)
 - **Drift type**: scope drift (deferral, against the C2 plan in [docs/build-order.md](build-order.md): "round-trip a fixture PRD; extracted text contains expected paragraphs").
 - **Discovered at**: C2.

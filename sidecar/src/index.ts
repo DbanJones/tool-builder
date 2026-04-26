@@ -18,7 +18,7 @@ import { z } from "zod";
 import { initDb } from "./db.js";
 import { record as recordAnswer, list as listAnswers } from "./handlers/answers.js";
 import { logEvent, listEvents } from "./handlers/audit.js";
-import { extractText, parseSchema, summariseImage } from "./handlers/files.js";
+import { extractText, parseDataSample, parseSchema, summariseImage } from "./handlers/files.js";
 import { create as createProject, list as listProjects, get as getProject } from "./handlers/projects.js";
 
 const RequestSchema = z.object({
@@ -82,6 +82,7 @@ const handlers: Record<string, Handler> = {
   "files.extractText": extractText,
   "files.summariseImage": summariseImage,
   "files.parseSchema": parseSchema,
+  "files.parseDataSample": parseDataSample,
 };
 
 const handleLine = async (line: string): Promise<void> => {

@@ -1,0 +1,5 @@
+[
+  { "id": "p1", "title": "Course one", "minutes": 30, "free": true, "tags": ["intro", "video"] },
+  { "id": "p2", "title": "Course two", "minutes": 45, "free": false, "tags": ["advanced"] },
+  { "id": "p3", "title": "Course three", "minutes": 60, "free": false, "tags": [] }
+]
