@@ -14,7 +14,7 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
   - `lib/updater/index.ts` wraps `check()` + `downloadAndInstall()` with neverthrow; recognises the placeholder-pubkey error and translates it into a `NotConfigured` error variant; `checkForUpdateQuiet()` swallows that variant so the launch flow doesn't nag the novice until the real keypair lands.
   - `<UpdatePrompt>` component renders the prompt per Flow J AC2; runs on Welcome page mount.
   - `tauri.conf.json` plugins.updater config has placeholder pubkey `REPLACE_WITH_TAURI_SIGNER_PUBKEY_FROM_PHASE_E0` and endpoint `https://updates.airtec.example/builder/...`.
-- **Commit**: TBD (E3 commit).
+- **Commit**: bc2ed73 (E3 commit).
 - **Follow-up**: when Phase E0 ships:
   1. Run `pnpm tauri signer generate` to produce a keypair.
   2. Replace the `pubkey` in `tauri.conf.json` with the public half.
