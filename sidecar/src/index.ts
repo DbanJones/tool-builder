@@ -22,6 +22,10 @@ import {
   append as appendChatMessage,
   list as listChatMessages,
 } from "./handlers/chat-messages.js";
+import {
+  listOpen as listOpenPermissionRequests,
+  resolve as resolvePermissionRequest,
+} from "./handlers/permission-requests.js";
 import { append as appendCost, sumByProject as sumCostsByProject } from "./handlers/costs.js";
 import {
   append as appendDrift,
@@ -112,6 +116,8 @@ const handlers: Record<string, Handler> = {
   "drift.listOpen": listOpenDrifts,
   "chatMessages.append": appendChatMessage,
   "chatMessages.list": listChatMessages,
+  "permissionRequests.listOpen": listOpenPermissionRequests,
+  "permissionRequests.resolve": resolvePermissionRequest,
 };
 
 const handleLine = async (line: string): Promise<void> => {

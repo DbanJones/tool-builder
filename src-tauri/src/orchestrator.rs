@@ -16,6 +16,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::fs;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Mutex;
@@ -23,6 +24,8 @@ use tauri::ipc::Channel;
 use tauri::Manager;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
+
+use crate::sidecar::project_root_from_cwd;
 
 const ORCHESTRATOR_KICKOFF_PROMPT: &str = "You are the Builder's build-phase agent. The novice has clicked 'Start build' inside the Builder desktop app and is watching you work via a live dashboard. They can interrupt you at any time via the chat input on the build page.
 
@@ -215,15 +218,71 @@ impl OrchestratorState {
   }
 }
 
+/// Generate the orchestrator-side MCP config JSON that claude consumes via
+/// `--mcp-config`. The MCP server exposes ONE tool: `request_permission`.
+/// claude calls it via `--permission-prompt-tool` whenever it wants to
+/// perform a sensitive action; the tool blocks until the dashboard's
+/// PermissionPromptBanner gets the novice's Allow / Deny click.
+///
+/// All sidecar paths anchored at the Builder project root, NOT cwd
+/// (cwd = novice's project) and NOT the chat MCP server's path.
+fn build_orchestrator_mcp_config(
+  project_id: &str,
+  novice_project_root: &PathBuf,
+) -> Result<PathBuf, String> {
+  let builder_root = project_root_from_cwd()?;
+  let mcp_server_script = builder_root
+    .join("sidecar")
+    .join("dist")
+    .join("mcp-orchestrator.js");
+  let migrations_folder = builder_root.join("sidecar").join("migrations");
+  let db_path = builder_root.join(".builder").join("builder.db");
+
+  if !mcp_server_script.exists() {
+    return Err(format!(
+      "orchestrator MCP server build missing at {}; run pnpm sidecar:build",
+      mcp_server_script.display()
+    ));
+  }
+
+  let config = serde_json::json!({
+    "mcpServers": {
+      "builder-orchestrator": {
+        "command": "node",
+        "args": [
+          mcp_server_script.to_string_lossy(),
+          "--db-path", db_path.to_string_lossy(),
+          "--migrations-folder", migrations_folder.to_string_lossy(),
+          "--project-id", project_id,
+        ],
+      },
+    },
+  });
+
+  // Ephemeral per-turn config under the novice's project folder.
+  let config_dir = novice_project_root.join(".builder");
+  fs::create_dir_all(&config_dir).map_err(|e| format!("create .builder/: {e}"))?;
+  let config_path = config_dir.join("mcp-orchestrator.json");
+  fs::write(
+    &config_path,
+    serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?,
+  )
+  .map_err(|e| format!("write orchestrator mcp config: {e}"))?;
+  Ok(config_path)
+}
+
 /// Spawn the build subprocess in `project_path`, stream events, return when
 /// the subprocess exits. The caller (webview) supplies a Channel; events
 /// arrive in the order they were observed.
 ///
 /// `session_id` is None on the first turn (a fresh build kickoff) and Some
 /// on subsequent turns to continue the same context (used by Flow H resume).
+/// `project_id` is the ULID — needed so the MCP server records permission
+/// requests against the correct project.
 #[tauri::command]
 pub async fn orchestrator_start(
   app: tauri::AppHandle,
+  project_id: String,
   project_path: String,
   prompt: Option<String>,
   session_id: Option<String>,
@@ -250,26 +309,37 @@ pub async fn orchestrator_start(
   // Subsequent turns reuse the same model via --resume.
   command.arg("--model").arg("sonnet");
 
-  // Bypass Claude Code's interactive permission prompts. The orchestrator
-  // is the trust boundary: the novice explicitly clicked Start build,
-  // there is no UI surface to approve per-tool prompts in our headless
-  // setup, and `acceptEdits` only auto-approves writes WITHIN cwd — any
-  // Bash command or write to a sibling folder still hangs waiting for an
-  // approval that can never come.
+  // Permission model: claude defaults to prompting interactively for
+  // sensitive actions (writes outside cwd, Bash, etc.). We replace those
+  // prompts with the `request_permission` MCP tool so the novice can
+  // Allow / Deny via the dashboard banner instead of an invisible CLI
+  // prompt that would hang forever in -p mode.
   //
-  // Risks of bypassPermissions are scoped by:
-  //   - cwd is set to the novice's chosen project folder (the agent
-  //     naturally operates here).
-  //   - The novice can hit Stop in the dashboard to kill the subprocess.
-  //   - The user already had to opt in by creating a project + clicking
-  //     Start build; the Builder is single-user and runs locally.
-  command.arg("--permission-mode").arg("bypassPermissions");
-
-  // Tell claude explicitly what its project root is. With bypassPermissions
-  // this is mostly informational (no permission gating), but it surfaces
-  // the right path in claude's own self-reporting + lets it know which
-  // directory to anchor relative paths against.
+  // Auto-allowed without invoking the tool: anything within cwd or
+  // --add-dir paths. Everything else routes through request_permission.
+  command.arg("--permission-mode").arg("default");
   command.arg("--add-dir").arg(&cwd);
+
+  // Wire the orchestrator MCP server (separate from the chat MCP) so
+  // claude can call request_permission. If the config build fails we fall
+  // back to a denied permission state — claude will be unable to write
+  // outside cwd but the build still runs for in-cwd work.
+  match build_orchestrator_mcp_config(&project_id, &cwd) {
+    Ok(config_path) => {
+      command.arg("--mcp-config").arg(&config_path);
+      command
+        .arg("--permission-prompt-tool")
+        .arg("mcp__builder-orchestrator__request_permission");
+      command
+        .arg("--allowed-tools")
+        .arg("mcp__builder-orchestrator__request_permission");
+    }
+    Err(e) => {
+      log::warn!(
+        "orchestrator MCP config build failed; permission prompts will hang: {e}"
+      );
+    }
+  }
 
   if let Some(sid) = &session_id {
     command.arg("--resume").arg(sid);

@@ -31,6 +31,9 @@ export type OrchestratorEvent =
 export type OrchestratorError = { kind: "Transport"; message: string };
 
 export interface OrchestratorStartOptions {
+  /** Project ULID — needed by the orchestrator's MCP server so permission
+   *  requests are recorded against the right project. */
+  projectId: string;
   /** Absolute path to the novice's project folder. The build subprocess
    *  runs with cwd set to this path; `~/...` is expanded by the Rust side. */
   projectPath: string;
@@ -61,6 +64,7 @@ export function orchestratorStart(
   channel.onmessage = options.onEvent;
   return ResultAsync.fromPromise(
     invoke<void>("orchestrator_start", {
+      projectId: options.projectId,
       projectPath: options.projectPath,
       prompt: options.prompt ?? null,
       sessionId: options.sessionId ?? null,

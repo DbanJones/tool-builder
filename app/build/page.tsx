@@ -39,6 +39,10 @@ import { SentryPrompt } from "@/app/components/sentry-prompt";
 
 import { DeployModal } from "./components/deploy-modal";
 import { DriftBanner } from "./components/drift-banner";
+import {
+  PermissionPromptBanner,
+  type OpenPermissionRequest,
+} from "./components/permission-prompt-banner";
 import type { Project } from "@/lib/project";
 import { sidecarCall } from "@/lib/sidecar/client";
 
@@ -135,6 +139,11 @@ function BuildClient() {
   // E5 Sentry opt-in prompt: shown ONCE after the user's first successful
   // build (the first `done` event since mount, gated on no prior decision).
   const [showSentryPrompt, setShowSentryPrompt] = useState(false);
+  // Open permission requests claude has emitted via the orchestrator MCP.
+  // Polled every 1s while a build is running. The banner renders the head;
+  // Allow / Deny resolves via the sidecar and the MCP tool returns the
+  // decision to claude.
+  const [openPermissions, setOpenPermissions] = useState<readonly OpenPermissionRequest[]>([]);
   // Past per-turn elapsed durations (ms). Updated on each `done` event;
   // feeds the ETA estimator. v1 granularity is per-turn; D5 swaps to
   // per-task-id when phase markers are wired (drift D-014).
@@ -219,6 +228,29 @@ function BuildClient() {
     tailRef.current?.scrollTo({ top: tailRef.current.scrollHeight });
   }, [actions]);
 
+  // Poll for open permission requests while a build is running. 1s cadence
+  // is responsive enough for novice approvals without thrashing the DB.
+  useEffect(() => {
+    if (!project) return;
+    let cancelled = false;
+    const tick = async (): Promise<void> => {
+      const r = await sidecarCall<OpenPermissionRequest[]>("permissionRequests.listOpen", {
+        projectId: project.id,
+      });
+      if (cancelled) return;
+      r.match(
+        (rows) => setOpenPermissions(rows),
+        () => undefined,
+      );
+    };
+    void tick();
+    const handle = setInterval(() => void tick(), 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(handle);
+    };
+  }, [project]);
+
   // Load the saved cost cap when the project becomes available.
   useEffect(() => {
     if (project) {
@@ -273,6 +305,7 @@ function BuildClient() {
     const sessionIdAtStart = sessionIdRef.current;
 
     const r = await orchestratorStart({
+      projectId: project.id,
       projectPath: project.path,
       sessionId: sessionIdAtStart,
       onEvent: (event: OrchestratorEvent) => {
@@ -711,6 +744,15 @@ function BuildClient() {
               </AlertDescription>
             </Alert>
           ) : null}
+          {openPermissions.length > 0 && openPermissions[0] ? (
+            <PermissionPromptBanner
+              request={openPermissions[0]}
+              totalOpen={openPermissions.length}
+              onResolved={(id) =>
+                setOpenPermissions((prev) => prev.filter((p) => p.id !== id))
+              }
+            />
+          ) : null}
           {openDrifts.length > 0 && openDrifts[0] ? (
             <DriftBanner
               event={openDrifts[0]}
@@ -763,6 +805,7 @@ function BuildClient() {
               setNowDoing(`You said: ${text}`);
               turnStartRef.current = Date.now();
               const r = await orchestratorStart({
+                projectId: project.id,
                 projectPath: project.path,
                 sessionId: sessionIdRef.current,
                 prompt: text,

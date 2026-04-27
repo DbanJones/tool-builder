@@ -27,7 +27,7 @@ describe("orchestratorStart", () => {
     mockInvoke.mockResolvedValueOnce(undefined);
     const onEvent = vi.fn();
     const r = await orchestratorStart({
-      projectPath: "/tmp/preppilot",
+      projectId: "01PROJ", projectPath: "/tmp/preppilot",
       sessionId: "build-1",
       prompt: "custom kickoff",
       onEvent,
@@ -51,7 +51,7 @@ describe("orchestratorStart", () => {
 
   it("defaults sessionId and prompt to null when not provided", async () => {
     mockInvoke.mockResolvedValueOnce(undefined);
-    await orchestratorStart({ projectPath: "/tmp/x", onEvent: vi.fn() });
+    await orchestratorStart({ projectId: "01PROJ", projectPath: "/tmp/x", onEvent: vi.fn() });
     const args = mockInvoke.mock.calls[0]?.[1] as {
       sessionId: string | null;
       prompt: string | null;
@@ -80,7 +80,7 @@ describe("orchestratorStart", () => {
     });
 
     const r = await orchestratorStart({
-      projectPath: "/tmp/x",
+      projectId: "01PROJ", projectPath: "/tmp/x",
       onEvent: (e) => {
         received.push(e);
       },
@@ -98,7 +98,7 @@ describe("orchestratorStart", () => {
 
   it("returns Transport error when invoke rejects (e.g. project folder missing)", async () => {
     mockInvoke.mockRejectedValueOnce(new Error("project folder not found"));
-    const r = await orchestratorStart({ projectPath: "/nope", onEvent: vi.fn() });
+    const r = await orchestratorStart({ projectId: "01PROJ", projectPath: "/nope", onEvent: vi.fn() });
     expect(r.isErr()).toBe(true);
     if (r.isErr()) {
       expect(r.error.kind).toBe("Transport");
@@ -117,7 +117,7 @@ describe("orchestratorStart", () => {
     });
 
     await orchestratorStart({
-      projectPath: "/tmp/x",
+      projectId: "01PROJ", projectPath: "/tmp/x",
       onEvent: (e) => {
         received.push(e);
       },
@@ -148,7 +148,7 @@ describe("orchestratorStart", () => {
       channel.emit({ kind: "error", message: "claude exited with status 1" });
     });
     await orchestratorStart({
-      projectPath: "/tmp/x",
+      projectId: "01PROJ", projectPath: "/tmp/x",
       onEvent: (e) => {
         received.push(e);
       },
