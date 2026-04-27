@@ -11,8 +11,8 @@ import {
   Square,
 } from "lucide-react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -105,8 +105,22 @@ const rowToRebuildAnswer = (row: AnswerRow): RebuildAnswer => ({
 });
 
 export default function ProjectPage() {
-  const params = useParams<{ id: string }>();
-  const projectId = params?.id ?? null;
+  return (
+    <Suspense
+      fallback={
+        <main className="flex h-full items-center justify-center text-sm text-muted-foreground">
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading project…
+        </main>
+      }
+    >
+      <ProjectPageInner />
+    </Suspense>
+  );
+}
+
+function ProjectPageInner() {
+  const params = useSearchParams();
+  const projectId = params.get("id");
   return <ProjectWorkspace projectId={projectId} />;
 }
 
@@ -1182,7 +1196,7 @@ function BannerStack(props: BannerStackProps) {
             <span className="font-medium">{props.otherBuildBlock.name}</span> is currently
             building. Switch to its tab and Stop or wait for it to finish, then come back.{" "}
             <Link
-              href={`/project/${encodeURIComponent(props.otherBuildBlock.projectId)}`}
+              href={`/project?id=${encodeURIComponent(props.otherBuildBlock.projectId)}`}
               className="underline"
               onClick={props.onDismissOtherBuildBlock}
             >

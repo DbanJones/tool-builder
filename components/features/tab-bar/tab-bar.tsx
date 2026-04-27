@@ -2,30 +2,35 @@
 
 import { Plus, X } from "lucide-react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
 
 import { useOpenTabs, type OpenTab } from "@/lib/open-tabs";
 import type { Project } from "@/lib/project";
 import { sidecarCall } from "@/lib/sidecar/client";
 
 // Browser-style tab strip across the top of the window. Each tab is one
-// open project; the active tab is whichever /project/[id] is in the URL.
+// open project; the active tab is whichever /project?id=… is in the URL.
 // A status pill on each tab pulses while that project's build is running,
 // so the novice can see at a glance which project is currently spending.
 
 const POLL_MS = 2000;
 
-function activeIdFromPath(pathname: string | null): string | null {
-  if (!pathname) return null;
-  const match = /^\/project\/([^/?#]+)/.exec(pathname);
-  return match?.[1] ?? null;
+export function TabBar() {
+  // useSearchParams suspends during the static prerender pass; wrap so the
+  // root layout doesn't blow up when next build snapshots the shell.
+  return (
+    <Suspense fallback={<div className="h-9 shrink-0 border-b bg-muted/40" aria-hidden="true" />}>
+      <TabBarInner />
+    </Suspense>
+  );
 }
 
-export function TabBar() {
+function TabBarInner() {
   const pathname = usePathname();
+  const params = useSearchParams();
   const router = useRouter();
-  const activeId = activeIdFromPath(pathname);
+  const activeId = pathname === "/project" ? params.get("id") : null;
   const { tabs, close } = useOpenTabs();
   const [byId, setById] = useState<Map<string, Project>>(new Map());
 
@@ -63,7 +68,7 @@ export function TabBar() {
     // If we just closed the active tab, navigate somewhere sane.
     if (id === activeId) {
       const remaining = tabs.filter((t) => t.id !== id);
-      router.push(remaining[0] ? `/project/${encodeURIComponent(remaining[0].id)}` : "/");
+      router.push(remaining[0] ? `/project?id=${encodeURIComponent(remaining[0].id)}` : "/");
     }
   };
 
@@ -117,7 +122,7 @@ function Tab({
   const isRunning = status === "building";
   return (
     <Link
-      href={`/project/${encodeURIComponent(tab.id)}`}
+      href={`/project?id=${encodeURIComponent(tab.id)}`}
       title={project?.path ?? tab.name}
       aria-current={active ? "page" : undefined}
       className={

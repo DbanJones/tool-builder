@@ -90,7 +90,7 @@ export default function NewProjectPage() {
     const result = await createProject(values.name, values.folder);
     result.match(
       (project) => {
-        router.push(`/project/${encodeURIComponent(project.id)}`);
+        router.push(`/project?id=${encodeURIComponent(project.id)}`);
       },
       (error) => {
         setSubmissionError(error.message);
