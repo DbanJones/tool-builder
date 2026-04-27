@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus, X } from "lucide-react";
+import { FilePlus, Plus, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
@@ -31,6 +31,7 @@ function TabBarInner() {
   const params = useSearchParams();
   const router = useRouter();
   const activeId = pathname === "/project" ? params.get("id") : null;
+  const onNewProjectRoute = pathname === "/new-project";
   const { tabs, close } = useOpenTabs();
   const [byId, setById] = useState<Map<string, Project>>(new Map());
 
@@ -72,6 +73,15 @@ function TabBarInner() {
     }
   };
 
+  const onCloseNewProjectTab = (e: React.MouseEvent): void => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Closing the synthetic new-project tab returns the user to the most
+    // recently opened project, or home if none exist.
+    const fallback = tabs[tabs.length - 1];
+    router.push(fallback ? `/project?id=${encodeURIComponent(fallback.id)}` : "/");
+  };
+
   return (
     <div className="flex h-9 shrink-0 items-end gap-0 border-b bg-muted/40">
       <Link
@@ -95,14 +105,40 @@ function TabBarInner() {
           onClose={(e) => onClose(t.id, e)}
         />
       ))}
+      {onNewProjectRoute ? (
+        <NewProjectTab onClose={onCloseNewProjectTab} />
+      ) : null}
       <Link
-        href="/"
+        href="/new-project"
         aria-label="Open another project"
-        title="Open another project"
+        title="Open a new project tab"
         className="flex h-9 items-center px-2 text-muted-foreground hover:text-foreground"
       >
         <Plus className="h-3.5 w-3.5" aria-hidden="true" />
       </Link>
+    </div>
+  );
+}
+
+// Synthetic tab shown while the user is on /new-project. Mirrors a real tab
+// visually so it's obvious the + button created a new tab; replaced by the
+// real project tab once createProject succeeds and routes to /project?id=…
+function NewProjectTab({ onClose }: { onClose: (e: React.MouseEvent) => void }) {
+  return (
+    <div
+      aria-current="page"
+      className="group relative flex h-9 max-w-[220px] items-center gap-2 border-r border-b-2 border-b-primary bg-background px-3 text-xs text-foreground"
+    >
+      <FilePlus className="h-3 w-3 shrink-0 text-primary" aria-hidden="true" />
+      <span className="min-w-0 flex-1 truncate">New project</span>
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="Close new project tab"
+        className="ml-1 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground/60 opacity-0 hover:bg-muted hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
+      >
+        <X className="h-3 w-3" aria-hidden="true" />
+      </button>
     </div>
   );
 }
