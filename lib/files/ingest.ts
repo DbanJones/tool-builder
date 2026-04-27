@@ -16,6 +16,11 @@ import { errAsync, ResultAsync } from "neverthrow";
 
 import { classifyByName, type IngestedFile, type IngestedFileKind } from "@/lib/files/types";
 import { sidecarCall, type SidecarError } from "@/lib/sidecar/client";
+import {
+  formatSummary as formatSpreadsheetSummary,
+  parseSpreadsheet,
+  piiGuardText as spreadsheetPiiText,
+} from "@/lib/spreadsheet";
 
 export type IngestError =
   | { kind: "Filesystem"; message: string }
@@ -112,6 +117,14 @@ function callExtractor(
           // do scan the whole schema string to be safe.
           textForPiiGuard: r.candidateDrizzleSchema,
         }));
+    case "spreadsheet":
+      // Spreadsheets are parsed client-side via lib/spreadsheet so we don't
+      // need a sidecar handler / extra binary dep on the Node side. The
+      // raw-bytes path goes through ingestSpreadsheet, not callExtractor.
+      return errAsync<{ summary: string; textForPiiGuard: string | null }, IngestError>({
+        kind: "Sidecar",
+        message: "ingest: 'spreadsheet' is parsed client-side; should not reach callExtractor.",
+      });
     case "url":
     case "unknown":
       return errAsync<{ summary: string; textForPiiGuard: string | null }, IngestError>({
@@ -119,6 +132,74 @@ function callExtractor(
         message: `ingest: kind '${kind}' is not handled here. URLs are pasted, not dropped; unknown files need a manual classify.`,
       });
   }
+}
+
+// Webview-side spreadsheet pipeline: parse with SheetJS, save the original
+// xlsx + a sibling .summary.md so Claude can read the structure during the
+// build via its filesystem tools.
+function ingestSpreadsheet(
+  file: File,
+  projectPath: string,
+): ResultAsync<IngestResult, IngestError> {
+  return ResultAsync.fromPromise(file.arrayBuffer(), fromInvokeError).andThen((buf) => {
+    let parse;
+    try {
+      parse = parseSpreadsheet(buf);
+    } catch (e) {
+      return errAsync<IngestResult, IngestError>({
+        kind: "Filesystem",
+        message: `Couldn't parse spreadsheet: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    }
+    const summaryMd = formatSpreadsheetSummary(parse, file.name);
+    const piiText = spreadsheetPiiText(parse);
+
+    return ResultAsync.fromPromise(readFileAsBase64(file), fromInvokeError)
+      .andThen((xlsxB64) =>
+        ResultAsync.fromPromise(
+          invoke<string>("file_save_uploaded", {
+            projectPath,
+            name: file.name,
+            contentBase64: xlsxB64,
+          }),
+          fromInvokeError,
+        ),
+      )
+      .andThen((storedPath) =>
+        ResultAsync.fromPromise(
+          invoke<string>("file_save_uploaded", {
+            projectPath,
+            name: `${file.name}.summary.md`,
+            contentBase64: encodeUtf8Base64(summaryMd),
+          }),
+          fromInvokeError,
+        ).andThen(() =>
+          sidecarCall<PiiGuardResult>("files.guardPii", {
+            text: piiText,
+            source: file.name,
+          })
+            .mapErr(fromSidecarError)
+            .map<IngestResult>((g) => ({
+              summary: g.hasPii
+                ? `${summaryMd}\n\n_PII detected (${g.hits.length} hit${g.hits.length === 1 ? "" : "s"}); review before sending to Claude._`
+                : summaryMd,
+              hasPiiWarning: g.hasPii,
+              storedPath,
+            })),
+        ),
+      );
+  });
+}
+
+function encodeUtf8Base64(s: string): string {
+  // btoa rejects code points > 0xFF, so go through TextEncoder first.
+  const bytes = new TextEncoder().encode(s);
+  let bin = "";
+  const chunk = 8 * 1024;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunk, bytes.length)));
+  }
+  return btoa(bin);
 }
 
 /**
@@ -131,6 +212,7 @@ export function ingestFile(
   projectPath: string,
 ): ResultAsync<IngestResult, IngestError> {
   const kind = classifyByName(file.name);
+  if (kind === "spreadsheet") return ingestSpreadsheet(file, projectPath);
 
   return ResultAsync.fromPromise(readFileAsBase64(file), fromInvokeError)
     .andThen((b64) =>

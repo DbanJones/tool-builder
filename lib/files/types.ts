@@ -10,6 +10,7 @@ export type IngestedFileKind =
   | "image" // .png, .jpg, .jpeg, .webp
   | "schema" // .sql, .json (json-schema), .yaml (openapi)
   | "data" // .csv, .json (data sample), .sql (dump)
+  | "spreadsheet" // .xlsx, .xls, .ods — parsed client-side via lib/spreadsheet
   | "url" // a URL pasted/dropped instead of a file
   | "unknown";
 
@@ -35,6 +36,7 @@ const DOCUMENT_EXTENSIONS = new Set(["pdf", "docx", "md", "txt"]);
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp", "gif"]);
 const SCHEMA_EXTENSIONS = new Set(["sql", "yaml", "yml"]);
 const DATA_EXTENSIONS = new Set(["csv", "tsv"]);
+const SPREADSHEET_EXTENSIONS = new Set(["xlsx", "xls", "ods"]);
 
 /**
  * Best-guess kind from filename. JSON is overloaded (schema vs data sample)
@@ -47,6 +49,7 @@ export function classifyByName(name: string): IngestedFileKind {
   if (IMAGE_EXTENSIONS.has(ext)) return "image";
   if (SCHEMA_EXTENSIONS.has(ext)) return "schema";
   if (DATA_EXTENSIONS.has(ext)) return "data";
+  if (SPREADSHEET_EXTENSIONS.has(ext)) return "spreadsheet";
   if (ext === "json") return "schema";
   return "unknown";
 }

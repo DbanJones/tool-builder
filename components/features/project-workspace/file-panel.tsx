@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   CircleEllipsis,
+  FileSpreadsheet,
   FileText,
   Image as ImageIcon,
   Loader2,
@@ -35,6 +36,9 @@ function formatBytes(n: number): string {
 function KindIcon({ kind }: { kind: IngestedFileKind }) {
   if (kind === "image") {
     return <ImageIcon className="h-4 w-4" aria-hidden="true" />;
+  }
+  if (kind === "spreadsheet" || kind === "data") {
+    return <FileSpreadsheet className="h-4 w-4" aria-hidden="true" />;
   }
   return <FileText className="h-4 w-4" aria-hidden="true" />;
 }
@@ -104,7 +108,7 @@ export function FilePanel({ files, onDrop }: FilePanelProps) {
         <div className="shrink-0 text-xs uppercase tracking-wide text-muted-foreground">
           Files
           <p className="mt-1 text-[10px] normal-case tracking-normal text-muted-foreground">
-            Drop PDFs, screenshots, schemas, CSVs.
+            Drop PDFs, screenshots, schemas, CSVs, or spreadsheets (.xlsx).
           </p>
         </div>
         <ul className="flex-1 space-y-1" aria-live="polite">

@@ -48,7 +48,7 @@ import { listOpenDrifts, type DriftEvent } from "@/lib/drift";
 import { estimate, formatEta, type EtaResult } from "@/lib/eta";
 import { exportToGithub, isGhInstalled } from "@/lib/export";
 import { ingestFile } from "@/lib/files/ingest";
-import type { IngestedFile } from "@/lib/files/types";
+import { classifyByName, type IngestedFile } from "@/lib/files/types";
 import type { QuestionId } from "@/lib/interview/library";
 import { useOpenTabs } from "@/lib/open-tabs";
 import { checkReadiness, type ReadinessResult } from "@/lib/interview/readiness";
@@ -750,6 +750,12 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   }, [project]);
 
   // ---- File ingest -----------------------------------------------------
+  // Workspace-wide drag overlay state. The user can drop files anywhere on
+  // the page (not just on the Files tab) and they'll be accepted; the rail
+  // auto-switches to the Files tab so the novice sees the ingest progress.
+  const [isDraggingOverWorkspace, setIsDraggingOverWorkspace] = useState(false);
+  const dragDepthRef = useRef(0);
+
   const handleFilesDropped = (added: readonly IngestedFile[], rawFiles: readonly File[]): void => {
     setFiles((prev) => [...prev, ...added]);
     if (!project) return;
@@ -795,6 +801,22 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     }
   };
 
+  const acceptDroppedFiles = (rawFiles: readonly File[]): void => {
+    if (rawFiles.length === 0) return;
+    const now = Date.now();
+    const added: IngestedFile[] = rawFiles.map((f) => ({
+      id: Math.random().toString(36).slice(2, 12),
+      name: f.name,
+      kind: classifyByName(f.name),
+      size: f.size,
+      status: "pending" as const,
+      droppedAt: now,
+    }));
+    handleFilesDropped(added, rawFiles);
+    tabPinnedRef.current = true;
+    setTab("files");
+  };
+
   // ---- Derived UI labels -----------------------------------------------
   const isRunning = status.kind === "running" || status.kind === "streaming";
   const isBlocked = isRunning || status.kind === "rate_limited" || !project;
@@ -832,7 +854,36 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   }
 
   return (
-    <main className="flex h-full flex-col bg-background">
+    <main
+      className="relative flex h-full flex-col bg-background"
+      onDragEnter={(e) => {
+        // Only react to file drags. Internal element drags carry no Files
+        // type and would otherwise flicker the overlay open.
+        if (!e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        dragDepthRef.current += 1;
+        setIsDraggingOverWorkspace(true);
+      }}
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+      }}
+      onDragLeave={(e) => {
+        if (!e.dataTransfer.types.includes("Files")) return;
+        // dragleave fires for every child boundary crossed; we only want to
+        // close when we truly leave the workspace, hence the depth counter.
+        dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+        if (dragDepthRef.current === 0) setIsDraggingOverWorkspace(false);
+      }}
+      onDrop={(e) => {
+        if (!e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        dragDepthRef.current = 0;
+        setIsDraggingOverWorkspace(false);
+        const files = Array.from(e.dataTransfer.files);
+        acceptDroppedFiles(files);
+      }}
+    >
       <header className="flex items-center justify-between border-b px-6 py-3">
         <div className="min-w-0">
           <h1 className="truncate text-base font-semibold">{project.name}</h1>
@@ -1013,6 +1064,21 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         onOpenChange={setDeployModalOpen}
         onTokenSaved={() => void runDeploy()}
       />
+
+      {isDraggingOverWorkspace ? (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-primary/10 backdrop-blur-sm"
+        >
+          <div className="rounded-lg border-2 border-dashed border-primary bg-background px-8 py-6 text-center shadow-lg">
+            <p className="text-base font-semibold text-foreground">Drop to add</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              PDFs, screenshots, schemas, CSVs, or spreadsheets — Claude reads the structure on
+              the next turn.
+            </p>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }
