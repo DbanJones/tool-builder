@@ -4,6 +4,14 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 
 ## 2026-04-25
 
+### D-021 — `--permission-prompt-tool` is SDK-only; reverted Commit B's permission-routing flag wiring
+- **Drift type**: implementation drift (against the design in commit 09929ed which assumed `--permission-prompt-tool` was a CLI flag).
+- **Discovered at**: 2026-04-27 live test — clicking Start build returned `Orchestrator error: Input must be provided either through stdin or as a prompt argument when using --print`.
+- **Cause**: the `--permission-prompt-tool` flag I added to the orchestrator's claude spawn does not exist in the claude CLI surface (it's only available via the Anthropic Agent SDK's `permission_prompt_tool_name` parameter). claude's CLI parser treated it as unknown, but because `--allowed-tools` is variadic (`<tools...>`) the unrecognized flag's value AND the kickoff prompt were both consumed by the variadic, leaving no positional. Spawn failed.
+- **Resolution**: drift accepted. Reverted the spawn args to the previous state (`--permission-mode bypassPermissions` + `--add-dir <cwd>`, no `--mcp-config` / `--permission-prompt-tool` / `--allowed-tools` for the orchestrator). The `permission_requests` table, sidecar handlers, dashboard `PermissionPromptBanner`, and `mcp-orchestrator.ts` MCP server all REMAIN in the codebase as dead code (marked `#[allow(dead_code)]` on the Rust helper) so the hooks-based rewire can re-enable them without re-implementing the wiring.
+- **Commit**: TBD (revert commit).
+- **Follow-up**: implement the permission flow via Claude Code's `PreToolUse` hook system instead of `--permission-prompt-tool`. The hook script (a small shell command) talks to the sidecar's `permissionRequests.append` + `poll` over stdio; on novice click the hook returns `{decision: "block"|"allow"}` to claude. All the existing dashboard UI + DB plumbing stays; only the Rust spawn args + a new hook script change.
+
 ### D-020 — E6 marketing site ships with placeholder downloads + no demo recording
 - **Drift type**: scope drift (deferral, against [docs/build-order.md](build-order.md) E6: "one-page Next.js site at apps/marketing/ with download links and a 90-second screen recording").
 - **Discovered at**: E6.

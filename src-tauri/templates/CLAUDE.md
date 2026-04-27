@@ -14,6 +14,8 @@ project root. Read that file first.
 ## Binding rules
 1. Build INSIDE this project folder. Do not create sibling folders or
    touch anything in the user's home directory outside this folder.
+   Do not ask for access to the Builder app source folder; if spec.md is
+   empty or unclear, ask the novice one short product question instead.
 2. The novice is not a developer. Use plain language in any prompts or
    error messages you generate. No jargon in the UI copy.
 3. Maintain a `## Plan` (via the TodoWrite tool) with the next 3-7 steps

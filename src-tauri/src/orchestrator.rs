@@ -34,7 +34,9 @@ Where to find context (read these in order on the first turn):
 2. spec.md at the project root — this is the SOURCE OF TRUTH for what to build. The Builder rebuilds it from the novice's interview answers EVERY time you are spawned. If you want to know what the novice has told the Builder so far, spec.md is the answer — do NOT go looking in .builder/ for it. .builder/ is internal orchestrator state (the action log, the session id, MCP config) and you can safely ignore it.
 3. If spec.md is still the one-line placeholder ('Empty until the interview begins.'), the novice hasn't done the interview yet — ask them in ONE short sentence what they want to build, then use TodoWrite once they answer.
 
-You have full read/write access to this entire project folder. Permission prompts are bypassed; if a Read or Write looks like it failed, it's because the file genuinely doesn't exist or the path is wrong, NOT because of permissions. Don't ask the novice to grant access — just try a different path.
+You have full read/write access to this target project folder (the current working directory). Permission prompts are bypassed for this folder; if a Read or Write looks like it failed, it's because the file genuinely doesn't exist or the path is wrong, NOT because of permissions. Don't ask the novice to grant access — just try a different path.
+
+You do NOT need access to the Builder app's own source folder (for example a parent folder containing src-tauri/, app/, lib/orchestrator/, or sidecar/). That folder is outside this build sandbox. Never ask the novice to grant read/write access to it. If the target project's spec.md is empty or missing detail, ask the novice one short product question instead of looking for Builder internals.
 
 For the first turn (when spec.md HAS real content):
 - Use TodoWrite to lay out 3-7 concrete next steps that move toward shipping spec.md's Phase 1. Each step at most one hour of work.
@@ -220,12 +222,12 @@ impl OrchestratorState {
 
 /// Generate the orchestrator-side MCP config JSON that claude consumes via
 /// `--mcp-config`. The MCP server exposes ONE tool: `request_permission`.
-/// claude calls it via `--permission-prompt-tool` whenever it wants to
-/// perform a sensitive action; the tool blocks until the dashboard's
-/// PermissionPromptBanner gets the novice's Allow / Deny click.
 ///
-/// All sidecar paths anchored at the Builder project root, NOT cwd
-/// (cwd = novice's project) and NOT the chat MCP server's path.
+/// CURRENTLY UNUSED — see D-021. The `--permission-prompt-tool` flag I
+/// tried to wire this through doesn't exist on the claude CLI (SDK-only).
+/// Kept in the codebase so the hooks-based rewire can re-enable it
+/// without re-implementing the wiring.
+#[allow(dead_code)]
 fn build_orchestrator_mcp_config(
   project_id: &str,
   novice_project_root: &PathBuf,
@@ -309,37 +311,28 @@ pub async fn orchestrator_start(
   // Subsequent turns reuse the same model via --resume.
   command.arg("--model").arg("sonnet");
 
-  // Permission model: claude defaults to prompting interactively for
-  // sensitive actions (writes outside cwd, Bash, etc.). We replace those
-  // prompts with the `request_permission` MCP tool so the novice can
-  // Allow / Deny via the dashboard banner instead of an invisible CLI
-  // prompt that would hang forever in -p mode.
+  // Permission model. Per drift D-021: the `--permission-prompt-tool`
+  // flag I tried to use does NOT exist on the claude CLI — it's only
+  // available via the Anthropic Agent SDK. The unrecognized flag was
+  // consuming the following args (including the kickoff prompt) and
+  // breaking spawn with "Input must be provided".
   //
-  // Auto-allowed without invoking the tool: anything within cwd or
-  // --add-dir paths. Everything else routes through request_permission.
-  command.arg("--permission-mode").arg("default");
+  // Until we wire a hooks-based or SDK-based permission flow, fall back
+  // to bypassPermissions: the orchestrator's trust boundary is the user
+  // clicking Start build + the Stop button, not Claude Code's own
+  // per-tool prompts. Risks scoped by:
+  //   - cwd is the novice's chosen project folder (the agent operates here)
+  //   - Stop kills the subprocess
+  //   - Single-user, local-only
+  //
+  // The PermissionPromptBanner UI + permission_requests table + the new
+  // mcp-orchestrator.ts MCP server stay in the codebase as dead code
+  // until the hooks integration lands.
+  command.arg("--permission-mode").arg("bypassPermissions");
   command.arg("--add-dir").arg(&cwd);
-
-  // Wire the orchestrator MCP server (separate from the chat MCP) so
-  // claude can call request_permission. If the config build fails we fall
-  // back to a denied permission state — claude will be unable to write
-  // outside cwd but the build still runs for in-cwd work.
-  match build_orchestrator_mcp_config(&project_id, &cwd) {
-    Ok(config_path) => {
-      command.arg("--mcp-config").arg(&config_path);
-      command
-        .arg("--permission-prompt-tool")
-        .arg("mcp__builder-orchestrator__request_permission");
-      command
-        .arg("--allowed-tools")
-        .arg("mcp__builder-orchestrator__request_permission");
-    }
-    Err(e) => {
-      log::warn!(
-        "orchestrator MCP config build failed; permission prompts will hang: {e}"
-      );
-    }
-  }
+  // intentionally not adding --mcp-config / --permission-prompt-tool —
+  // see D-021 for the breakage they caused.
+  let _ = project_id; // silence unused-arg until permission MCP is rewired
 
   if let Some(sid) = &session_id {
     command.arg("--resume").arg(sid);
