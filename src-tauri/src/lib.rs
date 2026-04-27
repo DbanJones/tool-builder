@@ -584,9 +584,12 @@ fn project_create_folder(name: String, folder: String) -> Result<String, String>
   fs::create_dir_all(project_root.join(".claude"))
     .map_err(|e| format!("failed to create .claude/: {e}"))?;
   let claude_settings_path = project_root.join(".claude").join("settings.local.json");
+  // Claude Code permission rules are tool-prefixed (Bash(*), Read(**), etc.)
+  // — a bare "*" is NOT a wildcard. defaultMode: bypassPermissions is the
+  // load-bearing line, allow[] is belt-and-braces.
   fs::write(
     &claude_settings_path,
-    "{\n  \"permissions\": {\n    \"allow\": [\"*\"],\n    \"deny\": [],\n    \"defaultMode\": \"bypassPermissions\"\n  }\n}\n",
+    "{\n  \"permissions\": {\n    \"defaultMode\": \"bypassPermissions\",\n    \"allow\": [\n      \"Bash(*)\",\n      \"Read(**)\",\n      \"Write(**)\",\n      \"Edit(**)\",\n      \"Glob(**)\",\n      \"Grep(**)\",\n      \"Task(*)\",\n      \"WebFetch(*)\",\n      \"WebSearch(*)\",\n      \"TodoWrite(*)\",\n      \"NotebookEdit(**)\"\n    ],\n    \"deny\": []\n  }\n}\n",
   )
   .map_err(|e| format!("failed to write .claude/settings.local.json: {e}"))?;
 

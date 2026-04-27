@@ -327,6 +327,17 @@ pub async fn orchestrator_start(
   // (D-021) for the eventual PreToolUse hook rewire.
   command.arg("--dangerously-skip-permissions");
   command.arg("--add-dir").arg(&cwd);
+
+  // Inline settings override. User-level ~/.claude/settings.json may have
+  // restrictive `allow` rules that confuse the spawned claude even when
+  // --dangerously-skip-permissions is set (live-tested 2026-04-27 — claude
+  // reported "session is locked to src-tauri/" because of inherited
+  // user-level settings). Passing --settings with permissive JSON makes
+  // claude ignore the user-level file entirely for this spawn.
+  command.arg("--settings").arg(
+    r#"{"permissions":{"defaultMode":"bypassPermissions","allow":["Bash(*)","Read(**)","Write(**)","Edit(**)","Glob(**)","Grep(**)","Task(*)","WebFetch(*)","WebSearch(*)","TodoWrite(*)","NotebookEdit(**)"],"deny":[]}}"#,
+  );
+
   let _ = project_id; // silence unused-arg until permission MCP is rewired
 
   if let Some(sid) = &session_id {
