@@ -43,15 +43,20 @@ const fromInvokeError = (e: unknown): ChatError => ({
 });
 
 /**
- * Send a chat turn through the `claude` CLI subprocess (per ADR-0002).
+ * Send a chat turn through the Claude Agent SDK (per ADR-0005).
+ *
+ * The Tauri command is a thin pass-through: chat_send → sidecar's
+ * chat.start → query() in sidecar/src/chat-driver.ts. record_answer +
+ * queue_questions are SDK MCP tools defined in-process by the driver
+ * (no external subprocess, no per-turn config file, no permission UI).
  *
  * `sessionId` is the session id captured from the first turn's `Session`
- * chunk. Pass `null` for the first turn (Builder will append the interview
- * system prompt); pass the captured id on subsequent turns to maintain
- * conversation context via `claude --resume`.
+ * chunk. Pass `null` for the first turn (driver uses Opus + injects the
+ * interview system prompt); pass the captured id on subsequent turns
+ * (driver uses Sonnet + resumes the same session).
  *
- * `projectId` + `projectPath` activate the `record_answer` MCP tool by
- * generating a per-project mcp-config.json and passing it via `--mcp-config`.
+ * `projectId` + `projectPath` are REQUIRED — the driver needs them to
+ * scope record_answer inserts to the right project and to set cwd.
  */
 export function chatSend(options: ChatSendOptions): ResultAsync<void, ChatError> {
   const channel = new Channel<ChatChunk>();
