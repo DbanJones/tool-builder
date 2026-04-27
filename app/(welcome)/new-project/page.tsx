@@ -33,6 +33,31 @@ const FormSchema = z.object({
 
 type FormValues = z.infer<typeof FormSchema>;
 
+const SAFE_DEFAULT_FOLDER = "~/Documents/ClaudeBuilds";
+
+/**
+ * The previous-session folder from localStorage IF it still looks safe;
+ * otherwise the safe default. Live test 2026-04-27: a user picked the
+ * Builder app's own source folder once, the choice was persisted, and
+ * every subsequent project landed in the Builder repo and broke claude.
+ */
+function pickDefaultFolder(): string {
+  if (typeof window === "undefined") return SAFE_DEFAULT_FOLDER;
+  const last = window.localStorage.getItem("builder.lastProjectFolder");
+  if (!last) return SAFE_DEFAULT_FOLDER;
+  // Heuristic: refuse paths that smell like a dev repo or the Builder.
+  const lower = last.toLowerCase();
+  const looksUnsafe =
+    lower.includes("/tool builder") ||
+    lower.includes("/src-tauri") ||
+    lower.includes("/sidecar") ||
+    lower.endsWith("/airtec/coding") ||
+    lower.includes("/onedrive/") ||
+    lower.includes("/icloud") ||
+    lower.includes("library/cloudstorage");
+  return looksUnsafe ? SAFE_DEFAULT_FOLDER : last;
+}
+
 export default function NewProjectPage() {
   const router = useRouter();
   const [submissionError, setSubmissionError] = useState<string | null>(null);
@@ -45,9 +70,7 @@ export default function NewProjectPage() {
   } = useForm<FormValues>({
     resolver: zodResolver(FormSchema),
     defaultValues: {
-      folder: typeof window !== "undefined"
-        ? (window.localStorage.getItem("builder.lastProjectFolder") ?? "~/Documents/ClaudeBuilds")
-        : "~/Documents/ClaudeBuilds",
+      folder: pickDefaultFolder(),
     },
   });
 

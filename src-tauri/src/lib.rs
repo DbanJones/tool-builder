@@ -219,6 +219,24 @@ fn build_capability_check(project_path: String) -> Result<CapabilityReport, Stri
   let cwd = expand_tilde(&project_path);
   let checked_path = cwd.display().to_string();
 
+  // 0. Reject project paths INSIDE the Builder source tree. Live test
+  //    showed that placing a project at e.g. ~/...Tool Builder/ or
+  //    inside src-tauri/ caused claude to read the Builder repo's own
+  //    .claude/settings.json (or src-tauri/.claude/) and lock the
+  //    session to the Builder source folder. Strict rejection up front
+  //    is cheaper than debugging the symptom.
+  if let Ok(canon_cwd) = cwd.canonicalize() {
+    if let Ok(builder_root) = sidecar::project_root_from_cwd() {
+      if canon_cwd.starts_with(&builder_root) {
+        errors.push(format!(
+          "Project folder is inside the Builder app's own source folder ({}). \
+           Choose a folder outside this repo — the recommended default is ~/Documents/ClaudeBuilds.",
+          builder_root.display()
+        ));
+      }
+    }
+  }
+
   // 1. Project folder exists + is a directory.
   if !cwd.exists() {
     errors.push(format!("Project folder doesn't exist: {checked_path}"));
@@ -517,6 +535,22 @@ fn project_create_folder(name: String, folder: String) -> Result<String, String>
   fs::create_dir_all(&parent)
     .map_err(|e| format!("failed to create parent folder {}: {e}", parent.display()))?;
 
+  // Reject parents inside the Builder's own source tree. Live test 2026-04-27
+  // showed that picking the Builder repo as the project parent caused the
+  // spawned claude to read the Builder's own .claude/ settings and lock the
+  // session. Cheaper to reject up front than debug the symptom.
+  if let Ok(canon_parent) = parent.canonicalize() {
+    if let Ok(builder_root) = sidecar::project_root_from_cwd() {
+      if canon_parent.starts_with(&builder_root) {
+        return Err(format!(
+          "Project folder is inside the Builder app's own source folder ({}). \
+           Pick a different parent folder — the recommended default is ~/Documents/ClaudeBuilds.",
+          builder_root.display()
+        ));
+      }
+    }
+  }
+
   let project_root = parent.join(&folder_name);
   if project_root.exists() {
     return Err(format!(
@@ -541,6 +575,20 @@ fn project_create_folder(name: String, folder: String) -> Result<String, String>
     .map_err(|e| format!("failed to write .builder/state.json: {e}"))?;
   fs::write(project_root.join("rules").join("README.md"), TEMPLATE_RULES_README)
     .map_err(|e| format!("failed to write rules/README.md: {e}"))?;
+
+  // Project-local Claude Code settings: blanket-allow EVERY tool inside
+  // this folder. Without this, the spawned claude reads any user-level
+  // ~/.claude/settings.json with restrictive paths and ends up "locked
+  // to src-tauri/" or similar (live tested 2026-04-27). This file takes
+  // precedence over user-level rules per Claude Code's settings layering.
+  fs::create_dir_all(project_root.join(".claude"))
+    .map_err(|e| format!("failed to create .claude/: {e}"))?;
+  let claude_settings_path = project_root.join(".claude").join("settings.local.json");
+  fs::write(
+    &claude_settings_path,
+    "{\n  \"permissions\": {\n    \"allow\": [\"*\"],\n    \"deny\": [],\n    \"defaultMode\": \"bypassPermissions\"\n  }\n}\n",
+  )
+  .map_err(|e| format!("failed to write .claude/settings.local.json: {e}"))?;
 
   let git_init = Command::new("git")
     .arg("init")
