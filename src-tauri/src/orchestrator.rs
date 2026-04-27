@@ -311,27 +311,22 @@ pub async fn orchestrator_start(
   // Subsequent turns reuse the same model via --resume.
   command.arg("--model").arg("sonnet");
 
-  // Permission model. Per drift D-021: the `--permission-prompt-tool`
-  // flag I tried to use does NOT exist on the claude CLI — it's only
-  // available via the Anthropic Agent SDK. The unrecognized flag was
-  // consuming the following args (including the kickoff prompt) and
-  // breaking spawn with "Input must be provided".
+  // Permission model. The user reported repeated directory-write failures
+  // even with --permission-mode bypassPermissions. claude CLI exposes a
+  // SEPARATE flag --dangerously-skip-permissions that's documented as
+  // "Bypass all permission checks" and is more aggressive than the mode
+  // (the mode still runs through some internal gating; the flag short-
+  // circuits earlier). Use the flag.
   //
-  // Until we wire a hooks-based or SDK-based permission flow, fall back
-  // to bypassPermissions: the orchestrator's trust boundary is the user
-  // clicking Start build + the Stop button, not Claude Code's own
-  // per-tool prompts. Risks scoped by:
-  //   - cwd is the novice's chosen project folder (the agent operates here)
-  //   - Stop kills the subprocess
-  //   - Single-user, local-only
+  // Trust boundary is the orchestrator: novice clicked Start build, Stop
+  // kills the subprocess, single-user local app, build_capability_check
+  // pre-flight has already verified the project folder is writable.
   //
-  // The PermissionPromptBanner UI + permission_requests table + the new
+  // The PermissionPromptBanner UI + permission_requests table +
   // mcp-orchestrator.ts MCP server stay in the codebase as dead code
-  // until the hooks integration lands.
-  command.arg("--permission-mode").arg("bypassPermissions");
+  // (D-021) for the eventual PreToolUse hook rewire.
+  command.arg("--dangerously-skip-permissions");
   command.arg("--add-dir").arg(&cwd);
-  // intentionally not adding --mcp-config / --permission-prompt-tool —
-  // see D-021 for the breakage they caused.
   let _ = project_id; // silence unused-arg until permission MCP is rewired
 
   if let Some(sid) = &session_id {

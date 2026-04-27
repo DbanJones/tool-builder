@@ -196,6 +196,89 @@ fn read_history_log_tail(project_path: String, limit: usize) -> Result<Vec<Strin
   Ok(lines)
 }
 
+// Pre-flight capability check for Start build. The user reported repeated
+// directory write failures; rather than make the orchestrator's first 30
+// seconds fail and waste a Claude turn, probe the project folder + .builder/
+// + claude CLI BEFORE spawn and surface a single clear blocking alert in
+// the dashboard listing exactly what's missing or unwritable.
+//
+// Returns Ok({ok: true, ...}) when everything's good, Ok({ok: false, errors})
+// when there are blockers. Never throws — the dashboard renders the result.
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CapabilityReport {
+  ok: bool,
+  errors: Vec<String>,
+  checked_path: String,
+}
+
+#[tauri::command]
+fn build_capability_check(project_path: String) -> Result<CapabilityReport, String> {
+  let mut errors: Vec<String> = vec![];
+  let cwd = expand_tilde(&project_path);
+  let checked_path = cwd.display().to_string();
+
+  // 1. Project folder exists + is a directory.
+  if !cwd.exists() {
+    errors.push(format!("Project folder doesn't exist: {checked_path}"));
+  } else if !cwd.is_dir() {
+    errors.push(format!("Project path is a file, not a directory: {checked_path}"));
+  } else {
+    // 2. Project folder writable — write + delete a tiny probe file.
+    let probe_path = cwd.join(".builder-capability-probe.tmp");
+    match fs::write(&probe_path, b"probe") {
+      Ok(()) => {
+        let _ = fs::remove_file(&probe_path);
+      }
+      Err(e) => {
+        errors.push(format!(
+          "Project folder isn't writable ({checked_path}): {e}. Check folder permissions or move the project somewhere outside iCloud / OneDrive."
+        ));
+      }
+    }
+  }
+
+  // 3. .builder/ subdirectory exists OR can be created.
+  let builder_dir = cwd.join(".builder");
+  if !builder_dir.exists() {
+    if let Err(e) = fs::create_dir_all(&builder_dir) {
+      errors.push(format!(
+        ".builder/ subdirectory cannot be created at {}: {e}",
+        builder_dir.display()
+      ));
+    }
+  }
+
+  // 4. claude CLI on PATH and runnable.
+  let which_or_where = if cfg!(target_os = "windows") {
+    "where"
+  } else {
+    "which"
+  };
+  match Command::new(which_or_where).arg("claude").output() {
+    Ok(o) if o.status.success() => {
+      // Probe --version too in case PATH lies about a non-functional binary.
+      match Command::new("claude").arg("--version").output() {
+        Ok(v) if v.status.success() => {}
+        Ok(_) => errors
+          .push("`claude` is on PATH but `claude --version` failed; reinstall the Claude Code CLI.".to_string()),
+        Err(e) => errors.push(format!("Couldn't run `claude --version`: {e}")),
+      }
+    }
+    _ => errors.push(
+      "Claude Code CLI (`claude`) not found on PATH. Install it from https://docs.claude.com/en/docs/claude-code/setup."
+        .to_string(),
+    ),
+  }
+
+  Ok(CapabilityReport {
+    ok: errors.is_empty(),
+    errors,
+    checked_path,
+  })
+}
+
 // Drift-log writer (D5). Appends a markdown block to the novice's
 // {project}/docs/drift-log.md, creating the file (with the same header the
 // Builder's own drift-log uses) if it doesn't yet exist. Path-sandboxed:
@@ -532,6 +615,7 @@ pub fn run() {
       read_history_log_tail,
       write_target_spec,
       append_drift_log_line,
+      build_capability_check,
       chat_send,
       orchestrator_start,
       orchestrator_stop,

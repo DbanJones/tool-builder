@@ -267,7 +267,36 @@ function BuildClient() {
 
   const startBuild = useCallback(async (): Promise<void> => {
     if (!project || status.kind === "running") return;
+
+    // Pre-flight capability probe (added per user feedback 2026-04-27 after
+    // repeated "can't write to directory" failures). Verifies the project
+    // folder exists + is writable + .builder/ creatable + claude CLI on
+    // PATH BEFORE we spawn — surfaces problems with a clear actionable
+    // message instead of letting the spawn fail 30 seconds later.
     setStatus({ kind: "running" });
+    try {
+      const probe = await invoke<{
+        ok: boolean;
+        errors: string[];
+        checkedPath: string;
+      }>("build_capability_check", { projectPath: project.path });
+      if (!probe.ok) {
+        setStatus({
+          kind: "error",
+          message:
+            `Build can't start. Check failed for ${probe.checkedPath}:\n` +
+            probe.errors.map((e) => `• ${e}`).join("\n"),
+        });
+        return;
+      }
+    } catch (e) {
+      setStatus({
+        kind: "error",
+        message: `Couldn't run pre-flight check: ${e instanceof Error ? e.message : String(e)}`,
+      });
+      return;
+    }
+
     setRecoveredFromCrash(false);
     // Mark the project as building BEFORE we spawn so a hard crash mid-turn
     // is detectable on next mount (the only writer of "building" is here).
