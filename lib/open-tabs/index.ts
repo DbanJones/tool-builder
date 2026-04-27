@@ -1,42 +1,52 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
-// Browser-style tab strip across the top of the workspace. Open tabs are
-// remembered between sessions so closing the app and reopening lands the
-// novice back where they were.
+import type { Project } from "@/lib/project";
+import { sidecarCall } from "@/lib/sidecar/client";
+
+// Tab strip state. Tabs ARE the projects in the DB (every non-deleted
+// project shows up as a tab automatically). The novice doesn't have to
+// "open" a project to see it in the strip — that mental model was confusing
+// and meant builds running in another project couldn't be seen at a glance.
 //
-// localStorage is the right scope: open-tab state is per-install, not
-// per-project, and we don't need it cross-process. The DB is project state;
-// this is UI state that wraps it.
+// We keep a localStorage cache of the project list so the strip renders
+// instantly on cold start, then refresh from the sidecar every POLL_MS so
+// build-status pills + name changes stay current.
 
-const KEY = "builder.openTabs.v1";
+const CACHE_KEY = "builder.openTabs.v2";
+const POLL_MS = 2000;
 
-export interface OpenTab {
+export interface TabSummary {
   id: string;
   name: string;
+  /** Mirrors Project.status so the tab pill can render running/idle/done. */
+  status: Project["status"];
+  lastOpenedAt: number;
 }
 
-function read(): OpenTab[] {
+function readCache(): TabSummary[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(KEY);
+    const raw = window.localStorage.getItem(CACHE_KEY);
     if (raw === null) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    const out: OpenTab[] = [];
+    const out: TabSummary[] = [];
     for (const item of parsed) {
+      if (typeof item !== "object" || item === null) continue;
+      const o = item as Record<string, unknown>;
       if (
-        typeof item === "object" &&
-        item !== null &&
-        "id" in item &&
-        "name" in item &&
-        typeof (item as { id: unknown }).id === "string" &&
-        typeof (item as { name: unknown }).name === "string"
+        typeof o.id === "string" &&
+        typeof o.name === "string" &&
+        typeof o.status === "string" &&
+        typeof o.lastOpenedAt === "number"
       ) {
         out.push({
-          id: (item as { id: string }).id,
-          name: (item as { name: string }).name,
+          id: o.id,
+          name: o.name,
+          status: o.status as Project["status"],
+          lastOpenedAt: o.lastOpenedAt,
         });
       }
     }
@@ -46,61 +56,57 @@ function read(): OpenTab[] {
   }
 }
 
-function write(tabs: readonly OpenTab[]): void {
+function writeCache(tabs: readonly TabSummary[]): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(KEY, JSON.stringify(tabs));
+    window.localStorage.setItem(CACHE_KEY, JSON.stringify(tabs));
   } catch {
-    /* localStorage quota or disabled — non-fatal, tabs just don't persist. */
+    /* quota / disabled — non-fatal, just no instant render on next reload. */
   }
 }
 
-// React hook that reads + writes through. Cross-component sync is via the
-// `storage` event so opening a project in tab A reflects in the bar
-// rendered by tab B (relevant once we move multi-window).
-export function useOpenTabs(): {
-  tabs: readonly OpenTab[];
-  ensureOpen: (tab: OpenTab) => void;
-  close: (id: string) => void;
-  rename: (id: string, name: string) => void;
-} {
-  const [tabs, setTabs] = useState<readonly OpenTab[]>(() => read());
+function projectsToTabs(projects: readonly Project[]): TabSummary[] {
+  return [...projects]
+    .sort((a, b) => b.lastOpenedAt - a.lastOpenedAt)
+    .map((p) => ({
+      id: p.id,
+      name: p.name,
+      status: p.status,
+      lastOpenedAt: p.lastOpenedAt,
+    }));
+}
+
+/**
+ * Hook backing the tab strip. Returns tabs derived from sidecar.projects.list,
+ * polled every 2s so build status pulses propagate without manual refresh.
+ *
+ * We render an immediate first frame from the localStorage cache so the strip
+ * doesn't blink empty between mount and the first poll's resolution.
+ */
+export function useOpenTabs(): { tabs: readonly TabSummary[] } {
+  const [tabs, setTabs] = useState<readonly TabSummary[]>(() => readCache());
 
   useEffect(() => {
-    const onStorage = (e: StorageEvent): void => {
-      if (e.key === KEY) setTabs(read());
+    let cancelled = false;
+    const tick = async (): Promise<void> => {
+      const r = await sidecarCall<Project[]>("projects.list", {});
+      if (cancelled) return;
+      r.match(
+        (projects) => {
+          const next = projectsToTabs(projects);
+          setTabs(next);
+          writeCache(next);
+        },
+        () => undefined,
+      );
     };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    void tick();
+    const handle = setInterval(() => void tick(), POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(handle);
+    };
   }, []);
 
-  const ensureOpen = useCallback((tab: OpenTab): void => {
-    setTabs((prev) => {
-      const existing = prev.find((t) => t.id === tab.id);
-      if (existing && existing.name === tab.name) return prev;
-      const next = existing
-        ? prev.map((t) => (t.id === tab.id ? { ...t, name: tab.name } : t))
-        : [...prev, tab];
-      write(next);
-      return next;
-    });
-  }, []);
-
-  const close = useCallback((id: string): void => {
-    setTabs((prev) => {
-      const next = prev.filter((t) => t.id !== id);
-      write(next);
-      return next;
-    });
-  }, []);
-
-  const rename = useCallback((id: string, name: string): void => {
-    setTabs((prev) => {
-      const next = prev.map((t) => (t.id === id ? { ...t, name } : t));
-      write(next);
-      return next;
-    });
-  }, []);
-
-  return { tabs, ensureOpen, close, rename };
+  return { tabs };
 }

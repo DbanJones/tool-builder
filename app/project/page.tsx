@@ -50,7 +50,6 @@ import { exportToGithub, isGhInstalled } from "@/lib/export";
 import { ingestFile } from "@/lib/files/ingest";
 import { classifyByName, type IngestedFile } from "@/lib/files/types";
 import type { QuestionId } from "@/lib/interview/library";
-import { useOpenTabs } from "@/lib/open-tabs";
 import { checkReadiness, type ReadinessResult } from "@/lib/interview/readiness";
 import { rebuildSpec, type RebuildAnswer } from "@/lib/interview/rebuild-spec";
 import {
@@ -184,10 +183,6 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   const [tab, setTab] = useState<RightTab>("spec");
   const tabPinnedRef = useRef(false);
 
-  // Browser-style top-of-window tab strip. We push the current project into
-  // the open-tabs list as soon as it loads.
-  const { ensureOpen: ensureTabOpen } = useOpenTabs();
-
   // If another open project's build is already running, the orchestrator
   // singleton can't take a second one. We surface a banner with the
   // offending project's name + a deep link to switch tabs.
@@ -219,7 +214,6 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
             return;
           }
           setProject(p);
-          ensureTabOpen({ id: p.id, name: p.name });
           buildSessionRef.current = p.currentSessionId;
           // Crash recovery: a "building" status on cold open means the prior
           // process died mid-turn. Park as paused so the next click is
@@ -281,7 +275,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     return () => {
       cancelled = true;
     };
-  }, [projectId, ensureTabOpen]);
+  }, [projectId]);
 
   // Pull spec from answers and rebuild the preview.
   const refreshSpec = useCallback(async (): Promise<void> => {

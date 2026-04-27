@@ -1,26 +1,24 @@
 "use client";
 
-import { FilePlus, Plus, X } from "lucide-react";
+import { FilePlus, Plus } from "lucide-react";
 import Link from "next/link";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 
-import { useOpenTabs, type OpenTab } from "@/lib/open-tabs";
-import type { Project } from "@/lib/project";
-import { sidecarCall } from "@/lib/sidecar/client";
+import { useOpenTabs, type TabSummary } from "@/lib/open-tabs";
 
-// Browser-style tab strip across the top of the window. Each tab is one
-// open project; the active tab is whichever /project?id=… is in the URL.
-// A status pill on each tab pulses while that project's build is running,
-// so the novice can see at a glance which project is currently spending.
-
-const POLL_MS = 2000;
+// Tab strip across the top of the window. Tabs ARE the projects in the DB —
+// every project shows up automatically, sorted by lastOpenedAt. The strip's
+// job is to make it obvious which projects exist, which is active, and which
+// are currently building.
 
 export function TabBar() {
   // useSearchParams suspends during the static prerender pass; wrap so the
   // root layout doesn't blow up when next build snapshots the shell.
   return (
-    <Suspense fallback={<div className="h-9 shrink-0 border-b bg-muted/40" aria-hidden="true" />}>
+    <Suspense
+      fallback={<div className="h-9 shrink-0 border-b bg-muted/40" aria-hidden="true" />}
+    >
       <TabBarInner />
     </Suspense>
   );
@@ -29,58 +27,10 @@ export function TabBar() {
 function TabBarInner() {
   const pathname = usePathname();
   const params = useSearchParams();
-  const router = useRouter();
   const activeId = pathname === "/project" ? params.get("id") : null;
   const onNewProjectRoute = pathname === "/new-project";
-  const { tabs, close } = useOpenTabs();
-  const [byId, setById] = useState<Map<string, Project>>(new Map());
-
-  // Poll project status so each tab's pill stays fresh.
-  useEffect(() => {
-    if (tabs.length === 0) {
-      setById(new Map());
-      return;
-    }
-    let cancelled = false;
-    const tick = async (): Promise<void> => {
-      const r = await sidecarCall<Project[]>("projects.list", {});
-      if (cancelled) return;
-      r.match(
-        (rows) => {
-          const m = new Map<string, Project>();
-          for (const p of rows) m.set(p.id, p);
-          setById(m);
-        },
-        () => undefined,
-      );
-    };
-    void tick();
-    const handle = setInterval(() => void tick(), POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(handle);
-    };
-  }, [tabs.length]);
-
-  const onClose = (id: string, e: React.MouseEvent): void => {
-    e.preventDefault();
-    e.stopPropagation();
-    close(id);
-    // If we just closed the active tab, navigate somewhere sane.
-    if (id === activeId) {
-      const remaining = tabs.filter((t) => t.id !== id);
-      router.push(remaining[0] ? `/project?id=${encodeURIComponent(remaining[0].id)}` : "/");
-    }
-  };
-
-  const onCloseNewProjectTab = (e: React.MouseEvent): void => {
-    e.preventDefault();
-    e.stopPropagation();
-    // Closing the synthetic new-project tab returns the user to the most
-    // recently opened project, or home if none exist.
-    const fallback = tabs[tabs.length - 1];
-    router.push(fallback ? `/project?id=${encodeURIComponent(fallback.id)}` : "/");
-  };
+  const { tabs } = useOpenTabs();
+  const buildingCount = tabs.filter((t) => t.status === "building").length;
 
   return (
     <div className="flex h-9 shrink-0 items-end gap-0 border-b bg-muted/40">
@@ -97,17 +47,9 @@ function TabBarInner() {
         Builder
       </Link>
       {tabs.map((t) => (
-        <Tab
-          key={t.id}
-          tab={t}
-          project={byId.get(t.id) ?? null}
-          active={t.id === activeId}
-          onClose={(e) => onClose(t.id, e)}
-        />
+        <Tab key={t.id} tab={t} active={t.id === activeId} />
       ))}
-      {onNewProjectRoute ? (
-        <NewProjectTab onClose={onCloseNewProjectTab} />
-      ) : null}
+      {onNewProjectRoute ? <NewProjectTab /> : null}
       <Link
         href="/new-project"
         aria-label="Open another project"
@@ -116,50 +58,28 @@ function TabBarInner() {
       >
         <Plus className="h-3.5 w-3.5" aria-hidden="true" />
       </Link>
+      {buildingCount > 0 ? (
+        <span
+          className="ml-auto flex items-center gap-1.5 px-3 text-[11px] font-medium text-primary"
+          aria-live="polite"
+        >
+          <span className="relative inline-flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/60 motion-reduce:hidden" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
+          </span>
+          {buildingCount} building
+        </span>
+      ) : null}
     </div>
   );
 }
 
-// Synthetic tab shown while the user is on /new-project. Mirrors a real tab
-// visually so it's obvious the + button created a new tab; replaced by the
-// real project tab once createProject succeeds and routes to /project?id=…
-function NewProjectTab({ onClose }: { onClose: (e: React.MouseEvent) => void }) {
-  return (
-    <div
-      aria-current="page"
-      className="group relative flex h-9 max-w-[220px] items-center gap-2 border-r border-b-2 border-b-primary bg-background px-3 text-xs text-foreground"
-    >
-      <FilePlus className="h-3 w-3 shrink-0 text-primary" aria-hidden="true" />
-      <span className="min-w-0 flex-1 truncate">New project</span>
-      <button
-        type="button"
-        onClick={onClose}
-        aria-label="Close new project tab"
-        className="ml-1 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground/60 opacity-0 hover:bg-muted hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
-      >
-        <X className="h-3 w-3" aria-hidden="true" />
-      </button>
-    </div>
-  );
-}
-
-function Tab({
-  tab,
-  project,
-  active,
-  onClose,
-}: {
-  tab: OpenTab;
-  project: Project | null;
-  active: boolean;
-  onClose: (e: React.MouseEvent) => void;
-}) {
-  const status = project?.status ?? null;
-  const isRunning = status === "building";
+function Tab({ tab, active }: { tab: TabSummary; active: boolean }) {
+  const isRunning = tab.status === "building";
   return (
     <Link
       href={`/project?id=${encodeURIComponent(tab.id)}`}
-      title={project?.path ?? tab.name}
+      title={tab.name}
       aria-current={active ? "page" : undefined}
       className={
         "group relative flex h-9 max-w-[220px] items-center gap-2 border-r px-3 text-xs " +
@@ -168,39 +88,60 @@ function Tab({
           : "text-muted-foreground hover:bg-background/60 hover:text-foreground")
       }
     >
-      <StatusDot running={isRunning} idle={!isRunning && project !== null} />
-      <span className="min-w-0 flex-1 truncate">{project?.name ?? tab.name}</span>
-      <button
-        type="button"
-        onClick={onClose}
-        aria-label={`Close ${project?.name ?? tab.name}`}
-        className="ml-1 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground/60 opacity-0 hover:bg-muted hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
-      >
-        <X className="h-3 w-3" aria-hidden="true" />
-      </button>
+      <StatusDot status={tab.status} />
+      <span className="min-w-0 flex-1 truncate">{tab.name}</span>
+      {isRunning ? (
+        <span className="ml-1 shrink-0 text-[9px] font-semibold uppercase tracking-wide text-primary">
+          building
+        </span>
+      ) : null}
     </Link>
   );
 }
 
-function StatusDot({ running, idle }: { running: boolean; idle: boolean }) {
-  if (running) {
+// Synthetic tab shown while the user is on /new-project. Replaced by the
+// real project tab once createProject succeeds and routes to /project?id=…
+function NewProjectTab() {
+  return (
+    <div
+      aria-current="page"
+      className="relative flex h-9 max-w-[220px] items-center gap-2 border-r border-b-2 border-b-primary bg-background px-3 text-xs text-foreground"
+    >
+      <FilePlus className="h-3 w-3 shrink-0 text-primary" aria-hidden="true" />
+      <span className="min-w-0 flex-1 truncate">New project</span>
+    </div>
+  );
+}
+
+function StatusDot({ status }: { status: TabSummary["status"] }) {
+  if (status === "building") {
     return (
-      <span
-        aria-label="Build running"
-        className="relative inline-flex h-2 w-2 shrink-0"
-      >
+      <span aria-label="Build running" className="relative inline-flex h-2 w-2 shrink-0">
         <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/60 motion-reduce:hidden" />
         <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
       </span>
     );
   }
+  if (status === "done") {
+    return (
+      <span
+        aria-label="Done"
+        className="inline-block h-2 w-2 shrink-0 rounded-full bg-green-600"
+      />
+    );
+  }
+  if (status === "paused") {
+    return (
+      <span
+        aria-label="Paused"
+        className="inline-block h-2 w-2 shrink-0 rounded-full bg-yellow-500"
+      />
+    );
+  }
   return (
     <span
-      aria-label={idle ? "Idle" : "Loading"}
-      className={
-        "inline-block h-2 w-2 shrink-0 rounded-full " +
-        (idle ? "bg-muted-foreground/40" : "bg-muted-foreground/20")
-      }
+      aria-label={status}
+      className="inline-block h-2 w-2 shrink-0 rounded-full bg-muted-foreground/40"
     />
   );
 }
