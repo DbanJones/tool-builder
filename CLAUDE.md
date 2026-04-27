@@ -32,6 +32,7 @@ deployed Phase 1 app in under 90 minutes from first launch, on their own.
 10. MUST follow the Echo-back Protocol below before any new feature.
 11. MUST run the self-check protocol from `rules/07-self-check.md` at every phase boundary, before every PR to main, and on every `/recheck` request. Drift is measured against `spec.md` (the original design), not against conversation history.
 12. MUST self-drive: at the start of each session, read `.builder/state.json` to find the current phase and next task; at the end of each session, update it. Pause for human input only at the checkpoints listed in `docs/agent-runbook.md`.
+13. MUST give the novice a one-click way to launch the target app: a "Launch app" button on the Builder dashboard AND a platform-native launch script in the project folder (`launch.command` / `launch.bat` / `launch.sh`). The novice never opens a terminal or runs `cd`. See `rules/06-other.md` O33-O37.
 
 ## Codebase map
 - `src-tauri/` Rust shell: window management, keychain access, file system bridge, updater

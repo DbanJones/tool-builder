@@ -53,3 +53,10 @@ O31. MUST run destructive operations behind a `lib/danger.ts` wrapper that print
 
 ## Handoff
 O32. MUST ship `docs/getting-started.md` (install, first project in 15 minutes), `.env.example`, `scripts/dev`, `scripts/setup`, `scripts/verify`, and `docs/troubleshooting.md` (top 10 issues novices hit).
+
+## Quick-launch opener (target app must be one-click runnable)
+O33. MUST give the novice a one-click way to launch the target app once Phase 1 is built. The Builder dashboard MUST show a "Launch app" button that starts the target app's dev/start command and opens the resulting local URL in the novice's default browser; the live tail captures the spawned server's stdout/stderr until the user clicks Stop.
+O34. MUST also write a platform-native quick-launch script into the project folder so the novice can open the app outside the Builder: `launch.command` on macOS, `launch.bat` on Windows, `launch.sh` on Linux. Each script MUST install dependencies if missing, start the dev/start command, and print the URL. Mark them executable on Unix.
+O35. MUST NOT require the novice to open a terminal, run `cd`, or remember a `pnpm dev` / `npm run dev` command to launch the app they just built. The novice never set up Node by hand; the Builder owns the runtime expectation end-to-end.
+O36. MUST detect when launch fails (port busy, missing build artefacts, dependency install error) and surface a clear actionable message in the dashboard ("Port 3000 in use — choose another port?") rather than a raw stack trace.
+O37. MUST verify the quick-launch path works as the final step of every build, before the build is declared done. The end-of-build review (`.builder/review.md`) MUST list "Quick-launch verified" as a present/missing item alongside the spec coverage.
