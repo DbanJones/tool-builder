@@ -1,7 +1,7 @@
 "use client";
 
 import { invoke } from "@tauri-apps/api/core";
-import { GitBranch, Loader2, Pause, Play, Rocket, Square } from "lucide-react";
+import { ChevronDown, ChevronRight, GitBranch, Loader2, Play, Rocket, Square } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
@@ -10,6 +10,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   readHistoryLogTail,
+  readReviewMarkdown,
   readTargetState,
   type HistoryActionEntry,
   type TargetState,
@@ -22,7 +23,7 @@ import {
 } from "@/lib/cost-ceiling";
 import { deployToVercel, getVercelToken, isVercelInstalled } from "@/lib/deploy";
 import { exportToGithub, isGhInstalled } from "@/lib/export";
-import { appendDrift, listOpenDrifts, type DriftEvent } from "@/lib/drift";
+import { listOpenDrifts, type DriftEvent } from "@/lib/drift";
 import { estimate, formatEta, type EtaResult } from "@/lib/eta";
 import type { QuestionId } from "@/lib/interview/library";
 import { rebuildSpec } from "@/lib/interview/rebuild-spec";
@@ -98,6 +99,10 @@ function Skeleton() {
 function BuildClient() {
   const params = useSearchParams();
   const projectId = params.get("project");
+  // UX5: when the interview's "Build it" button hands off here it sets
+  // autostart=1 so the dashboard kicks the orchestrator on mount instead
+  // of forcing the novice to find a second "Start" button.
+  const autostart = params.get("autostart") === "1";
 
   const [project, setProject] = useState<Project | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -107,10 +112,16 @@ function BuildClient() {
   const [costSum, setCostSum] = useState<CostSum | null>(null);
   const [openDrifts, setOpenDrifts] = useState<readonly DriftEvent[]>([]);
   // BD1 plan panel: latest TodoWrite snapshot + the human line of the most
-  // recent tool call ("Now doing"). Drives the right-hand checklist + the
-  // status strip under the header so the novice always sees the pathway.
+  // recent tool call. Drives the steps panel + the status strip under the
+  // header so the novice always sees the pathway.
   const [plan, setPlan] = useState<readonly TodoItem[]>([]);
-  const [nowDoing, setNowDoing] = useState<string | null>(null);
+  const [latestToolLine, setLatestToolLine] = useState<string | null>(null);
+  // End-of-build coverage report (.builder/review.md). Re-read after every
+  // `done` event; rendered as the prominent finish-state panel when present.
+  const [reviewMarkdown, setReviewMarkdown] = useState<string | null>(null);
+  // Show details (activity log, project path, advanced controls) only when
+  // the novice asks for them. By default we show the simple step view.
+  const [showDetails, setShowDetails] = useState(false);
   // True when the project's persisted status was "building" but no
   // subprocess is alive on app open — Flow H AC4. Cleared on Resume/Stop.
   const [recoveredFromCrash, setRecoveredFromCrash] = useState(false);
@@ -216,6 +227,15 @@ function BuildClient() {
           /* non-fatal — banner just doesn't render */
         },
       );
+
+      const reviewResult = await readReviewMarkdown(projectPath);
+      if (cancelled) return;
+      reviewResult.match(
+        (md) => setReviewMarkdown(md),
+        () => {
+          /* non-fatal — review panel renders the placeholder */
+        },
+      );
     }
 
     return () => {
@@ -264,6 +284,13 @@ function BuildClient() {
   }, [project, costCap]);
 
   const ceiling: CostCeilingResult = evaluateCostCeiling(costSum?.usdCents ?? 0, costCap);
+
+  // UX5: when the dashboard loads with ?autostart=1 (the interview's "Build
+  // it" handoff), fire startBuild once the project is loaded and we're idle.
+  // Guarded by a ref so re-renders don't retrigger the spawn. We refuse to
+  // autostart when the project was crash-recovered — that case still needs a
+  // deliberate Resume click so the novice can decide whether to keep going.
+  const autostartFiredRef = useRef(false);
 
   const startBuild = useCallback(async (): Promise<void> => {
     if (!project || status.kind === "running") return;
@@ -363,7 +390,8 @@ function BuildClient() {
           }
           // Persist the turn's cost row for the meter, then re-read the
           // aggregate AND re-poll open drifts (claude may have appended
-          // some during the turn via its own /recheck pass — D5b).
+          // some during the turn via its own /recheck pass — D5b) AND
+          // re-read .builder/review.md (the end-of-build review file).
           // Orchestrator currently spawns claude with --model sonnet.
           void (async () => {
             await sidecarCall("costs.append", {
@@ -385,12 +413,17 @@ function BuildClient() {
               (events) => setOpenDrifts(events),
               () => undefined,
             );
+            const reviewRes = await readReviewMarkdown(project.path);
+            reviewRes.match(
+              (md) => setReviewMarkdown(md),
+              () => undefined,
+            );
           })();
         } else if (event.kind === "todos_updated") {
           setPlan(event.todos);
         } else if (event.kind === "tool_use") {
           const humanLine = translate(event.tool, event.raw_input);
-          setNowDoing(humanLine);
+          setLatestToolLine(humanLine);
           // Optimistic append. The sidecar persists in parallel; we don't
           // wait on it because the goal is sub-200ms tail latency (Flow F
           // AC2 — measurement deferred until D4).
@@ -434,17 +467,93 @@ function BuildClient() {
     }
   }, [project, status.kind]);
 
-  // Pause = ask the orchestrator to stop after the current turn naturally
-  // ends, AND mark the project as paused. The current turn is already
-  // turn-bounded in `-p` mode, so this is effectively "don't auto-resume".
-  // (For interactive multi-tool turns we'd need the kit's "finish current
-  // tool then halt" semantics; out of scope for D6.)
-  const pauseBuild = useCallback(async (): Promise<void> => {
+  // Send a follow-up turn to the running session (resumes via sessionIdRef).
+  // Used by the Review panel's "Build the missing pieces" button. Mirrors
+  // the chat-input's onSend so it gets the same cost/drift/review re-reads.
+  const runFollowUpTurn = useCallback(
+    async (prompt: string): Promise<void> => {
+      if (!project) return;
+      if (status.kind === "running") return;
+      setStatus({ kind: "running" });
+      setLatestToolLine(`You said: ${prompt.slice(0, 80)}…`);
+      turnStartRef.current = Date.now();
+      const r = await orchestratorStart({
+        projectId: project.id,
+        projectPath: project.path,
+        sessionId: sessionIdRef.current,
+        prompt,
+        onEvent: (event: OrchestratorEvent) => {
+          if (event.kind === "session") {
+            sessionIdRef.current = event.id;
+          } else if (event.kind === "todos_updated") {
+            setPlan(event.todos);
+          } else if (event.kind === "done") {
+            if (turnStartRef.current !== null) {
+              const elapsed = Date.now() - turnStartRef.current;
+              setTurnDurations((prev) => [...prev, elapsed]);
+              turnStartRef.current = null;
+            }
+            void (async () => {
+              await sidecarCall("costs.append", {
+                projectId: project.id,
+                model: "sonnet",
+                inputTokens: event.input_tokens ?? 0,
+                outputTokens: event.output_tokens ?? 0,
+                costUsd: event.cost_usd ?? 0,
+              });
+              const sumRes = await sidecarCall<CostSum>("costs.sumByProject", {
+                projectId: project.id,
+              });
+              sumRes.match((sum) => setCostSum(sum), () => undefined);
+              const driftRes = await listOpenDrifts(project.id);
+              driftRes.match((events) => setOpenDrifts(events), () => undefined);
+              const reviewRes = await readReviewMarkdown(project.path);
+              reviewRes.match((md) => setReviewMarkdown(md), () => undefined);
+            })();
+          } else if (event.kind === "tool_use") {
+            const humanLine = translate(event.tool, event.raw_input);
+            setLatestToolLine(humanLine);
+            setActions((prev) => [
+              ...prev,
+              {
+                id: `pending-${Date.now()}-${Math.random()}`,
+                ts: Date.now(),
+                tool: event.tool,
+                rawInput: event.raw_input,
+                humanLine,
+                phase: null,
+                taskId: null,
+              },
+            ]);
+          } else if (event.kind === "rate_limit") {
+            setStatus({ kind: "rate_limited", message: event.message });
+          } else if (event.kind === "error") {
+            setStatus({ kind: "error", message: event.message });
+          }
+        },
+      });
+      r.match(
+        () => setStatus((prev) => (prev.kind === "running" ? { kind: "idle" } : prev)),
+        (e) => setStatus({ kind: "error", message: e.message }),
+      );
+    },
+    [project, status.kind],
+  );
+
+  // Autostart effect: when the interview hands off with ?autostart=1, kick
+  // the build automatically once the project loads. Fires at most once per
+  // mount (autostartFiredRef). Skips when crash-recovered (the user should
+  // pick Resume / Stop deliberately) and skips when a build is already
+  // running on this dashboard (shouldn't happen on first mount).
+  useEffect(() => {
+    if (!autostart) return;
     if (!project) return;
-    await orchestratorStop();
-    setStatus({ kind: "idle" });
-    await sidecarCall("projects.setStatus", { id: project.id, status: "paused" });
-  }, [project]);
+    if (autostartFiredRef.current) return;
+    if (recoveredFromCrash) return;
+    if (status.kind === "running") return;
+    autostartFiredRef.current = true;
+    void startBuild();
+  }, [autostart, project, recoveredFromCrash, status.kind, startBuild]);
 
   // Stop = kill the subprocess AND drop the session id so the next start is
   // a fresh kickoff (not a resume of the current build).
@@ -533,6 +642,27 @@ function BuildClient() {
   const inFlightElapsed = turnStartRef.current === null ? 0 : Date.now() - turnStartRef.current;
   const liveEta = estimate(turnDurations, inFlightElapsed);
 
+  // Step view (UX5): prefer the in-progress TodoWrite activeForm as the
+  // novice-readable "Now doing" line — the agent writes these lines
+  // explicitly for the dashboard. Fall back to the latest tool's translated
+  // line when no plan item is in progress (early in the run, or between
+  // turns). Step counter is the index of the in-progress item among all
+  // plan items, 1-based; it's null when the plan is empty.
+  const inProgressIdx = plan.findIndex((t) => t.status === "in_progress");
+  const completedSteps = plan.filter((t) => t.status === "completed").length;
+  const totalSteps = plan.length;
+  const currentStepLabel: string | null =
+    inProgressIdx >= 0 && plan[inProgressIdx] ? plan[inProgressIdx]!.activeForm : null;
+  const nowDoingLine: string | null = currentStepLabel ?? latestToolLine;
+  const stepCounter: string | null =
+    totalSteps > 0
+      ? inProgressIdx >= 0
+        ? `Step ${inProgressIdx + 1} of ${totalSteps}`
+        : completedSteps === totalSteps && totalSteps > 0
+          ? `${totalSteps} of ${totalSteps} steps complete`
+          : `${completedSteps} of ${totalSteps} steps complete`
+      : null;
+
   if (loadError) {
     return (
       <main className="flex h-screen items-center justify-center p-6">
@@ -557,123 +687,115 @@ function BuildClient() {
           <p className="font-mono text-xs text-muted-foreground">{project.path}</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            disabled={status.kind === "running" || ceiling.state === "stop"}
-            onClick={() => void startBuild()}
-          >
-            {status.kind === "running" ? (
-              <>
-                <Loader2 className="mr-1 h-3 w-3 animate-spin" /> Running
-              </>
-            ) : (
-              <>
-                <Play className="mr-1 h-3 w-3" />
-                {sessionIdRef.current ? "Resume build" : "Start build"}
-              </>
-            )}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={status.kind !== "running"}
-            onClick={() => void pauseBuild()}
-            title="Pause after the current turn"
-          >
-            <Pause className="h-3 w-3" />
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => void stopBuild()}
-            title="Stop the build (drops the session)"
-          >
-            <Square className="h-3 w-3" />
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => void deployPreview()}
-            disabled={deployStatus.kind === "running"}
-            title="Deploy a preview to Vercel"
-          >
-            {deployStatus.kind === "running" ? (
-              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-            ) : (
-              <Rocket className="mr-1 h-3 w-3" />
-            )}
-            Deploy
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => void exportToGithubFlow()}
-            disabled={exportStatus.kind === "running"}
-            title="Push the project folder to a private GitHub repo"
-          >
-            {exportStatus.kind === "running" ? (
-              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-            ) : (
-              <GitBranch className="mr-1 h-3 w-3" />
-            )}
-            Push to GitHub
-          </Button>
-          {process.env.NODE_ENV !== "production" ? (
+          {status.kind === "running" ? (
             <Button
               size="sm"
               variant="outline"
-              title="DEV ONLY: inject a test drift event (D5 trigger; removed when D5b wires the report_drift MCP tool)"
-              onClick={() => {
-                if (!project) return;
-                void (async () => {
-                  const r = await appendDrift({
-                    projectId: project.id,
-                    phase: targetState?.phase ?? "phase-1",
-                    kind: "implementation",
-                    description: "Test drift injected from the dashboard for D5 verification",
-                  });
-                  r.match(
-                    (created) => setOpenDrifts((prev) => [...prev, created]),
-                    () => undefined,
-                  );
-                })();
-              }}
+              onClick={() => void stopBuild()}
+              title="Stop the build"
             >
-              Inject drift (dev)
+              <Square className="mr-1 h-3 w-3" />
+              Stop
             </Button>
+          ) : (
+            <Button
+              size="sm"
+              disabled={ceiling.state === "stop"}
+              onClick={() => void startBuild()}
+            >
+              <Play className="mr-1 h-3 w-3" />
+              {sessionIdRef.current ? "Resume" : "Start"}
+            </Button>
+          )}
+          {/* Show / hide details toggle (everything else lives in here). */}
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setShowDetails((v) => !v)}
+            title={showDetails ? "Hide advanced controls" : "Show advanced controls"}
+          >
+            {showDetails ? (
+              <ChevronDown className="mr-1 h-3 w-3" />
+            ) : (
+              <ChevronRight className="mr-1 h-3 w-3" />
+            )}
+            Details
+          </Button>
+          {showDetails ? (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void deployPreview()}
+                disabled={deployStatus.kind === "running"}
+                title="Deploy a preview to Vercel"
+              >
+                {deployStatus.kind === "running" ? (
+                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                ) : (
+                  <Rocket className="mr-1 h-3 w-3" />
+                )}
+                Deploy
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void exportToGithubFlow()}
+                disabled={exportStatus.kind === "running"}
+                title="Push the project folder to a private GitHub repo"
+              >
+                {exportStatus.kind === "running" ? (
+                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                ) : (
+                  <GitBranch className="mr-1 h-3 w-3" />
+                )}
+                Push to GitHub
+              </Button>
+            </>
           ) : null}
         </div>
       </header>
 
-      {/* Phase bar */}
-      <PhaseBar state={targetState} />
+      {/* Progress bar (replaces the old PhaseBar — uses TodoWrite plan, not
+          state.json's task counter, so it tracks the agent's own pacing). */}
+      <ProgressBar completed={completedSteps} total={totalSteps} />
 
-      {/* Now-doing strip — derived from the most recent tool call. */}
-      {nowDoing && status.kind === "running" ? (
-        <div className="flex items-center gap-2 border-b bg-primary/5 px-6 py-1.5 text-xs">
-          <Loader2 className="h-3 w-3 animate-spin text-primary motion-reduce:animate-none" />
-          <span className="font-semibold uppercase tracking-wide text-muted-foreground">
-            Now doing
-          </span>
-          <span className="truncate text-foreground">{nowDoing}</span>
+      {/* Headline status: prominent, plain-language line that mirrors the
+          agent's TodoWrite activeForm (e.g. "Setting up the database").
+          This is the primary thing a novice should look at while the build
+          runs. Falls back to the most recent tool when no item is in_progress. */}
+      <div className="border-b bg-primary/5 px-6 py-3">
+        <div className="flex items-center gap-3">
+          {status.kind === "running" ? (
+            <Loader2 className="h-4 w-4 animate-spin text-primary motion-reduce:animate-none" />
+          ) : (
+            <span className="inline-block h-2 w-2 rounded-full bg-muted-foreground/40" />
+          )}
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium text-foreground">
+              {nowDoingLine ?? (status.kind === "running" ? "Working…" : "Ready when you are.")}
+            </p>
+            {stepCounter ? (
+              <p className="text-[11px] text-muted-foreground">{stepCounter}</p>
+            ) : null}
+          </div>
         </div>
-      ) : null}
+      </div>
 
-      {/* Plan + Live tail */}
       <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[300px_1fr]">
         <aside className="hidden min-h-0 flex-col border-r lg:flex">
           <div className="border-b px-4 py-3">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Plan {plan.length > 0 ? `· ${plan.filter((t) => t.status === "completed").length} / ${plan.length}` : null}
+              Steps {plan.length > 0 ? `· ${completedSteps} / ${totalSteps}` : null}
             </h2>
             <p className="text-[11px] text-muted-foreground">
-              Claude maintains this via TodoWrite as the build progresses.
+              The plan Claude is working through. It updates itself as the build progresses.
             </p>
           </div>
           <div className="flex-1 overflow-auto p-4">
             {plan.length === 0 ? (
               <p className="text-xs text-muted-foreground">
-                No plan yet. Once Claude calls TodoWrite, the steps will appear here with status.
+                Claude will lay out the steps here as soon as the build starts.
               </p>
             ) : (
               <ol className="space-y-2 text-xs">
@@ -792,24 +914,49 @@ function BuildClient() {
               }
             />
           ) : null}
-          <div className="border-b px-4 py-2">
+          {/* End-of-build review panel. Rendered prominently above the
+              activity log when .builder/review.md exists, so the novice
+              sees coverage against spec.md as the headline finish state. */}
+          {reviewMarkdown ? (
+            <ReviewPanel
+              markdown={reviewMarkdown}
+              isRunning={status.kind === "running"}
+              onBuildMissing={() => {
+                if (!project) return;
+                void runFollowUpTurn(
+                  "Look at .builder/review.md. For every item marked partial or missing, build it now. Mark each plan item completed in TodoWrite as you go. When everything is built, re-run the review and rewrite .builder/review.md with the updated coverage.",
+                );
+              }}
+            />
+          ) : null}
+
+          <div className="flex items-center justify-between border-b px-4 py-2">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Live tail · {actions.length} action{actions.length === 1 ? "" : "s"}
+              Activity {actions.length > 0 ? `· ${actions.length}` : ""}
             </h2>
+            {actions.length > 0 ? (
+              <span className="text-[10px] text-muted-foreground">
+                {showDetails ? "showing technical detail" : "plain view"}
+              </span>
+            ) : null}
           </div>
           <div ref={tailRef} className="flex-1 overflow-auto px-4 py-2 text-xs" aria-live="polite">
             {actions.length === 0 ? (
               <p className="text-muted-foreground">
-                No actions yet. Click Start build to spawn the orchestrator.
+                {status.kind === "running"
+                  ? "Claude is reading your spec…"
+                  : "Click Start to begin. Claude reads your spec and lays out a plan."}
               </p>
             ) : (
               <ul className="space-y-1">
                 {actions.map((a) => (
                   <li key={a.id}>
                     <div>{a.humanLine ?? a.tool}</div>
-                    <div className="font-mono text-[10px] text-muted-foreground">
-                      {a.tool} · {a.rawInput}
-                    </div>
+                    {showDetails ? (
+                      <div className="font-mono text-[10px] text-muted-foreground">
+                        {a.tool} · {a.rawInput}
+                      </div>
+                    ) : null}
                   </li>
                 ))}
               </ul>
@@ -831,7 +978,7 @@ function BuildClient() {
             onSend={async (text) => {
               if (!project) return;
               setStatus({ kind: "running" });
-              setNowDoing(`You said: ${text}`);
+              setLatestToolLine(`You said: ${text}`);
               turnStartRef.current = Date.now();
               const r = await orchestratorStart({
                 projectId: project.id,
@@ -869,10 +1016,12 @@ function BuildClient() {
                       sumRes.match((sum) => setCostSum(sum), () => undefined);
                       const driftRes = await listOpenDrifts(project.id);
                       driftRes.match((events) => setOpenDrifts(events), () => undefined);
+                      const reviewRes = await readReviewMarkdown(project.path);
+                      reviewRes.match((md) => setReviewMarkdown(md), () => undefined);
                     })();
                   } else if (event.kind === "tool_use") {
                     const humanLine = translate(event.tool, event.raw_input);
-                    setNowDoing(humanLine);
+                    setLatestToolLine(humanLine);
                     setActions((prev) => [
                       ...prev,
                       {
@@ -914,7 +1063,7 @@ function BuildClient() {
         </section>
       </div>
 
-      {/* Status footer */}
+      {/* Status footer (simple by default; expanded under Details). */}
       <StatusFooter
         targetState={targetState}
         costSum={costSum}
@@ -922,6 +1071,7 @@ function BuildClient() {
         backHref={projectId ? `/interview?project=${projectId}` : "/"}
         capUsdCents={costCap}
         onCapChange={setCostCap}
+        showDetails={showDetails}
       />
 
       <DeployModal
@@ -940,6 +1090,7 @@ function StatusFooter({
   backHref,
   capUsdCents,
   onCapChange,
+  showDetails,
 }: {
   targetState: TargetState | null;
   costSum: CostSum | null;
@@ -947,6 +1098,7 @@ function StatusFooter({
   backHref: string;
   capUsdCents: number | null;
   onCapChange: (cap: number | null) => void;
+  showDetails: boolean;
 }) {
   const dollars = costSum ? (costSum.usdCents / 100).toFixed(2) : "0.00";
   const capDollars = capUsdCents !== null ? (capUsdCents / 100).toFixed(2) : "";
@@ -954,45 +1106,51 @@ function StatusFooter({
     <footer className="flex items-center justify-between gap-4 border-t px-6 py-2 text-xs text-muted-foreground">
       <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
         <span>
-          Status: <span className="text-foreground">{targetState?.status ?? "unknown"}</span>
-        </span>
-        <span>
-          Phase: <span className="text-foreground">{targetState?.phase ?? "(none)"}</span>
-        </span>
-        <span>
           Cost: <span className="text-foreground">${dollars}</span>
-          {costSum ? (
-            <span> · {costSum.turns} turn{costSum.turns === 1 ? "" : "s"}, in {costSum.inputTokens} / out {costSum.outputTokens}</span>
-          ) : null}
         </span>
-        <span>
-          ETA per turn: <span className="text-foreground">{formatEta(eta.medianMs, eta.mode)}</span>
-        </span>
-        <label className="flex items-center gap-1">
-          Cap $
-          <input
-            type="number"
-            min="0"
-            step="1"
-            value={capDollars}
-            placeholder="off"
-            onChange={(e) => {
-              const v = e.target.value.trim();
-              if (v === "") {
-                onCapChange(null);
-                return;
-              }
-              const dollars = Number.parseFloat(v);
-              if (!Number.isFinite(dollars) || dollars <= 0) {
-                onCapChange(null);
-                return;
-              }
-              onCapChange(Math.round(dollars * 100));
-            }}
-            aria-label="Optional spend cap in USD"
-            className="w-16 rounded border bg-background px-1 py-0.5 text-xs"
-          />
-        </label>
+        {showDetails ? (
+          <>
+            <span>
+              Status: <span className="text-foreground">{targetState?.status ?? "unknown"}</span>
+            </span>
+            <span>
+              Phase: <span className="text-foreground">{targetState?.phase ?? "(none)"}</span>
+            </span>
+            {costSum ? (
+              <span>
+                {costSum.turns} turn{costSum.turns === 1 ? "" : "s"} · in {costSum.inputTokens} / out {costSum.outputTokens}
+              </span>
+            ) : null}
+            <span>
+              ETA per turn: <span className="text-foreground">{formatEta(eta.medianMs, eta.mode)}</span>
+            </span>
+            <label className="flex items-center gap-1">
+              Cap $
+              <input
+                type="number"
+                min="0"
+                step="1"
+                value={capDollars}
+                placeholder="off"
+                onChange={(e) => {
+                  const v = e.target.value.trim();
+                  if (v === "") {
+                    onCapChange(null);
+                    return;
+                  }
+                  const dollars = Number.parseFloat(v);
+                  if (!Number.isFinite(dollars) || dollars <= 0) {
+                    onCapChange(null);
+                    return;
+                  }
+                  onCapChange(Math.round(dollars * 100));
+                }}
+                aria-label="Optional spend cap in USD"
+                className="w-16 rounded border bg-background px-1 py-0.5 text-xs"
+              />
+            </label>
+          </>
+        ) : null}
       </div>
       <Link href={backHref} className="underline">
         Back to interview
@@ -1076,25 +1234,80 @@ function PlanStatusIcon({ status }: { status: TodoItem["status"] }) {
   );
 }
 
-function PhaseBar({ state }: { state: TargetState | null }) {
-  const phase = state?.phase ?? null;
-  const done = state?.tasks_completed_in_phase ?? 0;
-  const total = state?.tasks_total_in_phase ?? null;
-  const pct = total && total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+function ProgressBar({ completed, total }: { completed: number; total: number }) {
+  const pct = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
   return (
     <div className="border-b bg-muted/30 px-6 py-2">
       <div className="flex items-center justify-between text-xs">
-        <span className="font-semibold">{phase ? `Phase ${phase}` : "(no phase yet)"}</span>
-        <span className="text-muted-foreground">
-          {done} / {total ?? "?"} task{done === 1 ? "" : "s"} complete
+        <span className="font-semibold">
+          {total > 0 ? "Build progress" : "Waiting to start"}
         </span>
+        {total > 0 ? (
+          <span className="text-muted-foreground">{pct}%</span>
+        ) : null}
       </div>
       <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-muted">
         <div
           className="h-full bg-primary transition-[width]"
-          style={{ width: total ? `${pct}%` : "0%" }}
+          style={{ width: total > 0 ? `${pct}%` : "0%" }}
         />
       </div>
     </div>
   );
+}
+
+// End-of-build coverage panel. Renders the markdown the orchestrator wrote
+// to .builder/review.md (per the kickoff prompt's REVIEW step). Includes a
+// quick summary parsed from the leading "## Summary" block, the full body
+// in a scrollable area, and a "Build the missing pieces" button that fires
+// a follow-up turn so the agent fills any gaps.
+function ReviewPanel({
+  markdown,
+  isRunning,
+  onBuildMissing,
+}: {
+  markdown: string;
+  isRunning: boolean;
+  onBuildMissing: () => void;
+}) {
+  const counts = parseReviewCounts(markdown);
+  const hasGaps = (counts?.partial ?? 0) + (counts?.missing ?? 0) > 0;
+  return (
+    <div className="m-4 rounded-md border bg-card">
+      <div className="flex items-center justify-between border-b px-4 py-2">
+        <div>
+          <h2 className="text-sm font-semibold">Review against your spec</h2>
+          <p className="text-[11px] text-muted-foreground">
+            {counts
+              ? `${counts.built} built · ${counts.partial} partial · ${counts.missing} missing`
+              : "Coverage report"}
+          </p>
+        </div>
+        {hasGaps ? (
+          <Button size="sm" disabled={isRunning} onClick={onBuildMissing}>
+            Build the missing pieces
+          </Button>
+        ) : null}
+      </div>
+      <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words bg-muted/40 px-4 py-3 text-[11px] leading-relaxed">
+        {markdown}
+      </pre>
+    </div>
+  );
+}
+
+// Best-effort summary parser. Looks for the bullets the kickoff prompt
+// asks the agent to write under "## Summary" (Built, Partial, Missing).
+// Returns null if any field is unparseable; the panel falls back to the
+// generic "Coverage report" label.
+function parseReviewCounts(markdown: string): { built: number; partial: number; missing: number } | null {
+  const built = /^- *Built: *(\d+)/m.exec(markdown);
+  const partial = /^- *Partial: *(\d+)/m.exec(markdown);
+  const missing = /^- *Missing: *(\d+)/m.exec(markdown);
+  if (!built || !partial || !missing) return null;
+  return {
+    built: Number(built[1]),
+    partial: Number(partial[1]),
+    missing: Number(missing[1]),
+  };
 }

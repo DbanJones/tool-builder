@@ -87,6 +87,21 @@ export function readTargetState(
 }
 
 /**
+ * Read `{project}/.builder/review.md` — the end-of-build coverage report
+ * the orchestrator writes after the REVIEW step in the kickoff prompt.
+ * Returns null when the file doesn't exist (the build hasn't reached the
+ * review step yet); the dashboard shows a placeholder for that case.
+ */
+export function readReviewMarkdown(
+  projectPath: string,
+): ResultAsync<string | null, BuildStateError> {
+  return ResultAsync.fromPromise(
+    invoke<string | null>("read_review_md", { projectPath }),
+    fromInvokeError,
+  );
+}
+
+/**
  * Read up to `limit` most recent JSON lines from
  * `{project}/.builder/history.log`. Lines that fail Zod validation are
  * dropped silently (log file is append-only and may have a partial last

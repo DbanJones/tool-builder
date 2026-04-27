@@ -382,22 +382,20 @@ function InterviewClient() {
             disabled={!project}
             title={
               readiness.ready
-                ? "Open the build dashboard"
-                : `${readiness.fastPathAnswered} / ${readiness.fastPathTotal} answered — Claude will fill in defaults for the rest. You can keep answering questions later.`
+                ? "Hand off to Claude and start building"
+                : `${readiness.fastPathAnswered} / ${readiness.fastPathTotal} answered — Claude will fill in defaults for the rest from your interview so far.`
             }
             onClick={() => {
               if (!project) return;
-              if (!readiness.ready) {
-                const ok = window.confirm(
-                  `You've answered ${readiness.fastPathAnswered} of ${readiness.fastPathTotal} fast-path questions. Claude will fill in defaults for the rest from your interview so far. Continue to the build dashboard?`,
-                );
-                if (!ok) return;
-              }
-              window.location.href = `/build?project=${project.id}`;
+              // Interview → build is a one-click handoff (UX5): navigate
+              // straight to the dashboard with autostart=1; the build page
+              // kicks off the orchestrator on mount so the novice doesn't
+              // have to find a second "Start" button.
+              window.location.href = `/build?project=${project.id}&autostart=1`;
             }}
           >
             <CheckCircle2 className="mr-2 h-4 w-4" aria-hidden="true" />
-            {readiness.ready ? "Start build" : "Build now"}
+            Build it
           </Button>
         </div>
       </header>
@@ -627,11 +625,11 @@ function InterviewClient() {
                   href={`/build?project=${project.id}`}
                   className={buttonVariants({ size: "sm", variant: "outline" })}
                 >
-                  Open Build dashboard
+                  Open build screen
                 </Link>
               ) : (
                 <Button size="sm" variant="outline" disabled>
-                  Open Build dashboard
+                  Open build screen
                 </Button>
               )}
             </div>

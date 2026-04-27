@@ -42,6 +42,50 @@ function basename(p: string): string {
   return slashIdx >= 0 ? p.slice(slashIdx + 1) : p;
 }
 
+// Friendly labels for the most common build-phase commands. Returned in
+// activeForm style ("Installing dependencies", "Running tests") so the live
+// activity reads like a status line a non-coder understands.
+//
+// Order matters: more specific patterns first. Fall through to null when no
+// rule matches; the caller will render the raw command instead.
+function friendlyForCommand(cmd: string): string | null {
+  const c = cmd.trim();
+  // Package install (pnpm/npm/yarn/bun) — `add`/`install`/`i` shapes.
+  if (/^(pnpm|npm|yarn|bun)\s+(add|install|i)(\s|$)/.test(c)) return "Installing dependencies";
+  // Common script shorthands.
+  if (/^(pnpm|npm|yarn|bun)\s+(run\s+)?(dev|start)(\s|$)/.test(c)) return "Starting the dev server";
+  if (/^(pnpm|npm|yarn|bun)\s+(run\s+)?build(\s|$)/.test(c)) return "Building the app";
+  if (/^(pnpm|npm|yarn|bun)\s+(run\s+)?(test|vitest|jest)(\s|$)/.test(c)) return "Running tests";
+  if (/^(pnpm|npm|yarn|bun)\s+(run\s+)?(lint|eslint)(\s|$)/.test(c)) return "Checking for code-style issues";
+  if (/^(pnpm|npm|yarn|bun)\s+(run\s+)?(typecheck|tsc)(\s|$)/.test(c)) return "Type-checking the code";
+  if (/^(pnpm|npm|yarn|bun)\s+(run\s+)?verify(\s|$)/.test(c)) return "Running the full check suite";
+  if (/^(pnpm|npm|yarn|bun)\s+(run\s+)?(format|prettier)(\s|$)/.test(c)) return "Formatting the code";
+  if (/^(pnpm|npm|yarn|bun)\s+(run\s+)?(db:migrate|drizzle-kit\s+migrate|prisma\s+migrate)(\s|$)/.test(c))
+    return "Setting up the database";
+  // Project scaffolding.
+  if (/^npx\s+create-next-app/.test(c)) return "Scaffolding a Next.js project";
+  if (/^npx\s+create-react-app/.test(c)) return "Scaffolding a React project";
+  if (/^npx\s+create-vite/.test(c) || /^npm\s+create\s+vite/.test(c)) return "Scaffolding a Vite project";
+  if (/^npx\s+shadcn(?:-ui)?\s+(init|add)/.test(c)) return "Adding UI components";
+  // Git operations.
+  if (/^git\s+init/.test(c)) return "Setting up version control";
+  if (/^git\s+commit/.test(c)) return "Saving a checkpoint";
+  if (/^git\s+add/.test(c)) return "Staging files";
+  if (/^git\s+push/.test(c)) return "Pushing to GitHub";
+  if (/^git\s+status/.test(c)) return "Checking what's changed";
+  if (/^git\s+log/.test(c)) return "Reviewing recent history";
+  // File / dir scaffolding.
+  if (/^mkdir\s/.test(c)) return "Creating folders";
+  if (/^touch\s/.test(c)) return "Creating files";
+  if (/^cp\s/.test(c)) return "Copying files";
+  if (/^mv\s/.test(c)) return "Moving files";
+  if (/^rm\s/.test(c)) return "Removing files";
+  // Inspection.
+  if (/^(ls|find|tree)\s/.test(c) || c === "ls" || c === "tree") return "Looking around the project";
+  if (/^cat\s/.test(c) || /^head\s/.test(c) || /^tail\s/.test(c)) return "Reading a file";
+  return null;
+}
+
 /**
  * Map a single tool call to a one-line human description for the live tail.
  *
@@ -60,12 +104,20 @@ export function translate(tool: string, rawInput: string): string {
     case "Bash": {
       const command = asString(input["command"]) ?? "";
       const description = asString(input["description"]);
-      // The description (when claude provides it) is more readable than the
-      // raw command; show it with the command in parens for trust.
+      const firstLine = command.split("\n")[0] ?? command;
+      // Recognise common commands and surface a plain-English description
+      // novices can read at a glance. The agent's own description (when
+      // present) wins, but otherwise we infer from the command shape so
+      // the live activity reads "Installing dependencies" rather than
+      // "Running pnpm install".
+      const friendly = friendlyForCommand(firstLine);
       if (description) {
-        return trim(`${description} (${command.split("\n")[0] ?? command})`);
+        return trim(`${description} (${firstLine})`);
       }
-      return trim(`Running ${command.split("\n")[0] ?? command}`);
+      if (friendly) {
+        return trim(`${friendly} (${firstLine})`);
+      }
+      return trim(`Running ${firstLine}`);
     }
 
     case "Read": {
@@ -115,8 +167,23 @@ export function translate(tool: string, rawInput: string): string {
       return trim(`Web search: ${query}`);
     }
 
-    case "TodoWrite":
-      return "Updating todo list";
+    case "TodoWrite": {
+      // Surface the in-progress item's activeForm if we can find one — the
+      // dashboard already has a structured plan view; this just makes the
+      // raw activity log slightly less mysterious when TodoWrite scrolls by.
+      const todos = input["todos"];
+      if (Array.isArray(todos)) {
+        const active = todos.find(
+          (t): t is { status: "in_progress"; activeForm: string } =>
+            typeof t === "object" &&
+            t !== null &&
+            (t as { status?: unknown }).status === "in_progress" &&
+            typeof (t as { activeForm?: unknown }).activeForm === "string",
+        );
+        if (active) return trim(`Now: ${active.activeForm}`);
+      }
+      return "Updating the plan";
+    }
 
     case "NotebookEdit": {
       const path = asString(input["notebook_path"]);

@@ -162,6 +162,40 @@ fn read_target_state(project_path: String) -> Result<Option<String>, String> {
     .map_err(|e| format!("read_target_state: {e}"))
 }
 
+// `read_review_md` returns `{project}/.builder/review.md` as raw text. The
+// build-phase agent writes this file at the end of every build (see the
+// kickoff prompt's REVIEW step) so the dashboard can render a coverage
+// checklist against spec.md. Returns Ok(None) when the file doesn't exist
+// yet (build hasn't reached the review step) — the dashboard renders a
+// "review will appear here" placeholder for that case.
+const REVIEW_MD_MAX_BYTES: u64 = 1 * 1024 * 1024;
+
+#[tauri::command]
+fn read_review_md(project_path: String) -> Result<Option<String>, String> {
+  let project_root = expand_tilde(&project_path);
+  if !project_root.exists() {
+    return Err(format!(
+      "read_review_md: project folder not found: {}",
+      project_root.display()
+    ));
+  }
+  let review_path = project_root.join(".builder").join("review.md");
+  if !review_path.exists() {
+    return Ok(None);
+  }
+  let metadata = fs::metadata(&review_path).map_err(|e| format!("stat review.md: {e}"))?;
+  if metadata.len() > REVIEW_MD_MAX_BYTES {
+    return Err(format!(
+      "read_review_md: review.md exceeds {} byte cap (got {})",
+      REVIEW_MD_MAX_BYTES,
+      metadata.len()
+    ));
+  }
+  fs::read_to_string(&review_path)
+    .map(Some)
+    .map_err(|e| format!("read_review_md: {e}"))
+}
+
 #[tauri::command]
 fn read_history_log_tail(project_path: String, limit: usize) -> Result<Vec<String>, String> {
   let project_root = expand_tilde(&project_path);
@@ -667,6 +701,7 @@ pub fn run() {
       project_create_folder,
       file_save_uploaded,
       read_target_state,
+      read_review_md,
       read_history_log_tail,
       write_target_spec,
       append_drift_log_line,

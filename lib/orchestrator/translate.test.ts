@@ -12,8 +12,25 @@ describe("translate", () => {
     ).toBe("merge gate (pnpm verify)");
   });
 
-  it("Bash without description falls back to 'Running <command>'", () => {
-    expect(translate("Bash", JSON.stringify({ command: "ls -la" }))).toBe("Running ls -la");
+  it("Bash without description falls back to 'Running <command>' for unrecognised commands", () => {
+    expect(translate("Bash", JSON.stringify({ command: "ls -la" }))).toBe(
+      "Looking around the project (ls -la)",
+    );
+    expect(translate("Bash", JSON.stringify({ command: "obscure-tool --weird" }))).toBe(
+      "Running obscure-tool --weird",
+    );
+  });
+
+  it("Bash recognises common commands and surfaces a friendly label", () => {
+    expect(translate("Bash", JSON.stringify({ command: "pnpm install" }))).toBe(
+      "Installing dependencies (pnpm install)",
+    );
+    expect(translate("Bash", JSON.stringify({ command: "pnpm verify" }))).toBe(
+      "Running the full check suite (pnpm verify)",
+    );
+    expect(translate("Bash", JSON.stringify({ command: "git init" }))).toBe(
+      "Setting up version control (git init)",
+    );
   });
 
   it("Bash trims multi-line commands to the first line", () => {
@@ -75,8 +92,17 @@ describe("translate", () => {
     );
   });
 
-  it("TodoWrite is a fixed line (no per-call detail in the live tail)", () => {
-    expect(translate("TodoWrite", JSON.stringify({ todos: [] }))).toBe("Updating todo list");
+  it("TodoWrite without an in-progress item shows a generic 'Updating the plan'", () => {
+    expect(translate("TodoWrite", JSON.stringify({ todos: [] }))).toBe("Updating the plan");
+  });
+
+  it("TodoWrite with an in-progress item surfaces its activeForm", () => {
+    const todos = [
+      { content: "Install deps", status: "completed", activeForm: "Installing deps" },
+      { content: "Wire up homepage", status: "in_progress", activeForm: "Wiring up the homepage" },
+      { content: "Write tests", status: "pending", activeForm: "Writing tests" },
+    ];
+    expect(translate("TodoWrite", JSON.stringify({ todos }))).toBe("Now: Wiring up the homepage");
   });
 
   it("MCP-prefixed tools strip the prefix and surface server + tool", () => {
