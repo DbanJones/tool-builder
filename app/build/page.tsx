@@ -761,6 +761,7 @@ function BuildClient() {
               if (!project) return;
               setStatus({ kind: "running" });
               setNowDoing(`You said: ${text}`);
+              turnStartRef.current = Date.now();
               const r = await orchestratorStart({
                 projectPath: project.path,
                 sessionId: sessionIdRef.current,
@@ -770,6 +771,33 @@ function BuildClient() {
                     sessionIdRef.current = event.id;
                   } else if (event.kind === "todos_updated") {
                     setPlan(event.todos);
+                  } else if (event.kind === "done") {
+                    // BLOCKER fix from bug review: chat-input turns now
+                    // record cost + duration + re-poll drifts + show the
+                    // Sentry consent prompt the same way startBuild does.
+                    if (turnStartRef.current !== null) {
+                      const elapsed = Date.now() - turnStartRef.current;
+                      setTurnDurations((prev) => [...prev, elapsed]);
+                      turnStartRef.current = null;
+                    }
+                    if (!hasMadeSentryDecision()) {
+                      setShowSentryPrompt(true);
+                    }
+                    void (async () => {
+                      await sidecarCall("costs.append", {
+                        projectId: project.id,
+                        model: "sonnet",
+                        inputTokens: event.input_tokens ?? 0,
+                        outputTokens: event.output_tokens ?? 0,
+                        costUsd: event.cost_usd ?? 0,
+                      });
+                      const sumRes = await sidecarCall<CostSum>("costs.sumByProject", {
+                        projectId: project.id,
+                      });
+                      sumRes.match((sum) => setCostSum(sum), () => undefined);
+                      const driftRes = await listOpenDrifts(project.id);
+                      driftRes.match((events) => setOpenDrifts(events), () => undefined);
+                    })();
                   } else if (event.kind === "tool_use") {
                     const humanLine = translate(event.tool, event.raw_input);
                     setNowDoing(humanLine);

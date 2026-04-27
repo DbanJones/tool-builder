@@ -248,15 +248,27 @@ function InterviewClient() {
     );
   };
 
+  // Re-entrancy guard for flushBuffer. Without this, a fast double-click on
+  // the manual "Send my N answers now" link can read the same closure-bound
+  // buffer twice (React's setBufferedAnswers([]) is async) and double-send
+  // record_answer calls. Ref instead of state so it's synchronous.
+  const flushingRef = useRef(false);
+
   // Compile buffered answers as a single message claude can parse with one
   // record_answer call per entry. Format: "1) Q1: <answer> (q: <text>)".
   const flushBuffer = async (buffer: readonly { id: string; text: string; question: string }[]): Promise<void> => {
     if (buffer.length === 0) return;
+    if (flushingRef.current) return;
+    flushingRef.current = true;
     const compiled = buffer
       .map((b, i) => `${i + 1}) ${b.id}: ${b.text} — (you asked: "${b.question}")`)
       .join("\n");
     setBufferedAnswers([]);
-    await sendToClaude(compiled);
+    try {
+      await sendToClaude(compiled);
+    } finally {
+      flushingRef.current = false;
+    }
   };
 
   // Pop the head, buffer the answer, echo to chat. If queue empties, flush

@@ -195,6 +195,23 @@ describe("sidecar costs pipeline (integration)", () => {
     expect(r.ok).toBe(false);
   });
 
+  it("rejects NaN / Infinity costUsd via .finite() guard", async () => {
+    // JSON has no NaN literal, so encode the request manually.
+    const nan = await harness.call("costs.append", {
+      projectId,
+      model: "sonnet",
+      costUsd: Number.NaN,
+    });
+    expect(nan.ok).toBe(false);
+
+    const inf = await harness.call("costs.append", {
+      projectId,
+      model: "sonnet",
+      costUsd: Number.POSITIVE_INFINITY,
+    });
+    expect(inf.ok).toBe(false);
+  });
+
   it("rejects an empty model name", async () => {
     const r = await harness.call("costs.append", { projectId, model: "" });
     expect(r.ok).toBe(false);

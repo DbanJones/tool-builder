@@ -8,11 +8,14 @@ import { costs, type Cost } from "../schema/costs.js";
 const AppendParamsSchema = z.object({
   projectId: z.string().min(1),
   model: z.string().min(1),
-  inputTokens: z.number().int().min(0).default(0),
-  outputTokens: z.number().int().min(0).default(0),
+  // .finite() rejects NaN + Infinity; .min() alone does NOT (NaN < 0 is
+  // false → passes). Without this, malformed claude usage data would
+  // poison the costs table with NaN cents and silently break sums.
+  inputTokens: z.number().int().finite().min(0).default(0),
+  outputTokens: z.number().int().finite().min(0).default(0),
   // Float USD as reported by claude's `result.success.total_cost_usd`.
   // Converted to integer cents internally so sums stay exact.
-  costUsd: z.number().min(0).default(0),
+  costUsd: z.number().finite().min(0).default(0),
   ts: z.number().int().optional(),
 });
 
@@ -22,7 +25,10 @@ export function append(rawParams: unknown): Cost {
   const db = getDb();
   const id = ulid();
   const ts = params.ts ?? Date.now();
-  const usdCents = Math.round(params.costUsd * 100);
+  // Belt-and-braces: even with the .finite() guard above, defend the
+  // INTEGER column from a NaN landing if the schema ever loosens.
+  const rawCents = params.costUsd * 100;
+  const usdCents = Number.isFinite(rawCents) ? Math.round(rawCents) : 0;
 
   const [inserted] = db
     .insert(costs)

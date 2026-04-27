@@ -352,13 +352,28 @@ pub async fn orchestrator_start(
 /// Kill the in-flight build subprocess. Used by Flow H Stop and as the
 /// "force-kill" half of Pause when the novice doesn't want to wait for the
 /// current turn to finish naturally. No-op when no child is running.
+///
+/// Reaping: start_kill is non-blocking and tokio::process::Child does NOT
+/// wait on Drop, so without an explicit `wait()` the killed process becomes
+/// a zombie until the Tauri app exits. We spawn a detached task to
+/// `wait()` it; if it doesn't exit within 5s after SIGTERM we escalate to
+/// SIGKILL via `kill()`. Returns immediately so the IPC reply is fast.
 #[tauri::command]
 pub async fn orchestrator_stop(state: tauri::State<'_, OrchestratorState>) -> Result<(), String> {
   let child_opt = state.child.lock().map_err(|e| format!("lock: {e}"))?.take();
   if let Some(mut child) = child_opt {
-    // start_kill is non-blocking; the read loop in orchestrator_start will
-    // see EOF on stdout and tear down the rest of the pipeline naturally.
     child.start_kill().map_err(|e| format!("start_kill: {e}"))?;
+    tokio::spawn(async move {
+      tokio::select! {
+        _ = child.wait() => {
+          // Reaped naturally after SIGTERM.
+        }
+        _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+          // Subprocess ignored SIGTERM; escalate to SIGKILL and reap.
+          let _ = child.kill().await;
+        }
+      }
+    });
   }
   Ok(())
 }
