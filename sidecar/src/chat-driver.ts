@@ -1,0 +1,259 @@
+// Interview-chat driver per ADR-0005 follow-up. Same shape as
+// orchestrator-driver.ts but with a different system prompt + tool set:
+//   - First turn uses Opus (kit-style "preparing question bank" UX)
+//   - Exposes the queue_questions MCP tool (so claude can pre-fetch
+//     batches of interview questions; the dashboard renders them one
+//     at a time and flushes answers in bulk per UX3)
+//   - Exposes the record_answer MCP tool so each clear answer lands in
+//     the answers table
+//
+// Replaces the Rust subprocess spawn in chat.rs. The Tauri shell becomes
+// a thin pass-through (chat_send → sidecar_rpc_stream → chat.start).
+
+import {
+  query,
+  type Options,
+  type SDKMessage,
+  createSdkMcpServer,
+  tool,
+} from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod";
+
+import { record as recordAnswer } from "./handlers/answers.js";
+
+const INTERVIEW_SYSTEM_PROMPT = `You are the Builder's recursive interviewer. Your job is to populate the project's spec.md by asking the novice the kit's fast-path questions (28 baseline, plus high-stakes follow-ups when activated, plus any extra questions the project genuinely needs — you are NOT capped at 28).
+
+THE PIPELINE (read this carefully — it changes how you should behave):
+- The Builder UI shows the novice ONE question at a time, but you generate them in BATCHES of up to 10 per turn. You call the \`queue_questions\` tool ONCE per turn with the next batch; the UI displays the head of the queue, the novice answers, the UI displays the next, and so on.
+- When the queue empties, the UI sends you all the buffered answers in a single follow-up turn. You must:
+  1. Call \`record_answer\` ONCE per question they answered.
+  2. Then call \`queue_questions\` ONCE with the next batch.
+  3. Write a brief one-sentence acknowledgement to the chat so the novice sees the batch landed.
+- Do NOT put the question text in your assistant message instead of (or in addition to) \`queue_questions\`. The UI only renders questions from the queue.
+
+The first turn is special:
+- The novice's first message describes their project. The Builder UI shows a 'Preparing question bank' indicator while you generate your reply.
+- In your first reply: briefly (one sentence) reflect what you understood, then state 'Question bank ready: ~28 fast-path questions to work through.', then call \`queue_questions\` with the FIRST batch of up to 10 questions. Do NOT call record_answer for the freeform first message.
+
+How to write each queued question:
+- Plain language. No jargon unless you have just defined it.
+- For closed questions (yes/no, single-select), supply EXACTLY 3 candidate \`options\`. The UI appends a 4th 'Enter my own response' button automatically.
+- For open-ended questions, omit \`options\`.
+- The \`id\` field is the kit question id (Q1, Q15, etc.).
+
+Do not invent answers. If an answer is unclear after one follow-up, mark it tentative and move on.`;
+
+export interface ChatOptions {
+  projectId: string;
+  projectPath: string;
+  prompt: string;
+  sessionId?: string | null;
+}
+
+export interface QueuedQuestion {
+  id: string;
+  text: string;
+  options: string[];
+  allow_freeform: boolean;
+}
+
+export type ChatChunk =
+  | { kind: "session"; id: string }
+  | { kind: "assistant_delta"; text: string }
+  | { kind: "questions_queued"; items: QueuedQuestion[] }
+  | {
+      kind: "done";
+      cost_usd: number | null;
+      input_tokens: number | null;
+      output_tokens: number | null;
+    }
+  | { kind: "rate_limit"; message: string }
+  | { kind: "error"; message: string };
+
+const inflight = new Map<string, AbortController>();
+
+/** Build the SDK MCP server that exposes record_answer + queue_questions
+ *  as plain Node functions running in this same process — no external
+ *  spawn, no separate auth, no permission prompts. */
+function buildChatMcp(projectId: string, onQueue: (items: QueuedQuestion[]) => void) {
+  return createSdkMcpServer({
+    name: "builder-chat",
+    version: "0.1.0",
+    tools: [
+      tool(
+        "record_answer",
+        "Persist the novice's answer to an interview question.",
+        {
+          question_id: z.string().min(1),
+          answer: z.string().min(1),
+          confidence: z.enum(["confident", "tentative", "default-applied"]).optional(),
+          rationale: z.string().nullable().optional(),
+        },
+        async (args) => {
+          const inserted = recordAnswer({
+            projectId,
+            questionId: args.question_id,
+            answerText: args.answer,
+            confidence: args.confidence ?? "tentative",
+            source: "chat",
+            rationale: args.rationale ?? null,
+          });
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Recorded answer ${inserted.id} for ${inserted.questionId} (confidence=${inserted.confidence}).`,
+              },
+            ],
+          };
+        },
+      ),
+      tool(
+        "queue_questions",
+        "Pre-fetch a batch of up to 10 interview questions; the UI shows them one at a time and flushes answers in bulk.",
+        {
+          items: z
+            .array(
+              z.object({
+                id: z.string().min(1),
+                text: z.string().min(1),
+                options: z.array(z.string().min(1)).length(3).optional(),
+                allow_freeform: z.boolean().optional(),
+              }),
+            )
+            .min(1)
+            .max(10),
+        },
+        async (args) => {
+          const items: QueuedQuestion[] = args.items.map((it) => ({
+            id: it.id,
+            text: it.text,
+            options: it.options ?? [],
+            allow_freeform: it.allow_freeform ?? true,
+          }));
+          onQueue(items);
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Queued ${String(items.length)} question${items.length === 1 ? "" : "s"} for the novice.`,
+              },
+            ],
+          };
+        },
+      ),
+    ],
+  });
+}
+
+export async function runChat(
+  streamId: string,
+  opts: ChatOptions,
+  onEvent: (event: ChatChunk) => void,
+): Promise<void> {
+  const ac = new AbortController();
+  inflight.set(streamId, ac);
+  const queuedDuringTurn: QueuedQuestion[] = [];
+  try {
+    const mcp = buildChatMcp(opts.projectId, (items) => {
+      queuedDuringTurn.push(...items);
+    });
+    const sdkOptions: Options = {
+      cwd: opts.projectPath,
+      additionalDirectories: [opts.projectPath],
+      // First turn → Opus for first-impression quality. Subsequent turns
+      // (sessionId set) → Sonnet for speed/cost. Same heuristic as the
+      // old chat.rs.
+      model: opts.sessionId ? "claude-sonnet-4-5" : "claude-opus-4-5",
+      permissionMode: "default",
+      // Chat path doesn't need to write files in the novice's project,
+      // and we want NO permission UI for it. Allow only our own MCP tools.
+      allowedTools: [
+        "mcp__builder-chat__record_answer",
+        "mcp__builder-chat__queue_questions",
+      ],
+      mcpServers: { "builder-chat": mcp },
+      systemPrompt: INTERVIEW_SYSTEM_PROMPT,
+      abortController: ac,
+    };
+    if (opts.sessionId) {
+      sdkOptions.resume = opts.sessionId;
+    }
+    const q = query({ prompt: opts.prompt, options: sdkOptions });
+    for await (const msg of q) {
+      const events = translate(msg);
+      for (const ev of events) onEvent(ev);
+    }
+    // Flush any questions queued during this turn — emit AFTER the SDK's
+    // generator ends so the dashboard sees them as a single
+    // `questions_queued` event per turn.
+    if (queuedDuringTurn.length > 0) {
+      onEvent({ kind: "questions_queued", items: queuedDuringTurn });
+    }
+  } catch (e) {
+    if (ac.signal.aborted) return;
+    onEvent({
+      kind: "error",
+      message: e instanceof Error ? e.message : String(e),
+    });
+  } finally {
+    inflight.delete(streamId);
+  }
+}
+
+export function cancelChat(streamId: string): boolean {
+  const ac = inflight.get(streamId);
+  if (!ac) return false;
+  ac.abort();
+  return true;
+}
+
+function translate(msg: SDKMessage): ChatChunk[] {
+  switch (msg.type) {
+    case "system": {
+      const m = msg as { type: "system"; subtype?: string; session_id?: string };
+      if (m.subtype === "init" && m.session_id) {
+        return [{ kind: "session", id: m.session_id }];
+      }
+      return [];
+    }
+    case "assistant": {
+      const m = msg as unknown as {
+        type: "assistant";
+        message: { content: Array<Record<string, unknown>> };
+      };
+      const content = Array.isArray(m.message?.content) ? m.message.content : [];
+      let text = "";
+      for (const block of content) {
+        if (
+          (block as { type?: string }).type === "text" &&
+          typeof (block as { text?: unknown }).text === "string"
+        ) {
+          text += (block as { text: string }).text;
+        }
+      }
+      return text ? [{ kind: "assistant_delta", text }] : [];
+    }
+    case "result": {
+      const m = msg as {
+        type: "result";
+        subtype?: string;
+        total_cost_usd?: number;
+        usage?: { input_tokens?: number; output_tokens?: number };
+      };
+      if (m.subtype !== "success") return [];
+      return [
+        {
+          kind: "done",
+          cost_usd: typeof m.total_cost_usd === "number" ? m.total_cost_usd : null,
+          input_tokens:
+            typeof m.usage?.input_tokens === "number" ? m.usage.input_tokens : null,
+          output_tokens:
+            typeof m.usage?.output_tokens === "number" ? m.usage.output_tokens : null,
+        },
+      ];
+    }
+    default:
+      return [];
+  }
+}

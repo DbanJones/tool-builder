@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::Manager;
 
-use chat::chat_send;
+use chat::{chat_send, chat_stop};
 use deploy::{vercel_deploy, vercel_is_installed};
 use export::{gh_export, gh_is_installed};
 use orchestrator::{orchestrator_start, orchestrator_stop, OrchestratorState};
@@ -672,6 +672,7 @@ pub fn run() {
       append_drift_log_line,
       build_capability_check,
       chat_send,
+      chat_stop,
       orchestrator_start,
       orchestrator_stop,
       vercel_is_installed,

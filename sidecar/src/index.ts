@@ -35,6 +35,7 @@ import {
 } from "./handlers/permission-requests.js";
 import { append as appendCost, sumByProject as sumCostsByProject } from "./handlers/costs.js";
 import { cancelOrchestrator, runOrchestrator } from "./orchestrator-driver.js";
+import { cancelChat, runChat } from "./chat-driver.js";
 import {
   append as appendDrift,
   listOpen as listOpenDrifts,
@@ -137,6 +138,8 @@ const handlers: Record<string, Handler> = {
   "permissionRequests.resolve": resolvePermissionRequest,
   "orch.start": orchStart,
   "orch.stop": orchStop,
+  "chat.start": chatStart,
+  "chat.stop": chatStop,
 };
 
 // ADR-0005: streaming orchestrator. The webview-side Tauri command holds
@@ -168,6 +171,36 @@ const OrchStopParams = z.object({ streamId: z.string().min(1) });
 function orchStop(rawParams: unknown): { cancelled: boolean } {
   const params = OrchStopParams.parse(rawParams);
   return { cancelled: cancelOrchestrator(params.streamId) };
+}
+
+// Chat path (interview). Same shape as orch.start: streams ChatChunks via
+// notifications keyed by streamId.
+const ChatStartParams = z.object({
+  streamId: z.string().min(1),
+  projectId: z.string().min(1),
+  projectPath: z.string().min(1),
+  prompt: z.string().min(1),
+  sessionId: z.string().nullable().optional(),
+});
+async function chatStart(rawParams: unknown): Promise<{ ok: true }> {
+  const params = ChatStartParams.parse(rawParams);
+  await runChat(
+    params.streamId,
+    {
+      projectId: params.projectId,
+      projectPath: params.projectPath,
+      prompt: params.prompt,
+      sessionId: params.sessionId ?? null,
+    },
+    (event) => writeNotification(params.streamId, event),
+  );
+  return { ok: true };
+}
+
+const ChatStopParams = z.object({ streamId: z.string().min(1) });
+function chatStop(rawParams: unknown): { cancelled: boolean } {
+  const params = ChatStopParams.parse(rawParams);
+  return { cancelled: cancelChat(params.streamId) };
 }
 
 const handleLine = async (line: string): Promise<void> => {
