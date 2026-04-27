@@ -50,6 +50,7 @@ import { exportToGithub, isGhInstalled } from "@/lib/export";
 import { ingestFile } from "@/lib/files/ingest";
 import type { IngestedFile } from "@/lib/files/types";
 import type { QuestionId } from "@/lib/interview/library";
+import { useOpenTabs } from "@/lib/open-tabs";
 import { checkReadiness, type ReadinessResult } from "@/lib/interview/readiness";
 import { rebuildSpec, type RebuildAnswer } from "@/lib/interview/rebuild-spec";
 import {
@@ -169,6 +170,18 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   const [tab, setTab] = useState<RightTab>("spec");
   const tabPinnedRef = useRef(false);
 
+  // Browser-style top-of-window tab strip. We push the current project into
+  // the open-tabs list as soon as it loads.
+  const { ensureOpen: ensureTabOpen } = useOpenTabs();
+
+  // If another open project's build is already running, the orchestrator
+  // singleton can't take a second one. We surface a banner with the
+  // offending project's name + a deep link to switch tabs.
+  const [otherBuildBlock, setOtherBuildBlock] = useState<{
+    projectId: string;
+    name: string;
+  } | null>(null);
+
   // Has the build started? Derived from session id OR prior actions on disk.
   // Once true for a session, doesn't flip back; lets a reload of a paused
   // project pick up in build mode.
@@ -192,6 +205,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
             return;
           }
           setProject(p);
+          ensureTabOpen({ id: p.id, name: p.name });
           buildSessionRef.current = p.currentSessionId;
           // Crash recovery: a "building" status on cold open means the prior
           // process died mid-turn. Park as paused so the next click is
@@ -253,7 +267,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [projectId, ensureTabOpen]);
 
   // Pull spec from answers and rebuild the preview.
   const refreshSpec = useCallback(async (): Promise<void> => {
@@ -523,6 +537,22 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   const startBuild = useCallback(async (): Promise<void> => {
     if (!project || status.kind === "running" || status.kind === "streaming") return;
 
+    // Refuse to start a second concurrent build. The orchestrator subprocess
+    // is process-global; running two would either error on spawn or compete
+    // for the same claude auth's rate limit. Query DB-persisted status —
+    // anything marked "building" by another project is a live siblings.
+    const listResult = await sidecarCall<Project[]>("projects.list", {});
+    if (listResult.isOk()) {
+      const conflict = listResult.value.find(
+        (p) => p.id !== project.id && p.status === "building",
+      );
+      if (conflict) {
+        setOtherBuildBlock({ projectId: conflict.id, name: conflict.name });
+        return;
+      }
+    }
+    setOtherBuildBlock(null);
+
     setStatus({ kind: "running" });
     try {
       const probe = await invoke<{ ok: boolean; errors: string[]; checkedPath: string }>(
@@ -785,7 +815,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
 
   if (loadError) {
     return (
-      <main className="flex h-screen items-center justify-center p-6">
+      <main className="flex h-full items-center justify-center p-6">
         <Alert variant="destructive" className="max-w-lg">
           <AlertTitle>Could not open the project</AlertTitle>
           <AlertDescription>{loadError}</AlertDescription>
@@ -795,14 +825,14 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   }
   if (!project) {
     return (
-      <main className="flex h-screen items-center justify-center text-sm text-muted-foreground">
+      <main className="flex h-full items-center justify-center text-sm text-muted-foreground">
         <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading project…
       </main>
     );
   }
 
   return (
-    <main className="flex h-screen flex-col bg-background">
+    <main className="flex h-full flex-col bg-background">
       <header className="flex items-center justify-between border-b px-6 py-3">
         <div className="min-w-0">
           <h1 className="truncate text-base font-semibold">{project.name}</h1>
@@ -917,6 +947,8 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         onDriftResolved={(resolved) =>
           setOpenDrifts((prev) => prev.filter((d) => d.id !== resolved.id))
         }
+        otherBuildBlock={otherBuildBlock}
+        onDismissOtherBuildBlock={() => setOtherBuildBlock(null)}
       />
 
       <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_400px]">
@@ -1014,6 +1046,8 @@ interface BannerStackProps {
   openDrifts: readonly DriftEvent[];
   projectPath: string;
   onDriftResolved: (resolved: DriftEvent) => void;
+  otherBuildBlock: { projectId: string; name: string } | null;
+  onDismissOtherBuildBlock: () => void;
 }
 
 function BannerStack(props: BannerStackProps) {
@@ -1073,6 +1107,22 @@ function BannerStack(props: BannerStackProps) {
             {props.ceiling.state === "stop" ? "Spend cap reached" : "Approaching spend cap"}
           </AlertTitle>
           <AlertDescription>{props.ceiling.message}</AlertDescription>
+        </Alert>
+      ) : null}
+      {props.otherBuildBlock ? (
+        <Alert className="mx-4 mt-3 mb-1">
+          <AlertTitle>Another build is running</AlertTitle>
+          <AlertDescription>
+            <span className="font-medium">{props.otherBuildBlock.name}</span> is currently
+            building. Switch to its tab and Stop or wait for it to finish, then come back.{" "}
+            <Link
+              href={`/project/${encodeURIComponent(props.otherBuildBlock.projectId)}`}
+              className="underline"
+              onClick={props.onDismissOtherBuildBlock}
+            >
+              Open {props.otherBuildBlock.name}
+            </Link>
+          </AlertDescription>
         </Alert>
       ) : null}
       {props.recoveredFromCrash ? (
