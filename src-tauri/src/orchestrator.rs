@@ -1,646 +1,77 @@
-// Build-phase orchestrator. Spawns the `claude` CLI as a long-running build
-// subprocess INSIDE the novice's project folder (cwd = project_path), parses
-// its `--output-format stream-json` output, and pushes typed
-// `OrchestratorEvent` items to the webview via a Tauri 2 `Channel<T>`.
+// Build-phase orchestrator. Per ADR-0005 the heavy lifting moved to the
+// Node sidecar (`sidecar/src/orchestrator-driver.ts`) which uses
+// `@anthropic-ai/claude-agent-sdk`'s `query()` directly. This file is now
+// a thin Tauri shell:
+//   * `orchestrator_start` registers the webview's Channel against a fresh
+//     stream id and forwards the request to the sidecar's `orch.start`.
+//   * `orchestrator_stop` calls the sidecar's `orch.stop` to cancel the
+//     in-flight query (via the SDK's AbortController).
 //
-// Per ADR-0002 the Builder does not use the Anthropic SDK; everything goes
-// through the `claude` CLI. Per CLAUDE.md binding rule 5 the novice's project
-// folder is treated as untrusted from the Builder's perspective: we spawn
-// claude into it (which is precisely the design — claude operates ON that
-// folder) but the Builder itself reads back only the structured stream-json
-// events, never arbitrary files.
-//
-// At D1 this command runs ONE kickoff turn: it asks claude to read CLAUDE.md
-// and emit a `## Plan` section for the first work increment. D5/D6 add
-// pause/resume/crash-recovery; D2 adds the human-translation table.
+// The old subprocess spawn / stream-json parser path was removed: it kept
+// fighting Claude Code's permission system in headless mode (live test
+// 2026-04-27 produced "session is locked to src-tauri/" no matter what
+// flags we passed). The SDK's `canUseTool` callback gives us a real
+// permission hook the dashboard can drive — that wiring lives in the
+// sidecar's orchestrator-driver + the existing PermissionPromptBanner.
 
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::fs;
-use std::path::PathBuf;
-use std::process::Stdio;
-use std::sync::Mutex;
 use tauri::ipc::Channel;
-use tauri::Manager;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, Command};
+use tauri::State;
+use uuid::Uuid;
 
-use crate::sidecar::project_root_from_cwd;
+use crate::sidecar::{sidecar_rpc, sidecar_rpc_stream, SidecarState};
 
-const ORCHESTRATOR_KICKOFF_PROMPT: &str = "You are the Builder's build-phase agent. The novice has clicked 'Start build' inside the Builder desktop app and is watching you work via a live dashboard. They can interrupt you at any time via the chat input on the build page.
-
-Where to find context (read these in order on the first turn):
-1. CLAUDE.md at the project root — binding rules for THIS project. Read it first.
-2. spec.md at the project root — this is the SOURCE OF TRUTH for what to build. The Builder rebuilds it from the novice's interview answers EVERY time you are spawned. If you want to know what the novice has told the Builder so far, spec.md is the answer — do NOT go looking in .builder/ for it. .builder/ is internal orchestrator state (the action log, the session id, MCP config) and you can safely ignore it.
-3. If spec.md is still the one-line placeholder ('Empty until the interview begins.'), the novice hasn't done the interview yet — ask them in ONE short sentence what they want to build, then use TodoWrite once they answer.
-
-You have full read/write access to this target project folder (the current working directory). Permission prompts are bypassed for this folder; if a Read or Write looks like it failed, it's because the file genuinely doesn't exist or the path is wrong, NOT because of permissions. Don't ask the novice to grant access — just try a different path.
-
-You do NOT need access to the Builder app's own source folder (for example a parent folder containing src-tauri/, app/, lib/orchestrator/, or sidecar/). That folder is outside this build sandbox. Never ask the novice to grant read/write access to it. If the target project's spec.md is empty or missing detail, ask the novice one short product question instead of looking for Builder internals.
-
-For the first turn (when spec.md HAS real content):
-- Use TodoWrite to lay out 3-7 concrete next steps that move toward shipping spec.md's Phase 1. Each step at most one hour of work.
-- Then STOP and wait for the novice to react before modifying any files.
-
-Defaults:
-- Build INSIDE this project folder. Don't create sibling folders or touch the user's home directory outside this folder.
-- The novice is non-technical. Use plain language; bullet points and short sentences. Don't write multi-paragraph essays.
-- Maintain your TodoWrite plan as the build progresses (mark items completed/in_progress) so the dashboard's plan panel stays accurate.
-- If you need to give advice or explain something (the novice may ask follow-up questions), keep it brief and tied to the specific project. They are inside the Builder app — they don't have a separate terminal — so don't tell them to run `cd` or open VS Code. Tell them what to do INSIDE the Builder.";
-
-/// One item in claude's TodoWrite plan. The dashboard renders these as a
-/// checklist so the novice sees the pathway to completion + what's blocked.
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct TodoItem {
-  pub content: String,
-  pub status: String, // "pending" | "in_progress" | "completed"
-  #[serde(rename = "activeForm")]
-  pub active_form: String,
-}
-
-/// One observable event from the build subprocess. Mirrors ChatChunk in
-/// shape but covers the full tool-call surface (every tool, not just our
-/// UI tool), since the dashboard's live tail and `actions` table need it all.
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum OrchestratorEvent {
-  /// claude's `system.init`. Emitted once per `orchestrator_start` call.
-  /// `id` is the session id usable later with `--resume <id>`.
-  Session { id: String },
-  /// A piece of assistant text. Concatenate in arrival order.
-  AssistantDelta { text: String },
-  /// claude is calling a tool. `tool` is the bare name as it arrives (Bash,
-  /// Edit, Read, Glob, Grep, Write, etc., or `mcp__<server>__<name>` for MCP
-  /// tools). `raw_input` is the JSON-encoded input as a string so the UI can
-  /// route it through the D2 translator without double-decoding.
-  ToolUse { tool: String, raw_input: String },
-  /// Specialised view of claude's built-in `TodoWrite` tool. Emitted in
-  /// addition to ToolUse so the dashboard can render the plan as a
-  /// checklist without re-parsing the raw_input client-side.
-  TodosUpdated { todos: Vec<TodoItem> },
-  /// claude's `result.success`. Emitted once at the end of a successful turn.
-  Done {
-    cost_usd: Option<f64>,
-    input_tokens: Option<u64>,
-    output_tokens: Option<u64>,
-  },
-  /// Subprocess exited non-zero AND stderr looked like a rate-limit error.
-  RateLimit { message: String },
-  /// Subprocess exited non-zero with no specific signal we recognise.
-  Error { message: String },
-}
-
-/// Inspect a single line of `claude --output-format stream-json` output and
-/// return the corresponding events. Returns an empty vec for uninteresting
-/// event types (user-message echoes, system events other than init).
-///
-/// Differs from chat.rs::parse_stream_line in two ways:
-///   - emits ToolUse for EVERY tool_use block (chat.rs only forwards
-///     `offer_options`); the dashboard needs the full surface.
-///   - does not handle our chat-only MCP tool semantics.
-pub fn parse_orchestrator_line(line: &str) -> Vec<OrchestratorEvent> {
-  let value: Value = match serde_json::from_str(line.trim()) {
-    Ok(v) => v,
-    Err(_) => return vec![],
-  };
-  let Some(event_type) = value.get("type").and_then(|v| v.as_str()) else {
-    return vec![];
-  };
-  match event_type {
-    "system" => {
-      if value.get("subtype").and_then(|v| v.as_str()) != Some("init") {
-        return vec![];
-      }
-      let Some(id) = value.get("session_id").and_then(|v| v.as_str()) else {
-        return vec![];
-      };
-      vec![OrchestratorEvent::Session { id: id.to_string() }]
-    }
-    "assistant" => {
-      let Some(content) = value
-        .get("message")
-        .and_then(|m| m.get("content"))
-        .and_then(|c| c.as_array())
-      else {
-        return vec![];
-      };
-      let mut events: Vec<OrchestratorEvent> = vec![];
-      let mut text = String::new();
-      for block in content {
-        let Some(block_type) = block.get("type").and_then(|v| v.as_str()) else {
-          continue;
-        };
-        match block_type {
-          "text" => {
-            if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
-              text.push_str(t);
-            }
-          }
-          "tool_use" => {
-            let tool = block
-              .get("name")
-              .and_then(|v| v.as_str())
-              .unwrap_or("")
-              .to_string();
-            if tool.is_empty() {
-              continue;
-            }
-            let raw_input = block
-              .get("input")
-              .map(|v| v.to_string())
-              .unwrap_or_else(|| "{}".to_string());
-            // Specialised view of TodoWrite for the dashboard plan panel.
-            if tool == "TodoWrite" {
-              if let Some(todos_val) = block.get("input").and_then(|i| i.get("todos")) {
-                let todos: Vec<TodoItem> =
-                  serde_json::from_value(todos_val.clone()).unwrap_or_default();
-                if !todos.is_empty() {
-                  events.push(OrchestratorEvent::TodosUpdated { todos });
-                }
-              }
-            }
-            events.push(OrchestratorEvent::ToolUse { tool, raw_input });
-          }
-          _ => {}
-        }
-      }
-      if !text.is_empty() {
-        events.insert(0, OrchestratorEvent::AssistantDelta { text });
-      }
-      events
-    }
-    "result" => {
-      if value.get("subtype").and_then(|v| v.as_str()) != Some("success") {
-        return vec![];
-      }
-      vec![OrchestratorEvent::Done {
-        cost_usd: value.get("total_cost_usd").and_then(|v| v.as_f64()),
-        input_tokens: value
-          .get("usage")
-          .and_then(|u| u.get("input_tokens"))
-          .and_then(|v| v.as_u64()),
-        output_tokens: value
-          .get("usage")
-          .and_then(|u| u.get("output_tokens"))
-          .and_then(|v| v.as_u64()),
-      }]
-    }
-    _ => vec![],
-  }
-}
-
-fn detect_rate_limit(stderr: &str) -> bool {
-  let lower = stderr.to_lowercase();
-  lower.contains("rate limit")
-    || lower.contains("rate_limit")
-    || lower.contains("rate-limit")
-    || lower.contains("too many requests")
-}
-
-fn expand_tilde(path: &str) -> PathBuf {
-  if let Some(rest) = path.strip_prefix("~/") {
-    if let Some(home) = std::env::var_os("HOME") {
-      return PathBuf::from(home).join(rest);
-    }
-  }
-  PathBuf::from(path)
-}
-
-/// Per-app state holding the in-flight orchestrator child process so
-/// `orchestrator_stop` can kill it. Only one build subprocess runs at a
-/// time (single-novice desktop app); the Mutex<Option<Child>> shape is
-/// the simplest way to express "0 or 1 alive".
-pub struct OrchestratorState {
-  child: Mutex<Option<Child>>,
-}
-
-impl OrchestratorState {
-  pub fn new() -> Self {
-    Self { child: Mutex::new(None) }
-  }
-}
-
-/// Generate the orchestrator-side MCP config JSON that claude consumes via
-/// `--mcp-config`. The MCP server exposes ONE tool: `request_permission`.
-///
-/// CURRENTLY UNUSED — see D-021. The `--permission-prompt-tool` flag I
-/// tried to wire this through doesn't exist on the claude CLI (SDK-only).
-/// Kept in the codebase so the hooks-based rewire can re-enable it
-/// without re-implementing the wiring.
-#[allow(dead_code)]
-fn build_orchestrator_mcp_config(
-  project_id: &str,
-  novice_project_root: &PathBuf,
-) -> Result<PathBuf, String> {
-  let builder_root = project_root_from_cwd()?;
-  let mcp_server_script = builder_root
-    .join("sidecar")
-    .join("dist")
-    .join("mcp-orchestrator.js");
-  let migrations_folder = builder_root.join("sidecar").join("migrations");
-  let db_path = builder_root.join(".builder").join("builder.db");
-
-  if !mcp_server_script.exists() {
-    return Err(format!(
-      "orchestrator MCP server build missing at {}; run pnpm sidecar:build",
-      mcp_server_script.display()
-    ));
-  }
-
-  let config = serde_json::json!({
-    "mcpServers": {
-      "builder-orchestrator": {
-        "command": "node",
-        "args": [
-          mcp_server_script.to_string_lossy(),
-          "--db-path", db_path.to_string_lossy(),
-          "--migrations-folder", migrations_folder.to_string_lossy(),
-          "--project-id", project_id,
-        ],
-      },
-    },
-  });
-
-  // Ephemeral per-turn config under the novice's project folder.
-  let config_dir = novice_project_root.join(".builder");
-  fs::create_dir_all(&config_dir).map_err(|e| format!("create .builder/: {e}"))?;
-  let config_path = config_dir.join("mcp-orchestrator.json");
-  fs::write(
-    &config_path,
-    serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?,
-  )
-  .map_err(|e| format!("write orchestrator mcp config: {e}"))?;
-  Ok(config_path)
-}
-
-/// Spawn the build subprocess in `project_path`, stream events, return when
-/// the subprocess exits. The caller (webview) supplies a Channel; events
-/// arrive in the order they were observed.
-///
-/// `session_id` is None on the first turn (a fresh build kickoff) and Some
-/// on subsequent turns to continue the same context (used by Flow H resume).
-/// `project_id` is the ULID — needed so the MCP server records permission
-/// requests against the correct project.
+/// Start a build-phase query through the SDK driver in the sidecar. Events
+/// stream back via the Channel; the call resolves when the SDK's query()
+/// generator ends (or aborts via orchestrator_stop).
 #[tauri::command]
 pub async fn orchestrator_start(
-  app: tauri::AppHandle,
+  state: State<'_, SidecarState>,
   project_id: String,
   project_path: String,
   prompt: Option<String>,
   session_id: Option<String>,
-  on_event: Channel<OrchestratorEvent>,
+  on_event: Channel<Value>,
 ) -> Result<(), String> {
-  let cwd = expand_tilde(&project_path);
-  if !cwd.exists() {
-    return Err(format!(
-      "orchestrator_start: project folder not found: {}",
-      cwd.display()
-    ));
-  }
-
-  let mut command = Command::new("claude");
-  command
-    .current_dir(&cwd)
-    .arg("-p")
-    .arg("--output-format")
-    .arg("stream-json")
-    .arg("--verbose"); // claude requires --verbose to stream
-
-  // Per ADR-0002 the orchestrator's build subprocess uses Sonnet by default
-  // (long, multi-step work; cost matters more than first-impression quality).
-  // Subsequent turns reuse the same model via --resume.
-  command.arg("--model").arg("sonnet");
-
-  // Permission model. The user reported repeated directory-write failures
-  // even with --permission-mode bypassPermissions. claude CLI exposes a
-  // SEPARATE flag --dangerously-skip-permissions that's documented as
-  // "Bypass all permission checks" and is more aggressive than the mode
-  // (the mode still runs through some internal gating; the flag short-
-  // circuits earlier). Use the flag.
-  //
-  // Trust boundary is the orchestrator: novice clicked Start build, Stop
-  // kills the subprocess, single-user local app, build_capability_check
-  // pre-flight has already verified the project folder is writable.
-  //
-  // The PermissionPromptBanner UI + permission_requests table +
-  // mcp-orchestrator.ts MCP server stay in the codebase as dead code
-  // (D-021) for the eventual PreToolUse hook rewire.
-  command.arg("--dangerously-skip-permissions");
-  command.arg("--add-dir").arg(&cwd);
-
-  // Inline settings override. User-level ~/.claude/settings.json may have
-  // restrictive `allow` rules that confuse the spawned claude even when
-  // --dangerously-skip-permissions is set (live-tested 2026-04-27 — claude
-  // reported "session is locked to src-tauri/" because of inherited
-  // user-level settings). Passing --settings with permissive JSON makes
-  // claude ignore the user-level file entirely for this spawn.
-  command.arg("--settings").arg(
-    r#"{"permissions":{"defaultMode":"bypassPermissions","allow":["Bash(*)","Read(**)","Write(**)","Edit(**)","Glob(**)","Grep(**)","Task(*)","WebFetch(*)","WebSearch(*)","TodoWrite(*)","NotebookEdit(**)"],"deny":[]}}"#,
-  );
-
-  let _ = project_id; // silence unused-arg until permission MCP is rewired
-
-  if let Some(sid) = &session_id {
-    command.arg("--resume").arg(sid);
-  }
-
-  let kickoff = prompt.unwrap_or_else(|| ORCHESTRATOR_KICKOFF_PROMPT.to_string());
-  command
-    .arg(&kickoff)
-    .stdin(Stdio::null())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped());
-
-  let mut child = command.spawn().map_err(|e| format!("spawn claude: {e}"))?;
-
-  let stdout = child
-    .stdout
-    .take()
-    .ok_or_else(|| "claude stdout missing".to_string())?;
-  let mut stderr = child
-    .stderr
-    .take()
-    .ok_or_else(|| "claude stderr missing".to_string())?;
-
-  // Hand the child over to the OrchestratorState so orchestrator_stop can
-  // kill it. We can't keep `child` here AND in the state at the same time,
-  // so we move it in and pull it back at the end via .take().
-  if let Some(state) = app.try_state::<OrchestratorState>() {
-    if let Ok(mut guard) = state.child.lock() {
-      *guard = Some(child);
-    }
-  }
-
-  let mut reader = BufReader::new(stdout).lines();
-  while let Some(line) = reader
-    .next_line()
-    .await
-    .map_err(|e| format!("read stdout: {e}"))?
-  {
-    for event in parse_orchestrator_line(&line) {
-      on_event
-        .send(event)
-        .map_err(|e| format!("channel send: {e}"))?;
-    }
-  }
-
-  // Take the child back out of state to read stderr + wait. If
-  // orchestrator_stop already pulled it out, the process is gone — surface
-  // a clean done with no rate-limit/error.
-  let mut child = match app
-    .try_state::<OrchestratorState>()
-    .and_then(|s| s.child.lock().ok().map(|mut g| g.take()))
-    .flatten()
-  {
-    Some(c) => c,
-    None => return Ok(()),
-  };
-
-  let mut stderr_text = String::new();
-  let _ = tokio::io::AsyncReadExt::read_to_string(&mut stderr, &mut stderr_text).await;
-  let status = child.wait().await.map_err(|e| format!("wait: {e}"))?;
-
-  if !status.success() {
-    if detect_rate_limit(&stderr_text) {
-      let _ = on_event.send(OrchestratorEvent::RateLimit {
-        message: "Claude is rate-limited. Try again in a few minutes.".to_string(),
-      });
-    } else {
-      let message = if stderr_text.trim().is_empty() {
-        format!("claude exited with status {status}")
-      } else {
-        stderr_text.trim().to_string()
-      };
-      let _ = on_event.send(OrchestratorEvent::Error { message });
-    }
-  }
-
-  Ok(())
+  let stream_id = Uuid::new_v4().to_string();
+  let params = serde_json::json!({
+    "streamId": stream_id,
+    "projectId": project_id,
+    "projectPath": project_path,
+    "prompt": prompt,
+    "sessionId": session_id,
+  });
+  // Hand the stream id to the sidecar so its writeNotification(streamId, ev)
+  // routes back to OUR Channel via the bridge.
+  sidecar_rpc_stream(state, "orch.start".to_string(), params, stream_id, on_event)
+    .map(|_| ())
 }
 
-/// Kill the in-flight build subprocess. Used by Flow H Stop and as the
-/// "force-kill" half of Pause when the novice doesn't want to wait for the
-/// current turn to finish naturally. No-op when no child is running.
-///
-/// Reaping: start_kill is non-blocking and tokio::process::Child does NOT
-/// wait on Drop, so without an explicit `wait()` the killed process becomes
-/// a zombie until the Tauri app exits. We spawn a detached task to
-/// `wait()` it; if it doesn't exit within 5s after SIGTERM we escalate to
-/// SIGKILL via `kill()`. Returns immediately so the IPC reply is fast.
+/// Cancel an in-flight build-phase query. The sidecar's orch.stop aborts
+/// the SDK's AbortController, which terminates the query() generator and
+/// causes orchestrator_start to return.
 #[tauri::command]
-pub async fn orchestrator_stop(state: tauri::State<'_, OrchestratorState>) -> Result<(), String> {
-  let child_opt = state.child.lock().map_err(|e| format!("lock: {e}"))?.take();
-  if let Some(mut child) = child_opt {
-    child.start_kill().map_err(|e| format!("start_kill: {e}"))?;
-    tokio::spawn(async move {
-      tokio::select! {
-        _ = child.wait() => {
-          // Reaped naturally after SIGTERM.
-        }
-        _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
-          // Subprocess ignored SIGTERM; escalate to SIGKILL and reap.
-          let _ = child.kill().await;
-        }
-      }
-    });
-  }
-  Ok(())
+pub async fn orchestrator_stop(
+  state: State<'_, SidecarState>,
+  stream_id: Option<String>,
+) -> Result<(), String> {
+  // Without a streamId we have nothing specific to cancel. The webview is
+  // expected to remember the streamId from the start call; if it doesn't
+  // (or the build was started by a different window), this is a no-op.
+  let Some(sid) = stream_id else {
+    return Ok(());
+  };
+  let params = serde_json::json!({ "streamId": sid });
+  sidecar_rpc(state, "orch.stop".to_string(), params).map(|_| ())
 }
 
-#[cfg(test)]
-mod tests {
-  use super::*;
+// State holder kept for API compatibility — the new architecture doesn't
+// own a Child process anymore (the SDK runs in the sidecar), but lib.rs
+// still calls OrchestratorState::new() at startup. Now an empty marker.
+pub struct OrchestratorState;
 
-  fn first(line: &str) -> OrchestratorEvent {
-    parse_orchestrator_line(line)
-      .into_iter()
-      .next()
-      .expect("expected at least one event")
-  }
-
-  #[test]
-  fn parses_system_init_into_session() {
-    let line = r#"{"type":"system","subtype":"init","session_id":"build-xyz","model":"sonnet"}"#;
-    match first(line) {
-      OrchestratorEvent::Session { id } => assert_eq!(id, "build-xyz"),
-      _ => panic!("wrong variant"),
-    }
-  }
-
-  #[test]
-  fn parses_assistant_text_block_with_plan_heading() {
-    // JSON's `\n` (literal backslash-n) decodes to a newline in the text.
-    // Use a regular string with double-escaped backslashes to keep the
-    // raw-string syntax simple.
-    let line = "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"## Plan\\n1. Read spec.md\\n2. Scaffold app/\"}]}}";
-    match first(line) {
-      OrchestratorEvent::AssistantDelta { text } => {
-        assert!(text.contains("## Plan"));
-        assert!(text.contains("Read spec.md"));
-      }
-      _ => panic!("wrong variant"),
-    }
-  }
-
-  #[test]
-  fn parses_todo_write_tool_use_into_todos_updated_chunk() {
-    let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"x","name":"TodoWrite","input":{"todos":[{"content":"Read CLAUDE.md","status":"completed","activeForm":"Reading CLAUDE.md"},{"content":"Scaffold app/","status":"in_progress","activeForm":"Scaffolding app/"},{"content":"Run tests","status":"pending","activeForm":"Running tests"}]}}]}}"#;
-    let events = parse_orchestrator_line(line);
-    // Both TodosUpdated AND ToolUse should fire (so the live tail still
-    // gets the row, AND the plan panel updates).
-    assert_eq!(events.len(), 2);
-    match &events[0] {
-      OrchestratorEvent::TodosUpdated { todos } => {
-        assert_eq!(todos.len(), 3);
-        assert_eq!(todos[0].content, "Read CLAUDE.md");
-        assert_eq!(todos[0].status, "completed");
-        assert_eq!(todos[1].status, "in_progress");
-        assert_eq!(todos[1].active_form, "Scaffolding app/");
-        assert_eq!(todos[2].status, "pending");
-      }
-      _ => panic!("expected TodosUpdated first"),
-    }
-    match &events[1] {
-      OrchestratorEvent::ToolUse { tool, .. } => assert_eq!(tool, "TodoWrite"),
-      _ => panic!("expected ToolUse second"),
-    }
-  }
-
-  #[test]
-  fn todo_write_with_empty_todos_array_skips_todos_updated() {
-    let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"x","name":"TodoWrite","input":{"todos":[]}}]}}"#;
-    let events = parse_orchestrator_line(line);
-    // ToolUse fires but TodosUpdated does not (empty list = no change).
-    assert_eq!(events.len(), 1);
-    matches!(&events[0], OrchestratorEvent::ToolUse { .. });
-  }
-
-  #[test]
-  fn parses_bash_tool_use_with_raw_input_preserved() {
-    let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"x","name":"Bash","input":{"command":"pnpm verify","description":"merge gate"}}]}}"#;
-    match first(line) {
-      OrchestratorEvent::ToolUse { tool, raw_input } => {
-        assert_eq!(tool, "Bash");
-        assert!(raw_input.contains("pnpm verify"));
-        assert!(raw_input.contains("merge gate"));
-      }
-      _ => panic!("wrong variant"),
-    }
-  }
-
-  #[test]
-  fn parses_edit_tool_use() {
-    let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"x","name":"Edit","input":{"file_path":"app/page.tsx","old_string":"x","new_string":"y"}}]}}"#;
-    match first(line) {
-      OrchestratorEvent::ToolUse { tool, raw_input } => {
-        assert_eq!(tool, "Edit");
-        assert!(raw_input.contains("app/page.tsx"));
-      }
-      _ => panic!("wrong variant"),
-    }
-  }
-
-  #[test]
-  fn assistant_with_text_and_tool_use_returns_text_first_then_tool() {
-    let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Reading the spec."},{"type":"tool_use","id":"x","name":"Read","input":{"file_path":"spec.md"}}]}}"#;
-    let events = parse_orchestrator_line(line);
-    assert_eq!(events.len(), 2);
-    match &events[0] {
-      OrchestratorEvent::AssistantDelta { text } => assert_eq!(text, "Reading the spec."),
-      _ => panic!("first should be text"),
-    }
-    match &events[1] {
-      OrchestratorEvent::ToolUse { tool, .. } => assert_eq!(tool, "Read"),
-      _ => panic!("second should be tool_use"),
-    }
-  }
-
-  #[test]
-  fn assistant_with_multiple_tool_uses_returns_all_in_order() {
-    let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"a","name":"Read","input":{"file_path":"a.md"}},{"type":"tool_use","id":"b","name":"Read","input":{"file_path":"b.md"}}]}}"#;
-    let events = parse_orchestrator_line(line);
-    assert_eq!(events.len(), 2);
-    match (&events[0], &events[1]) {
-      (
-        OrchestratorEvent::ToolUse { raw_input: a, .. },
-        OrchestratorEvent::ToolUse { raw_input: b, .. },
-      ) => {
-        assert!(a.contains("a.md"));
-        assert!(b.contains("b.md"));
-      }
-      _ => panic!("expected two ToolUse events"),
-    }
-  }
-
-  #[test]
-  fn tool_use_without_input_uses_empty_object_string() {
-    let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"x","name":"Glob"}]}}"#;
-    match first(line) {
-      OrchestratorEvent::ToolUse { tool, raw_input } => {
-        assert_eq!(tool, "Glob");
-        assert_eq!(raw_input, "{}");
-      }
-      _ => panic!("wrong variant"),
-    }
-  }
-
-  #[test]
-  fn tool_use_without_name_is_skipped() {
-    let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"x","input":{}}]}}"#;
-    assert!(parse_orchestrator_line(line).is_empty());
-  }
-
-  #[test]
-  fn parses_result_success_with_usage_and_cost() {
-    let line = r#"{"type":"result","subtype":"success","total_cost_usd":0.12,"usage":{"input_tokens":1000,"output_tokens":500}}"#;
-    match first(line) {
-      OrchestratorEvent::Done {
-        cost_usd,
-        input_tokens,
-        output_tokens,
-      } => {
-        assert!((cost_usd.unwrap() - 0.12).abs() < 1e-9);
-        assert_eq!(input_tokens, Some(1000));
-        assert_eq!(output_tokens, Some(500));
-      }
-      _ => panic!("wrong variant"),
-    }
-  }
-
-  #[test]
-  fn ignores_user_message_echoes() {
-    let line = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"go"}]}}"#;
-    assert!(parse_orchestrator_line(line).is_empty());
-  }
-
-  #[test]
-  fn ignores_system_subtypes_other_than_init() {
-    let line = r#"{"type":"system","subtype":"compact","details":{}}"#;
-    assert!(parse_orchestrator_line(line).is_empty());
-  }
-
-  #[test]
-  fn ignores_result_error_subtypes() {
-    let line = r#"{"type":"result","subtype":"error_during_execution","error":"boom"}"#;
-    assert!(parse_orchestrator_line(line).is_empty());
-  }
-
-  #[test]
-  fn returns_empty_for_malformed_json() {
-    assert!(parse_orchestrator_line("not json at all").is_empty());
-    assert!(parse_orchestrator_line("").is_empty());
-  }
-
-  #[test]
-  fn detects_common_rate_limit_phrasings() {
-    assert!(detect_rate_limit("Error: Rate limit exceeded"));
-    assert!(detect_rate_limit("HTTP 429: rate_limit_error"));
-    assert!(detect_rate_limit("Too Many Requests"));
-  }
-
-  #[test]
-  fn does_not_flag_unrelated_errors_as_rate_limit() {
-    assert!(!detect_rate_limit("Authentication failed"));
-    assert!(!detect_rate_limit(""));
+impl OrchestratorState {
+  pub fn new() -> Self {
+    Self
   }
 }

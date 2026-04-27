@@ -126,16 +126,23 @@ describe("orchestratorStart", () => {
   });
 
   describe("orchestratorStop", () => {
-    it("invokes the orchestrator_stop Tauri command with no args", async () => {
+    it("invokes orchestrator_stop with the given streamId", async () => {
+      mockInvoke.mockResolvedValueOnce(undefined);
+      const r = await orchestratorStop("stream-abc");
+      expect(r.isOk()).toBe(true);
+      expect(mockInvoke).toHaveBeenCalledWith("orchestrator_stop", { streamId: "stream-abc" });
+    });
+
+    it("invokes orchestrator_stop with null streamId when omitted", async () => {
       mockInvoke.mockResolvedValueOnce(undefined);
       const r = await orchestratorStop();
       expect(r.isOk()).toBe(true);
-      expect(mockInvoke).toHaveBeenCalledWith("orchestrator_stop");
+      expect(mockInvoke).toHaveBeenCalledWith("orchestrator_stop", { streamId: null });
     });
 
     it("returns Transport error when the kill fails", async () => {
-      mockInvoke.mockRejectedValueOnce(new Error("permission denied"));
-      const r = await orchestratorStop();
+      mockInvoke.mockRejectedValueOnce(new Error("sidecar lock"));
+      const r = await orchestratorStop("x");
       expect(r.isErr()).toBe(true);
       if (r.isErr()) expect(r.error.kind).toBe("Transport");
     });

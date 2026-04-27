@@ -12,6 +12,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.2.119",
     "@apidevtools/swagger-parser": "12.1.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "better-sqlite3": "12.9.0",
@@ -23,7 +24,7 @@
     "node-sql-parser": "5.4.0",
     "ulid": "3.0.2",
     "unpdf": "1.6.0",
-    "zod": "3.25.76"
+    "zod": "4.1.10"
   },
   "devDependencies": {
     "@types/better-sqlite3": "7.6.13",

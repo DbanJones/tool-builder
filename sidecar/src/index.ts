@@ -1,13 +1,20 @@
-// Node sidecar entry point. See ADR-0004.
+// Node sidecar entry point. See ADR-0004 + ADR-0005.
 //
 // Reads JSON-RPC requests one per line on stdin, dispatches to handlers,
 // writes one JSON response per line on stdout. Stderr is reserved for log
 // output and is captured by the Tauri shell for debugging.
 //
 // Protocol:
-//   request:  { "id": "<opaque>", "method": "<name>", "params": <any> }
-//   success:  { "id": "<same>", "ok": true,  "result": <any> }
-//   failure:  { "id": "<same>", "ok": false, "error": { "code": "<str>", "message": "<str>" } }
+//   request:      { "id": "<opaque>", "method": "<name>", "params": <any> }
+//   success:      { "id": "<same>", "ok": true,  "result": <any> }
+//   failure:      { "id": "<same>", "ok": false, "error": { "code": "<str>", "message": "<str>" } }
+//   notification: { "notification": { "stream": "<id>", "event": <any> } }   // ADR-0005
+//
+// Notifications are server-pushed (no `id`, no response expected). The
+// Tauri shell parses them out of stdout and forwards `event` onto a
+// per-stream Tauri Channel<T> that the webview registered when it kicked
+// off the streaming call. Used by long-running streamed work where one
+// request elicits N events (orchestrator runs, future chat migration).
 //
 // CLI args:
 //   --db-path <path>            Path to SQLite DB file (default: .builder/builder.db)
@@ -27,6 +34,7 @@ import {
   resolve as resolvePermissionRequest,
 } from "./handlers/permission-requests.js";
 import { append as appendCost, sumByProject as sumCostsByProject } from "./handlers/costs.js";
+import { cancelOrchestrator, runOrchestrator } from "./orchestrator-driver.js";
 import {
   append as appendDrift,
   listOpen as listOpenDrifts,
@@ -77,6 +85,15 @@ const writeResponse = (response: object): void => {
   process.stdout.write(JSON.stringify(response) + "\n");
 };
 
+/**
+ * Push a server-side event to the Tauri shell. Per ADR-0005's streaming
+ * protocol — no id, no response expected; the shell forwards `event` onto
+ * the webview's registered Channel for the matching `stream` id.
+ */
+export const writeNotification = (stream: string, event: unknown): void => {
+  process.stdout.write(JSON.stringify({ notification: { stream, event } }) + "\n");
+};
+
 const writeLog = (level: "info" | "warn" | "error", message: string): void => {
   process.stderr.write(JSON.stringify({ level, message, at: new Date().toISOString() }) + "\n");
 };
@@ -118,7 +135,40 @@ const handlers: Record<string, Handler> = {
   "chatMessages.list": listChatMessages,
   "permissionRequests.listOpen": listOpenPermissionRequests,
   "permissionRequests.resolve": resolvePermissionRequest,
+  "orch.start": orchStart,
+  "orch.stop": orchStop,
 };
+
+// ADR-0005: streaming orchestrator. The webview-side Tauri command holds
+// the request open while we push notifications keyed by streamId. Returns
+// when the orchestrator's query() generator ends.
+const OrchStartParams = z.object({
+  streamId: z.string().min(1),
+  projectId: z.string().min(1),
+  projectPath: z.string().min(1),
+  prompt: z.string().nullable().optional(),
+  sessionId: z.string().nullable().optional(),
+});
+async function orchStart(rawParams: unknown): Promise<{ ok: true }> {
+  const params = OrchStartParams.parse(rawParams);
+  await runOrchestrator(
+    params.streamId,
+    {
+      projectId: params.projectId,
+      projectPath: params.projectPath,
+      prompt: params.prompt ?? null,
+      sessionId: params.sessionId ?? null,
+    },
+    (event) => writeNotification(params.streamId, event),
+  );
+  return { ok: true };
+}
+
+const OrchStopParams = z.object({ streamId: z.string().min(1) });
+function orchStop(rawParams: unknown): { cancelled: boolean } {
+  const params = OrchStopParams.parse(rawParams);
+  return { cancelled: cancelOrchestrator(params.streamId) };
+}
 
 const handleLine = async (line: string): Promise<void> => {
   let request: Request;

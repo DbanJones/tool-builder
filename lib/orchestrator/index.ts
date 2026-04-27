@@ -75,9 +75,21 @@ export function orchestratorStart(
 }
 
 /**
- * Kill the in-flight build subprocess (Flow H Stop, and the force-kill
- * half of Pause). No-op when no build is running.
+ * Cancel the in-flight build query (Flow H Stop). No-op when no build is
+ * running. Per ADR-0005 the sidecar's orch.stop aborts the SDK's
+ * AbortController, which terminates the query() generator and lets
+ * orchestrator_start return.
+ *
+ * `streamId` is currently optional — without it the call is a no-op
+ * (the webview is expected to remember the streamId from start; the
+ * dashboard tracks it for D6 Stop). When omitted, the call resolves
+ * silently rather than guessing which build to kill.
  */
-export function orchestratorStop(): ResultAsync<void, OrchestratorError> {
-  return ResultAsync.fromPromise(invoke<void>("orchestrator_stop"), fromInvokeError);
+export function orchestratorStop(
+  streamId?: string | null,
+): ResultAsync<void, OrchestratorError> {
+  return ResultAsync.fromPromise(
+    invoke<void>("orchestrator_stop", { streamId: streamId ?? null }),
+    fromInvokeError,
+  );
 }

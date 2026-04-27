@@ -14,7 +14,7 @@ use chat::chat_send;
 use deploy::{vercel_deploy, vercel_is_installed};
 use export::{gh_export, gh_is_installed};
 use orchestrator::{orchestrator_start, orchestrator_stop, OrchestratorState};
-use sidecar::{sidecar_rpc, spawn_sidecar, SidecarState};
+use sidecar::{sidecar_rpc, sidecar_rpc_stream, spawn_sidecar, SidecarState};
 
 // Bundled placeholder templates copied into every newly created project per
 // build-order.md A4c (placeholder content per human direction 2026-04-25).
@@ -620,7 +620,11 @@ pub fn run() {
 
       // Best-effort spawn. If it fails (e.g. sidecar not built), log and continue;
       // sidecar_rpc will return a clear error for any subsequent calls.
-      match spawn_sidecar(&app.handle()) {
+      match spawn_sidecar(
+        &app.handle(),
+        state.pending.clone(),
+        state.channels.clone(),
+      ) {
         Ok(handle) => {
           if let Ok(mut guard) = state.handle.lock() {
             *guard = Some(handle);
@@ -674,7 +678,8 @@ pub fn run() {
       vercel_deploy,
       gh_is_installed,
       gh_export,
-      sidecar_rpc
+      sidecar_rpc,
+      sidecar_rpc_stream
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
