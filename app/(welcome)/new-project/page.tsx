@@ -3,8 +3,9 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { open } from "@tauri-apps/plugin-dialog";
 import { FolderOpen, Loader2 } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -17,7 +18,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { createProject, sanitiseProjectName } from "@/lib/project";
+import { createProject, sanitiseProjectName, type Project } from "@/lib/project";
+import { sidecarCall } from "@/lib/sidecar/client";
 
 const FormSchema = z.object({
   name: z
@@ -61,6 +63,28 @@ function pickDefaultFolder(): string {
 export default function NewProjectPage() {
   const router = useRouter();
   const [submissionError, setSubmissionError] = useState<string | null>(null);
+  // Existing-project recovery: list everything in the DB so the novice
+  // can re-open a project whose tab was closed (or lost via the prune
+  // bug fixed alongside this list).
+  const [existingProjects, setExistingProjects] = useState<readonly Project[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const r = await sidecarCall<Project[]>("projects.list", {});
+      if (cancelled) return;
+      r.match(
+        (rows) =>
+          setExistingProjects(
+            [...rows].sort((a, b) => b.lastOpenedAt - a.lastOpenedAt),
+          ),
+        () => setExistingProjects([]),
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const {
     register,
     handleSubmit,
@@ -100,10 +124,47 @@ export default function NewProjectPage() {
 
   return (
     <main className="flex min-h-full items-center justify-center bg-background p-8">
-      <div className="w-full max-w-2xl">
+      <div className="w-full max-w-2xl space-y-6">
+        {existingProjects && existingProjects.length > 0 ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Open an existing project</CardTitle>
+              <CardDescription>
+                Your previous projects, most recent first. Click one to add it back to your
+                tabs.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ul className="divide-y rounded-md border">
+                {existingProjects.map((p) => (
+                  <li key={p.id}>
+                    <Link
+                      href={`/project?id=${encodeURIComponent(p.id)}`}
+                      className="flex items-center justify-between gap-3 px-3 py-2 text-sm hover:bg-muted"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-medium">{p.name}</p>
+                        <p className="truncate font-mono text-[11px] text-muted-foreground">
+                          {p.path}
+                        </p>
+                      </div>
+                      <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                        {p.status}
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </CardContent>
+          </Card>
+        ) : null}
         <Card>
           <CardHeader>
-            <CardTitle>Create your first project</CardTitle>
+            <CardTitle>
+              {existingProjects && existingProjects.length > 0
+                ? "Or create a new project"
+                : "Create your first project"}
+            </CardTitle>
             <CardDescription>
               The Builder will create a new folder for your project, initialise it as a git
               repository, and seed it with placeholder templates.

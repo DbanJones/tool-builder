@@ -109,13 +109,11 @@ export function useOpenTabs(): {
           const m = new Map<string, Project>();
           for (const p of rows) m.set(p.id, p);
           setStatusById(m);
-          // Prune curated entries whose project no longer exists.
-          const aliveIds = new Set(rows.map((p) => p.id));
-          const pruned = stored.filter((e) => aliveIds.has(e.id));
-          if (pruned.length !== stored.length) {
-            setStored(pruned);
-            writeStored(pruned);
-          }
+          // Deliberately NOT pruning curated entries that don't appear in
+          // `rows` — a transient sidecar hiccup that returns [] would
+          // otherwise wipe every tab from localStorage (lost a real
+          // project once that way). If a project is genuinely deleted the
+          // user can close its tab manually with the X.
         },
         () => undefined,
       );

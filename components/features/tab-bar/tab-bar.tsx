@@ -1,16 +1,20 @@
 "use client";
 
-import { FilePlus, Plus, X } from "lucide-react";
+import { FilePlus, Plus, Square, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 
 import { useOpenTabs, type TabSummary } from "@/lib/open-tabs";
+import { orchestratorStop } from "@/lib/orchestrator";
+import type { Project } from "@/lib/project";
+import { sidecarCall } from "@/lib/sidecar/client";
 
-// Tab strip across the top of the window. Tabs ARE the projects in the DB —
-// every project shows up automatically, sorted by lastOpenedAt. The strip's
-// job is to make it obvious which projects exist, which is active, and which
-// are currently building.
+// Tab strip across the top of the window. Tabs are projects the novice has
+// opened; the strip shows which is active and which (if any) is currently
+// building. Fixed-width tabs so the strip reads as a row of equal slots.
+
+const TAB_WIDTH = "w-[200px]";
 
 export function TabBar() {
   // useSearchParams suspends during the static prerender pass; wrap so the
@@ -31,7 +35,7 @@ function TabBarInner() {
   const activeId = pathname === "/project" ? params.get("id") : null;
   const onNewProjectRoute = pathname === "/new-project";
   const { tabs, close } = useOpenTabs();
-  const buildingCount = tabs.filter((t) => t.status === "building").length;
+  const buildingTabs = tabs.filter((t) => t.status === "building");
 
   const onClose = (id: string, e: React.MouseEvent): void => {
     e.preventDefault();
@@ -41,6 +45,23 @@ function TabBarInner() {
       const remaining = tabs.filter((t) => t.id !== id);
       router.push(remaining[0] ? `/project?id=${encodeURIComponent(remaining[0].id)}` : "/");
     }
+  };
+
+  const onStopAll = async (): Promise<void> => {
+    // Singleton orchestrator: one stop kills the running subprocess. We
+    // also persist each building project as paused so the next click in
+    // its workspace is a deliberate Resume rather than an accidental new
+    // turn.
+    await orchestratorStop();
+    await Promise.all(
+      buildingTabs.map((t) =>
+        sidecarCall<Project>("projects.setStatus", {
+          id: t.id,
+          status: "paused",
+          currentSessionId: null,
+        }),
+      ),
+    );
   };
 
   return (
@@ -74,17 +95,21 @@ function TabBarInner() {
       >
         <Plus className="h-3.5 w-3.5" aria-hidden="true" />
       </Link>
-      {buildingCount > 0 ? (
-        <span
-          className="ml-auto flex items-center gap-1.5 px-3 text-[11px] font-medium text-primary"
-          aria-live="polite"
+      {buildingTabs.length > 0 ? (
+        <button
+          type="button"
+          onClick={() => void onStopAll()}
+          aria-label={`Stop ${buildingTabs.length === 1 ? "build" : "all builds"}`}
+          title={
+            buildingTabs.length === 1
+              ? `Stop the build on ${buildingTabs[0]?.name ?? ""}`
+              : `Stop all ${buildingTabs.length} running builds`
+          }
+          className="ml-auto flex h-9 items-center gap-1.5 px-3 text-[11px] font-medium text-destructive hover:bg-destructive/10"
         >
-          <span className="relative inline-flex h-2 w-2">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/60 motion-reduce:hidden" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
-          </span>
-          {buildingCount} building
-        </span>
+          <Square className="h-3 w-3" aria-hidden="true" />
+          Stop {buildingTabs.length === 1 ? "build" : `all ${buildingTabs.length}`}
+        </button>
       ) : null}
     </div>
   );
@@ -106,9 +131,9 @@ function Tab({
       title={tab.name}
       aria-current={active ? "page" : undefined}
       className={
-        "group relative flex h-9 max-w-[220px] items-center gap-2 border-r px-3 text-xs " +
+        `group relative flex h-9 ${TAB_WIDTH} shrink-0 items-center gap-2 border-r px-3 text-xs ` +
         (active
-          ? "border-b-2 border-b-primary bg-background text-foreground"
+          ? "border-b-[3px] border-b-primary bg-background font-medium text-foreground shadow-sm"
           : "text-muted-foreground hover:bg-background/60 hover:text-foreground")
       }
     >
@@ -116,14 +141,14 @@ function Tab({
       <span className="min-w-0 flex-1 truncate">{tab.name}</span>
       {isRunning ? (
         <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-primary">
-          building
+          live
         </span>
       ) : null}
       <button
         type="button"
         onClick={onClose}
         aria-label={`Close ${tab.name}`}
-        className="ml-1 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground/60 opacity-0 hover:bg-muted hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
+        className="ml-1 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground/60 opacity-60 hover:bg-muted hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
       >
         <X className="h-3 w-3" aria-hidden="true" />
       </button>
@@ -137,7 +162,7 @@ function NewProjectTab() {
   return (
     <div
       aria-current="page"
-      className="relative flex h-9 max-w-[220px] items-center gap-2 border-r border-b-2 border-b-primary bg-background px-3 text-xs text-foreground"
+      className={`relative flex h-9 ${TAB_WIDTH} shrink-0 items-center gap-2 border-r border-b-[3px] border-b-primary bg-background px-3 text-xs font-medium text-foreground shadow-sm`}
     >
       <FilePlus className="h-3 w-3 shrink-0 text-primary" aria-hidden="true" />
       <span className="min-w-0 flex-1 truncate">New project</span>
