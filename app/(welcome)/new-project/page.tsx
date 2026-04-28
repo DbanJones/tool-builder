@@ -2,13 +2,13 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { open } from "@tauri-apps/plugin-dialog";
-import { ChevronDown, ChevronRight, FolderOpen, Loader2, RefreshCw, Search } from "lucide-react";
-import Link from "next/link";
+import { FolderOpen, Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
+import { ProjectsPicker } from "@/components/features/projects-picker/projects-picker";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,87 +18,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { createProject, sanitiseProjectName, type Project } from "@/lib/project";
-import { sidecarCall } from "@/lib/sidecar/client";
-
-function relativeTime(ms: number): string {
-  const diff = Math.max(0, Date.now() - ms);
-  const seconds = Math.floor(diff / 1000);
-  if (seconds < 30) return "just now";
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
-  const months = Math.floor(days / 30);
-  if (months < 12) return `${months}mo ago`;
-  return `${Math.floor(months / 12)}y ago`;
-}
-
-function statusBadgeClass(status: Project["status"]): string {
-  switch (status) {
-    case "building":
-      return "bg-primary/15 text-primary";
-    case "done":
-      return "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400";
-    case "paused":
-      return "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400";
-    case "ready":
-      return "bg-muted text-muted-foreground";
-    case "interviewing":
-      return "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400";
-  }
-}
-
-function statusDotClass(status: Project["status"]): string {
-  switch (status) {
-    case "building":
-      return "bg-primary";
-    case "done":
-      return "bg-green-600";
-    case "paused":
-      return "bg-yellow-500";
-    case "ready":
-      return "bg-muted-foreground/40";
-    case "interviewing":
-      return "bg-blue-500";
-  }
-}
-
-const ALL_STATUSES: readonly Project["status"][] = [
-  "interviewing",
-  "ready",
-  "building",
-  "paused",
-  "done",
-];
-
-type SortKey = "lastOpened" | "created" | "name";
-
-const SORT_OPTIONS: readonly { key: SortKey; label: string }[] = [
-  { key: "lastOpened", label: "Last opened" },
-  { key: "created", label: "Created" },
-  { key: "name", label: "Name" },
-];
-
-function sortProjects(
-  projects: readonly Project[],
-  key: SortKey,
-): readonly Project[] {
-  const copy = [...projects];
-  switch (key) {
-    case "lastOpened":
-      return copy.sort((a, b) => b.lastOpenedAt - a.lastOpenedAt);
-    case "created":
-      return copy.sort((a, b) => b.createdAt - a.createdAt);
-    case "name":
-      return copy.sort((a, b) => a.name.localeCompare(b.name));
-  }
-}
-
-const POLL_MS = 4000;
+import { createProject, sanitiseProjectName } from "@/lib/project";
 
 const FormSchema = z.object({
   name: z
@@ -142,92 +62,6 @@ function pickDefaultFolder(): string {
 export default function NewProjectPage() {
   const router = useRouter();
   const [submissionError, setSubmissionError] = useState<string | null>(null);
-  // Existing-project recovery: list everything in the DB so the novice
-  // can re-open a project whose tab was closed (or lost via the prune
-  // bug fixed alongside this list).
-  const [existingProjects, setExistingProjects] = useState<readonly Project[] | null>(null);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  // Search by name + path (case-insensitive). Filter by status (empty set =
-  // all). Sort key drives the order. Refresh button + a 4s poll keep the
-  // list current with the DB so a project created from elsewhere shows up
-  // without a manual reload.
-  const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<ReadonlySet<Project["status"]>>(
-    new Set(),
-  );
-  const [sortKey, setSortKey] = useState<SortKey>("lastOpened");
-  // Collapsed by default — creating a new project is the primary task on
-  // this page; the recovery list is one click away. Persist the preference
-  // so users who use the recovery list often don't have to re-expand.
-  const [isExistingOpen, setIsExistingOpen] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    return window.localStorage.getItem("builder.newProject.existingOpen") === "true";
-  });
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(
-      "builder.newProject.existingOpen",
-      String(isExistingOpen),
-    );
-  }, [isExistingOpen]);
-
-  const fetchProjects = useCallback(async (): Promise<void> => {
-    const r = await sidecarCall<Project[]>("projects.list", {});
-    r.match(
-      (rows) => setExistingProjects(rows),
-      () => setExistingProjects((prev) => prev ?? []),
-    );
-  }, []);
-
-  // Initial load + 4s poll. Polling is cheap (single sqlite query against a
-  // local file) and means a project created via another path shows up in
-  // the recovery list without the user having to reload.
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      await fetchProjects();
-      if (cancelled) return;
-    })();
-    const handle = setInterval(() => void fetchProjects(), POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(handle);
-    };
-  }, [fetchProjects]);
-
-  const onRefresh = async (): Promise<void> => {
-    setIsRefreshing(true);
-    try {
-      await fetchProjects();
-    } finally {
-      setIsRefreshing(false);
-    }
-  };
-
-  const filteredProjects = useMemo<readonly Project[]>(() => {
-    if (existingProjects === null) return [];
-    const q = searchQuery.trim().toLowerCase();
-    let out: readonly Project[] = existingProjects;
-    if (q.length > 0) {
-      out = out.filter(
-        (p) => p.name.toLowerCase().includes(q) || p.path.toLowerCase().includes(q),
-      );
-    }
-    if (statusFilter.size > 0) {
-      out = out.filter((p) => statusFilter.has(p.status));
-    }
-    return sortProjects(out, sortKey);
-  }, [existingProjects, searchQuery, statusFilter, sortKey]);
-
-  const toggleStatus = (s: Project["status"]): void => {
-    setStatusFilter((prev) => {
-      const next = new Set(prev);
-      if (next.has(s)) next.delete(s);
-      else next.add(s);
-      return next;
-    });
-  };
   const {
     register,
     handleSubmit,
@@ -265,206 +99,18 @@ export default function NewProjectPage() {
     );
   };
 
-  const hasExisting = existingProjects !== null && existingProjects.length > 0;
-
   return (
     <main className="flex min-h-full items-center justify-center bg-background p-8">
       <div className="w-full max-w-2xl space-y-4">
-        {hasExisting ? (
-          <Card className="overflow-hidden">
-            <button
-              type="button"
-              onClick={() => setIsExistingOpen((v) => !v)}
-              aria-expanded={isExistingOpen}
-              aria-controls="existing-projects-list"
-              className="flex w-full items-center justify-between gap-3 px-6 py-4 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-            >
-              <div className="min-w-0">
-                <h2 className="flex items-center gap-2 text-base font-semibold">
-                  Your projects
-                  <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                    {existingProjects.length}
-                  </span>
-                </h2>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  {isExistingOpen
-                    ? "Click any project to add it back to your tabs."
-                    : `Reopen a previous project. Last touched ${relativeTime(existingProjects[0]!.lastOpenedAt)}.`}
-                </p>
-              </div>
-              {isExistingOpen ? (
-                <ChevronDown
-                  className="h-5 w-5 shrink-0 text-muted-foreground"
-                  aria-hidden="true"
-                />
-              ) : (
-                <ChevronRight
-                  className="h-5 w-5 shrink-0 text-muted-foreground"
-                  aria-hidden="true"
-                />
-              )}
-            </button>
-            {isExistingOpen ? (
-              <div id="existing-projects-list" className="border-t">
-                <div className="flex flex-wrap items-center gap-2 px-6 py-3">
-                  <div className="relative min-w-0 flex-1">
-                    <Search
-                      className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
-                      aria-hidden="true"
-                    />
-                    <input
-                      type="search"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="Search by name or path…"
-                      aria-label="Filter projects by name or path"
-                      className="block w-full rounded-md border border-input bg-background py-1.5 pl-8 pr-3 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                    />
-                  </div>
-                  <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <span className="sr-only sm:not-sr-only">Sort by</span>
-                    <select
-                      value={sortKey}
-                      onChange={(e) => setSortKey(e.target.value as SortKey)}
-                      className="rounded-md border border-input bg-background px-2 py-1.5 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      aria-label="Sort projects"
-                    >
-                      {SORT_OPTIONS.map((o) => (
-                        <option key={o.key} value={o.key}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => void onRefresh()}
-                    aria-label="Refresh project list"
-                    title="Refresh project list"
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-                  >
-                    <RefreshCw
-                      className={
-                        "h-4 w-4 " + (isRefreshing ? "animate-spin motion-reduce:animate-none" : "")
-                      }
-                      aria-hidden="true"
-                    />
-                  </button>
-                </div>
-                <div className="flex flex-wrap items-center gap-1.5 px-6 pb-3 text-xs">
-                  <span className="text-muted-foreground">Status:</span>
-                  <button
-                    type="button"
-                    onClick={() => setStatusFilter(new Set())}
-                    aria-pressed={statusFilter.size === 0}
-                    className={
-                      "rounded-full px-2.5 py-0.5 transition-colors " +
-                      (statusFilter.size === 0
-                        ? "bg-foreground text-background"
-                        : "bg-muted text-muted-foreground hover:bg-muted-foreground/20")
-                    }
-                  >
-                    All
-                  </button>
-                  {ALL_STATUSES.map((s) => {
-                    const active = statusFilter.has(s);
-                    return (
-                      <button
-                        key={s}
-                        type="button"
-                        onClick={() => toggleStatus(s)}
-                        aria-pressed={active}
-                        className={
-                          "flex items-center gap-1.5 rounded-full px-2.5 py-0.5 transition-colors " +
-                          (active
-                            ? statusBadgeClass(s) + " ring-1 ring-current/30"
-                            : "bg-muted text-muted-foreground hover:bg-muted-foreground/20")
-                        }
-                      >
-                        <span
-                          className={"inline-block h-1.5 w-1.5 rounded-full " + statusDotClass(s)}
-                          aria-hidden="true"
-                        />
-                        {s}
-                      </button>
-                    );
-                  })}
-                </div>
-                {filteredProjects.length === 0 ? (
-                  <p className="px-6 pb-4 text-sm text-muted-foreground">
-                    No projects match your filters.{" "}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSearchQuery("");
-                        setStatusFilter(new Set());
-                      }}
-                      className="underline hover:text-foreground"
-                    >
-                      Clear
-                    </button>
-                  </p>
-                ) : (
-                  <ul className="divide-y border-t" role="list">
-                    {filteredProjects.map((p) => (
-                      <li key={p.id}>
-                    <Link
-                      href={`/project?id=${encodeURIComponent(p.id)}`}
-                      className="group flex items-center gap-4 px-6 py-3 transition-colors hover:bg-muted/40 focus-visible:bg-muted/60 focus-visible:outline-none"
-                    >
-                      <span
-                        className={
-                          "relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-semibold uppercase tracking-tight text-muted-foreground"
-                        }
-                        aria-hidden="true"
-                      >
-                        {p.name.replace(/[^a-zA-Z0-9]/g, "").slice(0, 2) || "—"}
-                        <span
-                          className={
-                            "absolute -bottom-0.5 -right-0.5 inline-block h-2.5 w-2.5 rounded-full ring-2 ring-background " +
-                            statusDotClass(p.status)
-                          }
-                        />
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-baseline justify-between gap-3">
-                          <p className="truncate text-sm font-medium text-foreground">
-                            {p.name}
-                          </p>
-                          <span className="shrink-0 text-[11px] text-muted-foreground">
-                            {relativeTime(p.lastOpenedAt)}
-                          </span>
-                        </div>
-                        <p className="truncate font-mono text-[11px] text-muted-foreground">
-                          {p.path}
-                        </p>
-                      </div>
-                      <span
-                        className={
-                          "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide " +
-                          statusBadgeClass(p.status)
-                        }
-                      >
-                        {p.status}
-                      </span>
-                      <ChevronRight
-                        className="h-4 w-4 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-muted-foreground"
-                        aria-hidden="true"
-                      />
-                    </Link>
-                  </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            ) : null}
-          </Card>
-        ) : null}
+        <ProjectsPicker
+          title="Open an existing project"
+          collapsable
+          defaultOpen={false}
+          persistKey="builder.newProject.existingOpen"
+        />
         <Card>
           <CardHeader>
-            <CardTitle>
-              {hasExisting ? "Create a new project" : "Create your first project"}
-            </CardTitle>
+            <CardTitle>Create a new project</CardTitle>
             <CardDescription>
               The Builder will create a new folder for your project, initialise it as a git
               repository, and seed it with placeholder templates.
