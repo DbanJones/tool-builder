@@ -27,6 +27,7 @@ import {
   type OpenPermissionRequest,
 } from "@/components/features/project-workspace/permission-prompt-banner";
 import { RightRail, type RightTab } from "@/components/features/project-workspace/right-rail";
+import { StagesBar } from "@/components/features/project-workspace/stages-bar";
 import { ackForIntent, detectIntent } from "@/lib/chat-intent";
 import { chatSend, type ChatChunk, type QueuedQuestion } from "@/lib/chat/client";
 import {
@@ -1110,9 +1111,16 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         </div>
       </header>
 
-      {hasStarted ? (
-        <ProgressBar completed={completedSteps} total={totalSteps} />
-      ) : null}
+      {/* Workflow progress bar — always visible so the novice sees the
+          stage chain (Interview → Plan → Build → Test → Review) and a
+          rough ETA, even before the build is kicked off. */}
+      <StagesBar
+        hasStarted={hasStarted}
+        plan={plan}
+        reviewPresent={reviewMarkdown !== null}
+        isRunning={isRunning}
+        etaMsPerTurn={liveEta.medianMs ?? 0}
+      />
 
       {hasStarted ? (
         <div className="border-b bg-primary/5 px-6 py-3">
@@ -1367,26 +1375,6 @@ function BannerStack(props: BannerStackProps) {
           onResolved={props.onDriftResolved}
         />
       ) : null}
-    </div>
-  );
-}
-
-function ProgressBar({ completed, total }: { completed: number; total: number }) {
-  const pct = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
-  return (
-    <div className="border-b bg-muted/30 px-6 py-2">
-      <div className="flex items-center justify-between text-xs">
-        <span className="font-semibold">
-          {total > 0 ? "Build progress" : "Waiting to start"}
-        </span>
-        {total > 0 ? <span className="text-muted-foreground">{pct}%</span> : null}
-      </div>
-      <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-muted">
-        <div
-          className="h-full bg-primary transition-[width]"
-          style={{ width: total > 0 ? `${pct}%` : "0%" }}
-        />
-      </div>
     </div>
   );
 }

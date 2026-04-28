@@ -13,7 +13,10 @@ import type { IngestedFile } from "@/lib/files/types";
 // Tabbed right rail. The parent owns the active tab; this component just
 // renders the strip and delegates content to the relevant panel.
 
-export type RightTab = "spec" | "plan" | "activity" | "review" | "files";
+// "plan" tab is now Plan + live Status (the activity tail) on one tab so
+// the user never has to switch to see what's happening. "activity" was
+// dropped as a standalone — its content lives at the bottom of "plan".
+export type RightTab = "spec" | "plan" | "review" | "files";
 
 interface RightRailProps {
   tab: RightTab;
@@ -45,8 +48,7 @@ export function RightRail(props: RightRailProps) {
 
   const tabs: { id: RightTab; label: string; visible: boolean }[] = [
     { id: "spec", label: "Spec", visible: true },
-    { id: "plan", label: "Plan", visible: hasStarted },
-    { id: "activity", label: "Activity", visible: hasStarted },
+    { id: "plan", label: "Plan & status", visible: hasStarted },
     { id: "review", label: "Review", visible: hasStarted && props.reviewMarkdown !== null },
     { id: "files", label: "Files", visible: true },
   ];
@@ -78,9 +80,10 @@ export function RightRail(props: RightRailProps) {
 
       <RailBody>
         {tab === "spec" && <SpecPanel spec={props.spec} />}
-        {tab === "plan" && <PlanPanel plan={props.plan} recentHistory={props.recentHistory} />}
-        {tab === "activity" && (
-          <ActivityPanel
+        {tab === "plan" && (
+          <PlanAndStatusPanel
+            plan={props.plan}
+            recentHistory={props.recentHistory}
             actions={props.actions}
             showTechnicalDetail={props.showTechnicalDetail}
             isRunning={props.isRunning}
@@ -123,26 +126,39 @@ function SpecPanel({ spec }: { spec: string }) {
   );
 }
 
-function PlanPanel({
+// Combined Plan + live Status panel. Top half: TodoWrite plan with steps
+// + completion ticks. Bottom half: live activity tail (latest tool calls)
+// so the novice can see the build advance in real time without flipping
+// to a separate tab. Recent commits sit at the very bottom.
+function PlanAndStatusPanel({
   plan,
   recentHistory,
+  actions,
+  showTechnicalDetail,
+  isRunning,
 }: {
   plan: readonly TodoItem[];
   recentHistory: TargetState["history"];
+  actions: readonly HistoryActionEntry[];
+  showTechnicalDetail: boolean;
+  isRunning: boolean;
 }) {
   const completed = plan.filter((t) => t.status === "completed").length;
   const total = plan.length;
+  // Most-recent first, capped — the full history.log is on disk if anyone
+  // really wants 200+ entries, but the rail is for at-a-glance status.
+  const recentActions = [...actions].slice(-30).reverse();
   return (
-    <>
-      <div className="border-b px-4 py-3">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="shrink-0 border-b px-4 py-3">
         <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Steps {total > 0 ? `· ${completed} / ${total}` : null}
         </h2>
         <p className="text-[11px] text-muted-foreground">
-          The plan Claude is working through. It updates itself as the build progresses.
+          The plan Claude is working through. Live status is below.
         </p>
       </div>
-      <div className="flex-1 overflow-auto p-4">
+      <div className="max-h-[45%] shrink-0 overflow-auto p-4">
         {plan.length === 0 ? (
           <p className="text-xs text-muted-foreground">
             Claude will lay out the steps here as soon as the build starts.
@@ -170,8 +186,46 @@ function PlanPanel({
           </ol>
         )}
       </div>
+      <div className="flex min-h-0 flex-1 flex-col border-t">
+        <div className="flex shrink-0 items-center justify-between border-b bg-muted/30 px-4 py-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Live status {actions.length > 0 ? `· ${actions.length}` : ""}
+          </h3>
+          {isRunning ? (
+            <span className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-primary">
+              <span className="relative inline-flex h-1.5 w-1.5">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/60 motion-reduce:hidden" />
+                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-primary" />
+              </span>
+              live
+            </span>
+          ) : null}
+        </div>
+        <div className="flex-1 overflow-auto px-4 py-2 text-xs" aria-live="polite">
+          {recentActions.length === 0 ? (
+            <p className="text-muted-foreground">
+              {isRunning
+                ? "Claude is reading your spec…"
+                : "Click Build it to begin. Claude reads your spec and lays out a plan."}
+            </p>
+          ) : (
+            <ul className="space-y-1">
+              {recentActions.map((a) => (
+                <li key={a.id}>
+                  <div>{a.humanLine ?? a.tool}</div>
+                  {showTechnicalDetail ? (
+                    <div className="font-mono text-[10px] text-muted-foreground">
+                      {a.tool} · {a.rawInput}
+                    </div>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
       {(recentHistory ?? []).length > 0 ? (
-        <div className="border-t px-4 py-3">
+        <div className="shrink-0 border-t px-4 py-3">
           <h3 className="mb-1 text-[11px] uppercase tracking-wide text-muted-foreground">
             Recent commits
           </h3>
@@ -185,54 +239,7 @@ function PlanPanel({
           </ul>
         </div>
       ) : null}
-    </>
-  );
-}
-
-function ActivityPanel({
-  actions,
-  showTechnicalDetail,
-  isRunning,
-}: {
-  actions: readonly HistoryActionEntry[];
-  showTechnicalDetail: boolean;
-  isRunning: boolean;
-}) {
-  return (
-    <>
-      <div className="flex shrink-0 items-center justify-between border-b px-4 py-2">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Activity {actions.length > 0 ? `· ${actions.length}` : ""}
-        </h2>
-        {actions.length > 0 ? (
-          <span className="text-[10px] text-muted-foreground">
-            {showTechnicalDetail ? "showing technical detail" : "plain view"}
-          </span>
-        ) : null}
-      </div>
-      <div className="flex-1 overflow-auto px-4 py-2 text-xs" aria-live="polite">
-        {actions.length === 0 ? (
-          <p className="text-muted-foreground">
-            {isRunning
-              ? "Claude is reading your spec…"
-              : "Click Build it to begin. Claude reads your spec and lays out a plan."}
-          </p>
-        ) : (
-          <ul className="space-y-1">
-            {actions.map((a) => (
-              <li key={a.id}>
-                <div>{a.humanLine ?? a.tool}</div>
-                {showTechnicalDetail ? (
-                  <div className="font-mono text-[10px] text-muted-foreground">
-                    {a.tool} · {a.rawInput}
-                  </div>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </>
+    </div>
   );
 }
 
