@@ -204,6 +204,15 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   const hasStarted =
     buildSessionRef.current !== null || actions.length > 0 || plan.length > 0;
 
+  // Stage-transition acks. Refs (not state) so re-renders don't fire the
+  // announcement again, and we seed them on the next-effect tick from any
+  // sentinel substring already in the rehydrated scrollback so a reload
+  // mid-build doesn't replay every prompt.
+  const announcedReadyRef = useRef(false);
+  const announcedReviewRef = useRef(false);
+  const announcedDeployedRef = useRef(false);
+  const announcedPushedRef = useRef(false);
+
   // ---- Project load + hydration ------------------------------------------
   useEffect(() => {
     if (!projectId) {
@@ -323,6 +332,71 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
       );
     })();
   }, [project]);
+
+  // Helper: append + persist an assistant-style message (used by the chat
+  // intent dispatcher, the build event handlers, and the stage-transition
+  // acks below).
+  const appendAssistantMessage = useCallback(
+    (text: string): void => {
+      if (!project) return;
+      setMessages((prev) => [...prev, { role: "assistant" as const, text }]);
+      void sidecarCall("chatMessages.append", {
+        projectId: project.id,
+        role: "assistant",
+        text,
+      });
+    },
+    [project],
+  );
+
+  // Stage-transition phrases. Each is the leading sentinel substring of
+  // the corresponding ack — used both to write the message and to detect
+  // (on rehydrate) that we already announced this stage in a prior session.
+  const STAGE_SENTINELS = {
+    ready: "Got everything I need to build this.",
+    review: "First-pass build done",
+    deployed: "Preview live at",
+    pushed: "Pushed to GitHub at",
+  } as const;
+
+  // Seed announced refs from rehydrated scrollback so a page reload after a
+  // stage already passed doesn't replay the prompt. Effect is idempotent —
+  // refs only flip false → true, never the reverse.
+  useEffect(() => {
+    if (messages.some((m) => m.role === "assistant" && m.text.includes(STAGE_SENTINELS.ready))) {
+      announcedReadyRef.current = true;
+    }
+    if (messages.some((m) => m.role === "assistant" && m.text.includes(STAGE_SENTINELS.review))) {
+      announcedReviewRef.current = true;
+    }
+    if (
+      messages.some((m) => m.role === "assistant" && m.text.includes(STAGE_SENTINELS.deployed))
+    ) {
+      announcedDeployedRef.current = true;
+    }
+    if (messages.some((m) => m.role === "assistant" && m.text.includes(STAGE_SENTINELS.pushed))) {
+      announcedPushedRef.current = true;
+    }
+  }, [messages, STAGE_SENTINELS.deployed, STAGE_SENTINELS.pushed, STAGE_SENTINELS.ready, STAGE_SENTINELS.review]);
+
+  // Stage 1: interview "ready" — every fast-path question has an answer
+  // and the user hasn't kicked off the build yet. Suggests the next move.
+  useEffect(() => {
+    if (announcedReadyRef.current) return;
+    if (hasStarted) return;
+    if (readiness.fastPathTotal === 0) return;
+    if (readiness.fastPathAnswered < readiness.fastPathTotal) return;
+    announcedReadyRef.current = true;
+    appendAssistantMessage(
+      `${STAGE_SENTINELS.ready} Say "build it" when you're ready and I'll start, or keep talking to flesh out anything I missed.`,
+    );
+  }, [
+    readiness.fastPathAnswered,
+    readiness.fastPathTotal,
+    hasStarted,
+    appendAssistantMessage,
+    STAGE_SENTINELS.ready,
+  ]);
 
   // Poll permission requests while a build session exists. 1s cadence.
   useEffect(() => {
@@ -805,6 +879,39 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
       (e) => setExportStatus({ kind: "error", message: e.message }),
     );
   }, [project]);
+
+  // Stage 2: first-pass build done — review.md just appeared on disk. The
+  // banner stack already shows the live tail; this nudges the novice to
+  // type the next imperative ("deploy", "push") instead of hunting for
+  // buttons.
+  useEffect(() => {
+    if (announcedReviewRef.current) return;
+    if (reviewMarkdown === null) return;
+    announcedReviewRef.current = true;
+    appendAssistantMessage(
+      `${STAGE_SENTINELS.review} — the plan and activity are in the right rail. Say "deploy" for a Vercel preview, "push" to back the code up to GitHub, or keep chatting with me to fill any gaps.`,
+    );
+  }, [reviewMarkdown, appendAssistantMessage, STAGE_SENTINELS.review]);
+
+  // Stage 3: deploy preview just succeeded.
+  useEffect(() => {
+    if (announcedDeployedRef.current) return;
+    if (deployStatus.kind !== "success") return;
+    announcedDeployedRef.current = true;
+    appendAssistantMessage(
+      `${STAGE_SENTINELS.deployed} ${deployStatus.url}. Say "push" if you want to back this up to GitHub too.`,
+    );
+  }, [deployStatus, appendAssistantMessage, STAGE_SENTINELS.deployed]);
+
+  // Stage 4: GitHub push just succeeded. End of the chain — no follow-up.
+  useEffect(() => {
+    if (announcedPushedRef.current) return;
+    if (exportStatus.kind !== "success") return;
+    announcedPushedRef.current = true;
+    appendAssistantMessage(
+      `${STAGE_SENTINELS.pushed} ${exportStatus.url}. You're set — keep chatting if you want to keep iterating.`,
+    );
+  }, [exportStatus, appendAssistantMessage, STAGE_SENTINELS.pushed]);
 
   // ---- File ingest -----------------------------------------------------
   // Workspace-wide drag overlay state. The user can drop files anywhere on
