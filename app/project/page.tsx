@@ -2,8 +2,6 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import {
-  ChevronDown,
-  ChevronRight,
   GitBranch,
   Loader2,
   Play,
@@ -159,7 +157,10 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   const [openDrifts, setOpenDrifts] = useState<readonly DriftEvent[]>([]);
   const [openPermissions, setOpenPermissions] = useState<readonly OpenPermissionRequest[]>([]);
   const [reviewMarkdown, setReviewMarkdown] = useState<string | null>(null);
-  const [showDetails, setShowDetails] = useState(false);
+  // Details (deploy/push buttons + technical activity log + footer extras)
+  // are always visible per user request — they're not a power-user surface
+  // worth a hide-toggle, just useful info.
+  const showDetails = true;
   const [showSentryPrompt, setShowSentryPrompt] = useState(false);
   const [costCap, setCostCap] = useState<number | null>(null);
   const [turnDurations, setTurnDurations] = useState<readonly number[]>([]);
@@ -1074,20 +1075,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
               {hasStarted ? "Resume" : "Build it"}
             </Button>
           )}
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => setShowDetails((v) => !v)}
-            title={showDetails ? "Hide advanced controls" : "Show advanced controls"}
-          >
-            {showDetails ? (
-              <ChevronDown className="mr-1 h-3 w-3" />
-            ) : (
-              <ChevronRight className="mr-1 h-3 w-3" />
-            )}
-            Details
-          </Button>
-          {showDetails && hasStarted ? (
+          {hasStarted ? (
             <>
               <Button
                 size="sm"

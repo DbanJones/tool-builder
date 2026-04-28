@@ -1,7 +1,7 @@
 "use client";
 
 import { Loader2, Send } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -60,16 +60,38 @@ export function ChatPanel({
 }: ChatPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const isStreaming = status.kind === "streaming";
+  // "Stick to bottom" only when the user already is at (or very near) the
+  // bottom. The previous version auto-scrolled on every messages/status
+  // change and yanked the user back down whenever they tried to read
+  // earlier scrollback. Track stickiness from the user's actual scroll
+  // position so we follow new content when they're at the bottom and
+  // stay put otherwise.
+  const stickToBottomRef = useRef(true);
+  const STICK_THRESHOLD_PX = 80;
+
+  const onScroll = (): void => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickToBottomRef.current = distanceFromBottom <= STICK_THRESHOLD_PX;
+  };
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    if (!stickToBottomRef.current) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, [messages, status]);
 
   const head = questionQueue[0];
 
   return (
     <section className="flex min-h-0 flex-col">
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-4">
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        className="flex-1 overflow-y-auto px-6 py-4"
+      >
         <div className="mx-auto flex w-full max-w-2xl flex-col gap-4">
           {messages.length === 0 && status.kind === "idle" && (
             <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
@@ -105,18 +127,7 @@ export function ChatPanel({
       </div>
 
       {isPreparingBank && messages[messages.length - 1]?.role === "user" && (
-        <div className="border-t bg-muted/40 px-6 py-3">
-          <div
-            className="mx-auto flex w-full max-w-2xl items-center gap-3 text-sm text-muted-foreground"
-            aria-live="polite"
-          >
-            <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-            <div>
-              <strong className="text-foreground">Preparing question bank...</strong>{" "}
-              28 fast-path questions will guide your spec.
-            </div>
-          </div>
-        </div>
+        <PrepBankBanner />
       )}
 
       {head && (
@@ -204,6 +215,62 @@ export function ChatPanel({
         </div>
       </div>
     </section>
+  );
+}
+
+// Cycles through honest, sequential phrases while we wait for claude's
+// first questions_queued event. The previous version hardcoded a single
+// "28 questions" line that became wrong (now 32) and felt dead.
+const PREP_PHRASES: readonly { headline: string; detail: string }[] = [
+  {
+    headline: "Reading your project so far…",
+    detail: "Looking at any answers you've already given so I don't repeat myself.",
+  },
+  {
+    headline: "Picking the next questions…",
+    detail: "Choosing what to ask based on what you've told me.",
+  },
+  {
+    headline: "Almost there…",
+    detail: "Lining up a small batch — should be on screen in a moment.",
+  },
+];
+
+function PrepBankBanner() {
+  const [index, setIndex] = useState(0);
+  const [elapsedSec, setElapsedSec] = useState(0);
+  useEffect(() => {
+    const start = Date.now();
+    const phraseHandle = setInterval(() => {
+      setIndex((i) => Math.min(i + 1, PREP_PHRASES.length - 1));
+    }, 2500);
+    const tickHandle = setInterval(() => {
+      setElapsedSec(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
+    return () => {
+      clearInterval(phraseHandle);
+      clearInterval(tickHandle);
+    };
+  }, []);
+  const phrase = PREP_PHRASES[index]!;
+  return (
+    <div className="border-t bg-muted/40 px-6 py-3">
+      <div
+        className="mx-auto flex w-full max-w-2xl items-center gap-3 text-sm text-muted-foreground"
+        aria-live="polite"
+      >
+        <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+        <div className="min-w-0 flex-1">
+          <strong className="text-foreground">{phrase.headline}</strong>{" "}
+          <span>{phrase.detail}</span>
+        </div>
+        {elapsedSec >= 3 ? (
+          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+            {elapsedSec}s
+          </span>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
