@@ -9,13 +9,13 @@ import {
 } from "./library";
 
 describe("question library", () => {
-  it("contains 28 fast-path questions", () => {
-    expect(FAST_PATH_QUESTIONS).toHaveLength(28);
+  it("contains 32 fast-path questions", () => {
+    expect(FAST_PATH_QUESTIONS).toHaveLength(32);
   });
 
-  it("the 28 fast-path question ids are exactly Q1..Q28", () => {
+  it("the 32 fast-path question ids are exactly Q1..Q32", () => {
     const ids = FAST_PATH_QUESTIONS.map((q) => q.id).sort();
-    const expected = Array.from({ length: 28 }, (_, i) => `Q${i + 1}`).sort();
+    const expected = Array.from({ length: 32 }, (_, i) => `Q${i + 1}`).sort();
     expect(ids).toEqual(expected);
   });
 

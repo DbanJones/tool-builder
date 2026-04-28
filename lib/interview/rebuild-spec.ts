@@ -70,17 +70,79 @@ function renderScopeSection(answers: readonly RebuildAnswer[]): string {
   } else {
     lines.push("- _(not yet answered)_");
   }
+
+  const outOfScope = findAnswer(answers, "Q31");
+  lines.push("", "**Explicitly out of scope for v1:**");
+  if (outOfScope) {
+    const items = outOfScope.answerText
+      .split(/[\n,]/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (items.length === 0) {
+      lines.push("- _(no out-of-scope items captured)_");
+    } else {
+      for (const item of items) {
+        lines.push(`- ${item.replace(/^[-*]\s*/, "")}`);
+      }
+    }
+  } else {
+    lines.push("- _(not yet answered)_");
+  }
+
   return lines.join("\n");
 }
 
 function renderFlowsSection(answers: readonly RebuildAnswer[]): string {
   return [
-    "## 3. Core flows (Given/When/Then)",
+    "## 3. Core flows + definition of done",
     "",
-    "_Acceptance criteria captured at this stage:_",
+    "**Top flow's acceptance criteria:**",
     "",
     answerOrPlaceholder(answers, "Q16", "_(no acceptance criteria captured yet)_"),
+    "",
+    "**Definition of done (v1):**",
+    "",
+    answerOrPlaceholder(answers, "Q32", "_(not yet captured)_"),
   ].join("\n");
+}
+
+function renderDataModelSection(answers: readonly RebuildAnswer[]): string {
+  const entities = findAnswer(answers, "Q29");
+  const fields = findAnswer(answers, "Q30");
+  const lines = ["## 4. Data model", ""];
+
+  lines.push("**Entities the app tracks:**");
+  if (entities) {
+    const items = entities.answerText
+      .split(/[\n,]/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (items.length === 0) {
+      lines.push("- _(no entities captured)_");
+    } else {
+      for (const item of items) {
+        lines.push(`- ${item.replace(/^[-*]\s*/, "")}`);
+      }
+    }
+  } else {
+    lines.push("- _(not yet answered)_");
+  }
+
+  lines.push("", "**Key fields per entity:**", "");
+  if (fields) {
+    // Preserve newlines so each entity-field line stands on its own.
+    const block = fields.answerText
+      .split("\n")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0)
+      .map((s) => `- ${s.replace(/^[-*]\s*/, "")}`)
+      .join("\n");
+    lines.push(block.length > 0 ? block : "- _(no fields captured)_");
+  } else {
+    lines.push("- _(not yet answered)_");
+  }
+
+  return lines.join("\n");
 }
 
 function renderIntegrationsSection(answers: readonly RebuildAnswer[]): string {
@@ -219,9 +281,7 @@ export function rebuildSpec(
     renderProblemSection(answers),
     renderScopeSection(answers),
     renderFlowsSection(answers),
-    "## 4. Data model",
-    "",
-    "_Captured later in the interview (not yet emitted)._",
+    renderDataModelSection(answers),
     renderIntegrationsSection(answers),
     renderNfrSection(answers),
     renderRulesSection(answers),

@@ -20,7 +20,8 @@ export type QuestionId =
   | "Q1" | "Q2" | "Q3" | "Q4" | "Q5" | "Q6" | "Q7"
   | "Q8" | "Q9" | "Q10" | "Q11" | "Q12" | "Q13" | "Q14"
   | "Q15" | "Q16" | "Q17" | "Q18" | "Q19" | "Q20" | "Q21"
-  | "Q22" | "Q23" | "Q24" | "Q25" | "Q26" | "Q27" | "Q28";
+  | "Q22" | "Q23" | "Q24" | "Q25" | "Q26" | "Q27" | "Q28"
+  | "Q29" | "Q30" | "Q31" | "Q32";
 
 export type QuestionType = "open" | "yes_no" | "single_select" | "multi_select" | "freeform_list";
 
@@ -37,7 +38,8 @@ export const QUESTION_LIBRARY: readonly Question[] = [
   {
     id: "Q1",
     topic: "elevator pitch",
-    prompt: "In one sentence, what are you building and for whom?",
+    prompt:
+      "In one sentence: what does this app do, who is the primary user, and what painful thing does it replace? Be specific — 'it's a CRM' is too vague; 'a CRM for solo plumbers who currently track jobs in WhatsApp' is right.",
     fastPath: true,
     type: "open",
     influencesSpecSections: ["§1", "§2"],
@@ -149,7 +151,8 @@ export const QUESTION_LIBRARY: readonly Question[] = [
   {
     id: "Q15",
     topic: "core flows",
-    prompt: "List the top 5 user flows for the first version, in priority order.",
+    prompt:
+      "List the 3-5 most important user flows for v1. For each, write one line in this shape: '<actor> <does what> so that <outcome>'. Example: 'A plumber adds a new job from a customer call so that they don't lose it before invoicing.' Skip nice-to-haves; only flows the app fails without.",
     fastPath: true,
     type: "freeform_list",
     influencesSpecSections: ["§3"],
@@ -157,9 +160,10 @@ export const QUESTION_LIBRARY: readonly Question[] = [
   {
     id: "Q16",
     topic: "acceptance criteria",
-    prompt: "For each flow, what is the success condition? (Given/When/Then if you can; plain language otherwise.)",
+    prompt:
+      "For your top flow from Q15, what does 'done' look like? Tell me: the start state, the user action, the visible end state, and the one failure case that must NOT happen. Plain language is fine.",
     fastPath: true,
-    type: "freeform_list",
+    type: "open",
     influencesSpecSections: ["§3"],
   },
   {
@@ -257,6 +261,42 @@ export const QUESTION_LIBRARY: readonly Question[] = [
     fastPath: true,
     type: "freeform_list",
     influencesSpecSections: ["§6"],
+  },
+  {
+    id: "Q29",
+    topic: "data entities",
+    prompt:
+      "What 'things' does the app track? List the nouns it stores and shows. Example for the plumber CRM: customers, jobs, invoices, parts. Aim for 3-7; if you have more, you probably have multiple apps.",
+    fastPath: true,
+    type: "freeform_list",
+    influencesSpecSections: ["§4"],
+  },
+  {
+    id: "Q30",
+    topic: "key fields per entity",
+    prompt:
+      "For each thing from Q29, what 2-4 fields define it? Example: 'job: customer, address, status, scheduled_date'. Only the fields you'd lose sleep over if they were missing.",
+    fastPath: true,
+    type: "freeform_list",
+    influencesSpecSections: ["§4"],
+  },
+  {
+    id: "Q31",
+    topic: "out of scope",
+    prompt:
+      "What are you explicitly NOT building in v1, even though it's tempting? List the features you'll resist adding so the agent doesn't drift into them. Example: 'no team accounts in v1, no mobile app yet, no reporting beyond a single CSV export'.",
+    fastPath: true,
+    type: "freeform_list",
+    influencesSpecSections: ["§2"],
+  },
+  {
+    id: "Q32",
+    topic: "definition of done",
+    prompt:
+      "What is the minimum that has to work for you to call v1 'shipped' and put it in front of a real user? One paragraph. If you can't ship without feature X, X belongs in your top flows; everything else is v2.",
+    fastPath: true,
+    type: "open",
+    influencesSpecSections: ["§3"],
   },
 ];
 

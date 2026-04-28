@@ -73,6 +73,10 @@ const full: readonly RebuildAnswer[] = [
   { questionId: "Q26", answerText: "no", confidence: "confident", source: "chat" },
   { questionId: "Q27", answerText: "en-GB", confidence: "default-applied", source: "default" },
   { questionId: "Q28", answerText: "delete account, delete uploaded PDFs", confidence: "confident", source: "chat" },
+  { questionId: "Q29", answerText: "users, board exams, exam questions, study sessions", confidence: "confident", source: "chat" },
+  { questionId: "Q30", answerText: "user: email, name, board\nexam: title, board, year\nquestion: prompt, options, correct_index, explanation\nsession: started_at, score, mistakes_count", confidence: "confident", source: "chat" },
+  { questionId: "Q31", answerText: "no team accounts in v1, no proctoring/exam mode, no flashcards", confidence: "confident", source: "chat" },
+  { questionId: "Q32", answerText: "A new user can sign up, choose their board, upload one PDF that parses cleanly into at least 5 questions, do a 20-question session, and see their score on a dashboard.", confidence: "confident", source: "chat" },
 ];
 
 describe("rebuildSpec", () => {
@@ -105,9 +109,9 @@ describe("rebuildSpec", () => {
   });
 
   it("interview progress section shows exact answered/remaining counts", () => {
-    expect(rebuildSpec(minimal)).toContain("Fast-path questions answered: **1 / 28**");
-    expect(rebuildSpec(partial)).toContain("Fast-path questions answered: **4 / 28**");
-    expect(rebuildSpec(full)).toContain("Fast-path questions answered: **28 / 28**");
+    expect(rebuildSpec(minimal)).toContain("Fast-path questions answered: **1 / 32**");
+    expect(rebuildSpec(partial)).toContain("Fast-path questions answered: **4 / 32**");
+    expect(rebuildSpec(full)).toContain("Fast-path questions answered: **32 / 32**");
     expect(rebuildSpec(full)).toContain("All fast-path questions answered.");
   });
 
