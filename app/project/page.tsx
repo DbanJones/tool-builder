@@ -495,13 +495,41 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     }
   };
 
+  // Expand any @filename mentions in the user's text into a structured
+  // context block so claude sees the file's summary even though the chat
+  // path doesn't have filesystem-read tools. The literal @filename stays
+  // in the user-visible scrollback (it's just text); the context block is
+  // appended after the user's message in the prompt sent to the SDK.
+  const expandMentions = useCallback(
+    (text: string): string => {
+      const matches = Array.from(text.matchAll(/(?:^|\s)@([^\s]+)/g));
+      if (matches.length === 0) return text;
+      const seen = new Set<string>();
+      const blocks: string[] = [];
+      for (const m of matches) {
+        const name = m[1];
+        if (!name || seen.has(name)) continue;
+        seen.add(name);
+        const file = files.find((f) => f.name === name);
+        if (!file) continue;
+        const summary = file.summary
+          ? file.summary.slice(0, 600)
+          : `(file present in inputs/, status: ${file.status}; no summary yet)`;
+        blocks.push(`File: ${name} (${file.kind})\n${summary}`);
+      }
+      if (blocks.length === 0) return text;
+      return `${text}\n\n[Files referenced:]\n${blocks.join("\n\n")}`;
+    },
+    [files],
+  );
+
   const sendInterview = async (text: string): Promise<void> => {
     if (!project) return;
     const isFirstTurn = interviewSessionRef.current === null;
     setStatus({ kind: "streaming" });
     if (isFirstTurn) setIsPreparingBank(true);
     const r = await chatSend({
-      prompt: text,
+      prompt: expandMentions(text),
       sessionId: interviewSessionRef.current,
       projectId: project.id,
       projectPath: project.path,
@@ -731,7 +759,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         projectId: project.id,
         projectPath: project.path,
         sessionId: buildSessionRef.current,
-        prompt,
+        prompt: expandMentions(prompt),
         onEvent: buildEventHandler,
       });
       r.match(
@@ -739,7 +767,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         (e) => setStatus({ kind: "error", message: e.message }),
       );
     },
-    [project, status.kind, buildEventHandler],
+    [project, status.kind, buildEventHandler, expandMentions],
   );
 
   // ---- Chat input dispatcher --------------------------------------------
@@ -1186,6 +1214,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
           onEnterMyOwn={() => requestAnimationFrame(() => inputRef.current?.focus())}
           isPreparingBank={isPreparingBank}
           inputRef={inputRef}
+          availableFiles={files}
         />
 
         <RightRail

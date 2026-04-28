@@ -1,11 +1,12 @@
 "use client";
 
-import { Loader2, Send } from "lucide-react";
+import { FileSpreadsheet, FileText, Image as ImageIcon, Loader2, Send } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import type { QueuedQuestion } from "@/lib/chat/client";
+import type { IngestedFile } from "@/lib/files/types";
 
 // Unified chat column for /project/[id]. Renders the scrollback, the
 // interview question pane (when a queued question is on screen), and the
@@ -40,6 +41,11 @@ interface ChatPanelProps {
   onEnterMyOwn: () => void;
   isPreparingBank: boolean;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
+  // Available files for the @-mention autocomplete; the input recognises
+  // an in-progress @-token at the cursor and shows a list of matching
+  // filenames. Selecting one inserts the filename literally; the parent
+  // can then expand the @ reference into a context block on send.
+  availableFiles: readonly IngestedFile[];
 }
 
 export function ChatPanel({
@@ -57,6 +63,7 @@ export function ChatPanel({
   onEnterMyOwn,
   isPreparingBank,
   inputRef,
+  availableFiles,
 }: ChatPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const isStreaming = status.kind === "streaming";
@@ -179,8 +186,150 @@ export function ChatPanel({
         </div>
       )}
 
-      <div className="border-t px-6 py-4">
-        <div className="mx-auto flex w-full max-w-2xl gap-2">
+      <ChatInput
+        input={input}
+        onInputChange={onInputChange}
+        onSend={onSend}
+        disabled={disabled}
+        disabledReason={disabledReason}
+        inputRef={inputRef}
+        availableFiles={availableFiles}
+      />
+    </section>
+  );
+}
+
+// ----- chat input + @-mention autocomplete --------------------------------
+
+// Returns the @-token currently under the cursor, if any. A token is the
+// run from the most recent `@` (preceded by whitespace or string-start)
+// up to the cursor position, with no whitespace inside.
+function getMentionAtCursor(
+  value: string,
+  caret: number,
+): { start: number; query: string } | null {
+  if (caret <= 0) return null;
+  let i = caret - 1;
+  while (i >= 0) {
+    const c = value[i]!;
+    if (c === "@") {
+      // Must be preceded by whitespace or start of string to avoid
+      // matching email addresses ("foo@bar").
+      if (i === 0 || /\s/.test(value[i - 1] ?? "")) {
+        const query = value.slice(i + 1, caret);
+        if (/\s/.test(query)) return null;
+        return { start: i, query };
+      }
+      return null;
+    }
+    if (/\s/.test(c)) return null;
+    i--;
+  }
+  return null;
+}
+
+interface ChatInputProps {
+  input: string;
+  onInputChange: (value: string) => void;
+  onSend: () => void;
+  disabled: boolean;
+  disabledReason: string | null;
+  inputRef: React.RefObject<HTMLTextAreaElement | null>;
+  availableFiles: readonly IngestedFile[];
+}
+
+function ChatInput({
+  input,
+  onInputChange,
+  onSend,
+  disabled,
+  disabledReason,
+  inputRef,
+  availableFiles,
+}: ChatInputProps) {
+  const [caret, setCaret] = useState(0);
+  const [pickerHover, setPickerHover] = useState(0);
+
+  const updateCaret = (): void => {
+    const el = inputRef.current;
+    if (el) setCaret(el.selectionStart ?? 0);
+  };
+
+  const mention = getMentionAtCursor(input, caret);
+  const lowered = (mention?.query ?? "").toLowerCase();
+  const matches = mention
+    ? availableFiles.filter((f) => f.name.toLowerCase().includes(lowered)).slice(0, 6)
+    : [];
+  const isPickerOpen = mention !== null && matches.length > 0;
+
+  // Reset hover index when the match list changes shape.
+  useEffect(() => {
+    setPickerHover(0);
+  }, [matches.length]);
+
+  const insertFile = (file: IngestedFile): void => {
+    if (!mention) return;
+    const before = input.slice(0, mention.start);
+    const after = input.slice(caret);
+    const next = `${before}@${file.name}${after.startsWith(" ") ? "" : " "}${after}`;
+    onInputChange(next);
+    // Restore cursor to just after the inserted name + space.
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      const newCaret = mention.start + 1 + file.name.length + 1;
+      el.selectionStart = newCaret;
+      el.selectionEnd = newCaret;
+      setCaret(newCaret);
+      el.focus();
+    });
+  };
+
+  return (
+    <div className="border-t px-6 py-4">
+      <div className="mx-auto w-full max-w-2xl">
+        {isPickerOpen ? (
+          <div
+            role="listbox"
+            aria-label="Pick a file to mention"
+            className="mb-2 max-h-48 overflow-auto rounded-md border bg-popover text-popover-foreground shadow-md"
+          >
+            <div className="border-b px-3 py-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+              Mention a file{mention.query ? ` matching "${mention.query}"` : ""}
+            </div>
+            <ul className="text-sm">
+              {matches.map((f, i) => (
+                <li
+                  key={f.id}
+                  role="option"
+                  aria-selected={i === pickerHover}
+                >
+                  <button
+                    type="button"
+                    onMouseEnter={() => setPickerHover(i)}
+                    onMouseDown={(e) => {
+                      // mousedown not click — keeps focus on the textarea
+                      // so the cursor restoration in insertFile lands.
+                      e.preventDefault();
+                      insertFile(f);
+                    }}
+                    className={
+                      "flex w-full items-center gap-2 px-3 py-1.5 text-left " +
+                      (i === pickerHover ? "bg-muted" : "hover:bg-muted/50")
+                    }
+                  >
+                    <FileKindIcon kind={f.kind} />
+                    <span className="min-w-0 flex-1 truncate">{f.name}</span>
+                    <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
+                      {f.kind}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        <div className="flex gap-2">
           <label htmlFor="chat-input" className="sr-only">
             Message
           </label>
@@ -188,8 +337,44 @@ export function ChatPanel({
             ref={inputRef}
             id="chat-input"
             value={input}
-            onChange={(e) => onInputChange(e.target.value)}
+            onChange={(e) => {
+              onInputChange(e.target.value);
+              updateCaret();
+            }}
+            onSelect={updateCaret}
+            onKeyUp={updateCaret}
+            onClick={updateCaret}
             onKeyDown={(e) => {
+              if (isPickerOpen) {
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setPickerHover((h) => Math.min(h + 1, matches.length - 1));
+                  return;
+                }
+                if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setPickerHover((h) => Math.max(h - 1, 0));
+                  return;
+                }
+                if (e.key === "Enter" || e.key === "Tab") {
+                  const f = matches[pickerHover];
+                  if (f) {
+                    e.preventDefault();
+                    insertFile(f);
+                    return;
+                  }
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  // Forcibly close by stripping the current @-token.
+                  if (mention) {
+                    const before = input.slice(0, mention.start);
+                    const after = input.slice(caret);
+                    onInputChange(before + after);
+                  }
+                  return;
+                }
+              }
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 onSend();
@@ -198,7 +383,9 @@ export function ChatPanel({
             placeholder={
               disabled
                 ? (disabledReason ?? "Cannot send right now")
-                : "Type a message..."
+                : availableFiles.length > 0
+                  ? "Type a message — use @ to reference a file"
+                  : "Type a message…"
             }
             disabled={disabled}
             rows={2}
@@ -214,8 +401,15 @@ export function ChatPanel({
           </Button>
         </div>
       </div>
-    </section>
+    </div>
   );
+}
+
+function FileKindIcon({ kind }: { kind: IngestedFile["kind"] }) {
+  if (kind === "image") return <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />;
+  if (kind === "spreadsheet" || kind === "data")
+    return <FileSpreadsheet className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />;
+  return <FileText className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />;
 }
 
 // Cycles through honest, sequential phrases while we wait for claude's
