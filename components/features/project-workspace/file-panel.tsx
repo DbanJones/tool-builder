@@ -99,49 +99,65 @@ export function FilePanel({ files, onDrop }: FilePanelProps) {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       className={
-        "border-t px-6 py-3 transition-colors " +
-        (isDragOver ? "bg-accent/50" : "bg-background")
+        "flex min-h-0 flex-1 flex-col transition-colors " +
+        (isDragOver ? "bg-accent/40" : "bg-background")
       }
       aria-label="File ingestion panel"
     >
-      <div className="mx-auto flex w-full max-w-2xl items-start gap-4">
-        <div className="shrink-0 text-xs uppercase tracking-wide text-muted-foreground">
-          Files
-          <p className="mt-1 text-[10px] normal-case tracking-normal text-muted-foreground">
-            Drop PDFs, screenshots, schemas, CSVs, or spreadsheets (.xlsx).
-          </p>
-        </div>
-        <ul className="flex-1 space-y-1" aria-live="polite">
-          {files.length === 0 ? (
-            <li
-              className={
-                "rounded-md border border-dashed px-3 py-2 text-center text-xs text-muted-foreground " +
-                (isDragOver ? "border-primary text-foreground" : "")
-              }
-            >
-              {isDragOver ? "Drop to add" : "No files yet — drop one in to ingest"}
-            </li>
-          ) : (
-            files.map((f) => (
-              <li
-                key={f.id}
-                className="flex items-center gap-3 rounded-md border bg-muted/40 px-3 py-1.5 text-xs"
-              >
-                <KindIcon kind={f.kind} />
-                <span className="min-w-0 flex-1 truncate font-medium">{f.name}</span>
-                <span className="shrink-0 text-muted-foreground">{formatBytes(f.size)}</span>
-                <span
-                  className="shrink-0 truncate text-muted-foreground"
-                  title={f.statusMessage}
-                >
-                  {f.statusMessage ?? f.status}
-                </span>
-                <StatusIcon file={f} />
-              </li>
-            ))
-          )}
-        </ul>
+      <div className="shrink-0 border-b px-4 py-3">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Files {files.length > 0 ? `· ${files.length}` : ""}
+        </h2>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">
+          Drop PDFs, screenshots, schemas, CSVs, or spreadsheets (.xlsx). Anywhere on the
+          workspace works too.
+        </p>
       </div>
+      {files.length === 0 ? (
+        <div className="flex flex-1 items-center justify-center px-4 py-6">
+          <div
+            className={
+              "w-full rounded-md border border-dashed px-4 py-8 text-center text-xs transition-colors " +
+              (isDragOver
+                ? "border-primary bg-primary/5 text-foreground"
+                : "border-muted-foreground/30 text-muted-foreground")
+            }
+          >
+            {isDragOver ? "Drop to add" : "No files yet — drop one in to ingest"}
+          </div>
+        </div>
+      ) : (
+        <ul className="flex-1 space-y-1.5 overflow-auto px-4 py-3" aria-live="polite">
+          {files.map((f) => (
+            <li
+              key={f.id}
+              className="rounded-md border bg-card px-3 py-2 text-xs shadow-sm"
+            >
+              <div className="flex items-start gap-2.5">
+                <span className="mt-0.5 shrink-0 text-muted-foreground">
+                  <KindIcon kind={f.kind} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-medium">{f.name}</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    {formatBytes(f.size)}
+                    <span className="mx-1">·</span>
+                    <span title={f.statusMessage}>{f.statusMessage ?? f.status}</span>
+                  </p>
+                </div>
+                <span className="mt-0.5 shrink-0">
+                  <StatusIcon file={f} />
+                </span>
+              </div>
+              {f.summary ? (
+                <p className="mt-1.5 line-clamp-3 whitespace-pre-line border-t pt-1.5 text-[10px] text-muted-foreground">
+                  {f.summary}
+                </p>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

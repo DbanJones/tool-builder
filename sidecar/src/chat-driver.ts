@@ -19,7 +19,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 
-import { record as recordAnswer } from "./handlers/answers.js";
+import { list as listAnswers, record as recordAnswer } from "./handlers/answers.js";
 
 const INTERVIEW_SYSTEM_PROMPT = `You are the Builder's recursive interviewer. Your job is to populate the project's spec.md by asking the novice the kit's fast-path questions (28 baseline, plus high-stakes follow-ups when activated, plus any extra questions the project genuinely needs — you are NOT capped at 28).
 
@@ -40,6 +40,8 @@ How to write each queued question:
 - For closed questions (yes/no, single-select), supply EXACTLY 3 candidate \`options\`. The UI appends a 4th 'Enter my own response' button automatically.
 - For open-ended questions, omit \`options\`.
 - The \`id\` field is the kit question id (Q1, Q15, etc.).
+
+Section coverage rule: spec.md has seven numbered sections (§1 problem & users, §2 scope, §3 flows + definition of done, §4 data model, §5 integrations, §6 non-functional, §7 build methodology). The interview is NOT complete until at least one question has been asked AND answered for each section. Track section coverage as you go and bias your next batch toward sections that haven't yet been touched. The question library's \`influencesSpecSections\` field tells you which sections each Q feeds — use it.
 
 Do not invent answers. If an answer is unclear after one follow-up, mark it tentative and move on.`;
 
@@ -158,6 +160,33 @@ export async function runChat(
     const mcp = buildChatMcp(opts.projectId, (items) => {
       queuedDuringTurn.push(...items);
     });
+    // On a new session (no resume id) we look at the answers table and
+    // inject any previously-recorded answers into the system prompt as
+    // "already answered, do not re-ask" context. Without this, reloading
+    // the project mid-interview makes claude restart from Q1 because the
+    // SDK session it had is gone — the user's complaint that it keeps
+    // re-asking old questions.
+    let systemPrompt = INTERVIEW_SYSTEM_PROMPT;
+    if (!opts.sessionId) {
+      try {
+        const prior = listAnswers({ projectId: opts.projectId });
+        if (prior.length > 0) {
+          // De-dupe to the newest answer per question id (list returns
+          // newest-first, so first occurrence wins).
+          const seen = new Set<string>();
+          const lines: string[] = [];
+          for (const a of prior) {
+            if (seen.has(a.questionId)) continue;
+            seen.add(a.questionId);
+            lines.push(`- ${a.questionId}: ${a.answerText.replace(/\s+/g, " ").trim()}`);
+          }
+          systemPrompt += `\n\n=== ALREADY ANSWERED — DO NOT RE-ASK ===\nThe novice has already given the following answers in a previous session. Treat each as a recorded answer; do NOT call record_answer for them again, and do NOT include them in your next queue_questions batch. Pick up from the next un-answered question.\n${lines.join("\n")}\n=== END ===`;
+        }
+      } catch {
+        /* If the table is empty or the read fails, just use the base prompt — non-fatal. */
+      }
+    }
+
     const sdkOptions: Options = {
       cwd: opts.projectPath,
       additionalDirectories: [opts.projectPath],
@@ -173,7 +202,7 @@ export async function runChat(
         "mcp__builder-chat__queue_questions",
       ],
       mcpServers: { "builder-chat": mcp },
-      systemPrompt: INTERVIEW_SYSTEM_PROMPT,
+      systemPrompt,
       abortController: ac,
     };
     if (opts.sessionId) {
