@@ -1,4 +1,4 @@
-# ADR-0004: Node sidecar for SQLite + Drizzle
+# ADR-0004: Node sidecar for SQLite, Drizzle, and local orchestration
 
 ## Status
 Accepted, 2026-04-25.
@@ -17,6 +17,8 @@ Accepted, 2026-04-25.
 
 ## Decision
 Option A: Node sidecar. Picked by the human at A4 entry, with eyes open about packaging cost.
+
+2026-04-28 update: ADR-0005 expanded the sidecar's role. It now owns SQLite/Drizzle plus the Claude Agent SDK drivers for interview chat and build orchestration. The process architecture remains the same; the sidecar runtime bundling follow-up is now release-critical.
 
 ## Architecture
 
@@ -49,6 +51,8 @@ Option A: Node sidecar. Picked by the human at A4 entry, with eyes open about pa
 │      methods to handlers        │
 │   └─ better-sqlite3 + Drizzle   │
 │      against .builder/builder.db│
+│   └─ Claude Agent SDK drivers   │
+│      for chat/build streams     │
 └─────────────────────────────────┘
 ```
 
@@ -64,7 +68,7 @@ A4a (this ADR's commit) lands the sidecar with one `ping` method only. A4b adds 
 - Closest fit to the original CLAUDE.md stack line.
 
 **Negative**
-- **Production packaging is non-trivial**. Bundling Node adds ~80MB to the installer; per-platform binaries are needed. Mitigation: dev mode uses `node` from PATH; production packaging (`node-sea` / `pkg` / Bun-as-binary) is a Phase E task.
+- **Production packaging is non-trivial**. Bundling Node adds ~80MB to the installer; per-platform binaries are needed. Mitigation: dev mode uses `node` from PATH; production packaging (`node-sea` / `pkg` / Bun-as-binary) is a release-track follow-up before novice distribution.
 - **Extra IPC hop on every DB query**: webview → Tauri command (Rust) → sidecar stdin → better-sqlite3 → response. Local IPC adds sub-ms latency but it is non-zero.
 - **Extra long-lived process to manage**: spawn on app start, kill on app exit, error handling, crash recovery.
 - **Cross-platform sidecar bundling is fiddly** and is its own Phase E task.

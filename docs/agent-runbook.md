@@ -15,8 +15,8 @@ On every session start:
 For each task:
 1. Echo-back: state goal, files, ACs, risks, plan. Wait for "go" or correction.
 2. On "go", implement the task. Use subagents for read-heavy exploration so the main context stays clean.
-3. After each meaningful change, run `pnpm typecheck && pnpm test`. Fix failures before proceeding.
-4. When the task's ACs are met, run `pnpm verify`. If green, run any task-specific E2E.
+3. After each meaningful change, run `corepack pnpm exec tsc --noEmit && corepack pnpm exec vitest run --config vitest.unit.config.ts`. Fix failures before proceeding.
+4. When the task's ACs are met, run `corepack pnpm verify`. If green, run any task-specific E2E.
 5. Update `state.json`: mark task complete, record completion timestamp, append to `history`.
 6. Commit using Conventional Commits, link the task id.
 7. Move to the next task. Do not summarise extensively; just proceed.
@@ -52,7 +52,7 @@ If a task fails:
 ## 6. Definition of "done"
 A task is done when:
 - Every AC has at least one test that cites the AC id.
-- `pnpm verify` is green.
+- `corepack pnpm verify` is green.
 - The relevant E2E (if any) is green.
 - The diff is under 400 lines.
 - The commit message follows Conventional Commits.

@@ -34,7 +34,12 @@ import {
   resolve as resolvePermissionRequest,
 } from "./handlers/permission-requests.js";
 import { append as appendCost, sumByProject as sumCostsByProject } from "./handlers/costs.js";
-import { cancelOrchestrator, runOrchestrator } from "./orchestrator-driver.js";
+import {
+  cancelAllOrchestrators,
+  cancelOrchestrator,
+  cancelOrchestratorByProject,
+  runOrchestrator,
+} from "./orchestrator-driver.js";
 import { cancelChat, runChat } from "./chat-driver.js";
 import {
   append as appendDrift,
@@ -167,10 +172,22 @@ async function orchStart(rawParams: unknown): Promise<{ ok: true }> {
   return { ok: true };
 }
 
-const OrchStopParams = z.object({ streamId: z.string().min(1) });
-function orchStop(rawParams: unknown): { cancelled: boolean } {
+const OrchStopParams = z.object({
+  streamId: z.string().min(1).nullable().optional(),
+  projectId: z.string().min(1).nullable().optional(),
+});
+function orchStop(rawParams: unknown): { cancelled: boolean; count: number } {
   const params = OrchStopParams.parse(rawParams);
-  return { cancelled: cancelOrchestrator(params.streamId) };
+  if (params.streamId) {
+    const cancelled = cancelOrchestrator(params.streamId);
+    return { cancelled, count: cancelled ? 1 : 0 };
+  }
+  if (params.projectId) {
+    const count = cancelOrchestratorByProject(params.projectId);
+    return { cancelled: count > 0, count };
+  }
+  const count = cancelAllOrchestrators();
+  return { cancelled: count > 0, count };
 }
 
 // Chat path (interview). Same shape as orch.start: streams ChatChunks via

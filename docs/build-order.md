@@ -2,6 +2,16 @@
 
 This file decomposes the spec.md section 7 phased plan into agent-executable tasks. The agent reads it at the start of every session and executes the next incomplete task. Each task lists its acceptance criteria, the tests that prove it, and the kit rules it must satisfy.
 
+## Current implementation note
+
+The base Phase A-E plan has shipped. The Phase F hardening pass supersedes several earlier transport and novice-safety details:
+- Interview chat and build orchestration both use the Claude Agent SDK in the Node sidecar; the `claude` CLI remains the auth prerequisite only.
+- Runtime interview answers live in the SQLite `answers` table. `.builder/answers.json` is a legacy seed/reference file.
+- Readiness requires all 32 fast-path questions plus final echo-back confirmation.
+- File ingestion requires novice approval, blocks on PII review, and injects approved summaries into `spec.md` section 0 as source material.
+- Stop/cancel targets the active stream/project, with an all-streams fallback.
+- Commands should use `corepack pnpm ...` so nested scripts work in Corepack-only shells.
+
 ## Convention
 - Tasks are atomic: one logical change, under 400 lines of diff, all tests passing at the end.
 - Every task is gated by Echo-back before code is written.
@@ -17,12 +27,12 @@ Phase 0 sits outside the agent's per-task loop. The human completes these before
 - AC: `ls .builder/state.json .claude/commands/recheck.md .claude/agents/researcher.md` returns all three with no errors.
 
 ### 0.2: Machine prerequisites
-- Node 22.x and pnpm 9.x on PATH.
+- Node 22.x with Corepack enabled; pnpm 9.x is run through `corepack pnpm`.
 - Rust stable toolchain installed via `rustup`.
 - Xcode Command Line Tools installed (macOS).
 - `gh` CLI installed and authenticated against the human's GitHub account.
 - Claude Code CLI (`claude`) installed and authenticated (Pro / Max subscription or API key configured inside the CLI). See ADR-0002.
-- AC: `node -v`, `pnpm -v`, `rustc --version`, `gh auth status`, `claude --version` all succeed.
+- AC: `node -v`, `corepack pnpm --version`, `rustc --version`, `gh auth status`, `claude --version` all succeed.
 
 ### 0.3: Open questions resolved
 - The three open questions in `.builder/state.json` have explicit answers, recorded in `docs/decisions.md` even when the answer matches the default.
@@ -41,10 +51,10 @@ Phase 0 sits outside the agent's per-task loop. The human completes these before
 
 ### A1: Repo scaffold and CI
 - Initialise the repo with Next.js 15 + TypeScript strict + Tailwind + shadcn/ui.
-- Add Tauri 2 with `pnpm tauri init`.
-- Add `pnpm verify` script (typecheck + lint + unit + integration).
+- Add Tauri 2 with `corepack pnpm tauri init`.
+- Add `verify` script (typecheck + lint + unit + integration), run through `corepack pnpm verify`.
 - Add GitHub Actions workflow with required checks.
-- AC: `pnpm verify` is green on a clean clone; `pnpm tauri dev` opens an empty window with the Next.js dev server.
+- AC: `corepack pnpm verify` is green on a clean clone; `corepack pnpm tauri dev` opens an empty window with the Next.js dev server.
 
 ### A2: OS keychain wrapper (Vercel and future credentials only, per ADR-0002 and ADR-0003)
 - Implement `lib/keychain/index.ts` with `get`, `set`, `delete` for namespaced secrets, returning `Result<T, KeychainError>` per C10.
@@ -72,7 +82,7 @@ A4 is split across three sub-tasks because the Node-sidecar architecture chosen 
 - `src-tauri/src/sidecar.rs`: process lifecycle (spawn on Tauri setup, kill on drop), `sidecar_rpc(method, params)` Tauri command synchronised by a `Mutex<SidecarHandle>`.
 - `lib/sidecar/client.ts`: typed RPC wrapper returning `ResultAsync<T, SidecarError>`.
 - Build orchestration: `tauri.conf.json` `beforeDevCommand` builds the sidecar before `next dev` starts.
-- AC: `pnpm verify` and `cargo check` both green; `pnpm tauri dev` opens the Tauri window and `client.ping()` returns `{ pong: true }`.
+- AC: `corepack pnpm verify` and `cargo check` both green; `corepack pnpm tauri dev` opens the Tauri window and `client.ping()` returns `{ pong: true }`.
 
 #### A4b: DB schemas + handlers + audit migration
 - `sidecar/src/db.ts`: better-sqlite3 + Drizzle setup against `.builder/builder.db`.
@@ -80,7 +90,7 @@ A4 is split across three sub-tasks because the Node-sidecar architecture chosen 
 - `sidecar/drizzle.config.ts` + first migration in `sidecar/migrations/`.
 - Sidecar handlers for `audit.logEvent`, `projects.create`, `projects.list`, `projects.get`, `projects.delete`.
 - Migrate `audit_log_event` Tauri command to call the sidecar's `audit.logEvent` instead of `tauri-plugin-log` (closes drift D-003).
-- AC: integration test loads the sidecar, runs the migration against a temp DB, inserts and reads back, asserts schema; pnpm verify green.
+- AC: integration test loads the sidecar, runs the migration against a temp DB, inserts and reads back, asserts schema; `corepack pnpm verify` green.
 
 #### A4c: Project creation flow
 - `app/(welcome)/new-project/page.tsx`: react-hook-form + zodResolver per F21, name + folder fields.
@@ -92,18 +102,18 @@ A4 is split across three sub-tasks because the Node-sidecar architecture chosen 
 
 ### A5: Minimum chat (per ADR-0002)
 - Build `app/(interview)/page.tsx` with chat panel, input, send button.
-- Wire to a `claude -p --output-format stream-json` subprocess with the hardcoded system prompt: "You are interviewing the user to populate spec.md. Ask one question at a time. After each answer, write a brief summary to the chat."
-- Stream the JSON output as it arrives; render assistant tokens as they stream.
+- Wire to the sidecar chat stream. The current implementation uses the Claude Agent SDK per ADR-0005; the historical CLI stream-json path is superseded.
+- Stream assistant events as they arrive; render assistant tokens as they stream.
 - No `record_answer` tool yet; spec.md is not yet rebuilt from answers.
-- Implement basic rate-limit handling: if the CLI exits with a rate-limit error, show "Claude is rate-limited; try again at HH:MM" and disable the send button until then.
-- AC: novice can chat with Claude inside the Builder window; the rate-limit message renders correctly when the CLI returns its rate-limit exit code.
+- Implement basic rate-limit handling: if the SDK/CLI auth backend returns a rate-limit error, show "Claude is rate-limited; try again at HH:MM" and disable the send button until then.
+- AC: novice can chat with Claude inside the Builder window; the rate-limit message renders correctly when Claude returns a rate-limit error.
 - E2E: `tests/e2e/chat-smoke.spec.ts` exercises the happy path; an integration test exercises the rate-limit path with a stubbed `claude` returning the rate-limit error.
 
 ### Phase A definition of done
 - Flows A and B fully pass.
 - Tester can chat freely with Claude in the Builder.
 - Signed installers exist for Mac, Windows, Linux.
-- `pnpm verify` and `pnpm e2e` both green.
+- `corepack pnpm verify` and `corepack pnpm e2e` both green.
 - `/recheck` reports zero blocker drift.
 
 ## Phase B: Recursive interview, question library, decision table
@@ -112,17 +122,16 @@ A4 is split across three sub-tasks because the Node-sidecar architecture chosen 
 - Copy the kit's question library and decision table into `lib/interview/library.ts` as typed data.
 - AC: a unit test loads the library and asserts question count, fast-path subset, and that every decision-table entry references a real rule id.
 
-### B2: The `record_answer` tool via local MCP server (per ADR-0002)
+### B2: The `record_answer` tool via sidecar SDK tools (per ADR-0005)
 - Define the tool per kit section 14.3.1.
-- Host a local MCP server inside the Builder's main process exposing `record_answer` (and any future orchestrator tools).
-- Configure the `claude` subprocess to use this MCP server via `--mcp-config`.
-- On tool call, the MCP handler writes to `.builder/answers.json` and appends to the `answers` table; the response is returned to Claude through MCP.
-- AC: when Claude calls `record_answer` mid-conversation, the file and DB update; the chat continues without the novice seeing the tool call.
-- Integration: assert tool call is delivered through MCP, parsed, and persisted.
+- Host the tool in the Node sidecar's chat driver, validating `question_id` against Q1-Q32.
+- On tool call, the handler appends to the `answers` table; `.builder/answers.json` is not a runtime mirror.
+- AC: when Claude calls `record_answer` mid-conversation, the DB updates and the chat continues without the novice seeing the tool call.
+- Integration: assert tool call is delivered through the sidecar SDK driver, parsed, validated, and persisted.
 
 ### B3: Spec rebuild from answers
-- Build `lib/interview/rebuild-spec.ts` that takes `answers.json` and produces `spec.md` using the kit's spec template and decision table.
-- AC: given a fixture `answers.json` representing a worked example, the rebuilt `spec.md` matches the expected output byte-for-byte.
+- Build `lib/interview/rebuild-spec.ts` that takes answer rows and produces `spec.md` using the kit's spec template and decision table.
+- AC: given a fixture answer set representing a worked example, the rebuilt `spec.md` matches the expected output byte-for-byte.
 - Unit: snapshot test on three fixture answer sets.
 
 ### B4: Live spec preview panel
@@ -136,7 +145,7 @@ A4 is split across three sub-tasks because the Node-sidecar architecture chosen 
 - Eval: a Promptfoo suite with 12 fixture conversations asserts on follow-up presence and "you choose" handling.
 
 ### B6: Ready-to-build gating
-- Implement the kit section 14.3.5 readiness check: 28 fast-path questions answered, all activated high-stakes questions answered, final echo-back confirmed.
+- Implement the kit section 14.3.5 readiness check: 32 fast-path questions answered, all activated high-stakes questions answered, final echo-back confirmed.
 - The Start build button is disabled until ready; tooltip explains what is needed.
 - AC: button is correctly enabled and disabled across the test cases in `tests/integration/readiness.test.ts`.
 
@@ -178,7 +187,8 @@ A4 is split across three sub-tasks because the Node-sidecar architecture chosen 
 
 ### C8: Ingestion contract UI
 - After extraction, show the kit section 14.4.2 three-step flow in chat: acknowledge, summarise, confirm.
-- On confirm, merge extracted answers as `confidence: tentative`.
+- If PII is detected, block the next chat/build action until the novice reviews or skips the file; use redacted summary text for any onward prompt.
+- On confirm, mark the file summary as approved source material with `confidence: tentative` and include it in generated `spec.md` section 0. Do not silently create interview answers.
 
 ### Phase C definition of done
 - Flow D fully passes for all six file types.
@@ -187,9 +197,9 @@ A4 is split across three sub-tasks because the Node-sidecar architecture chosen 
 
 ## Phase D: Build dashboard
 
-### D1: Spawning Claude Code as a subprocess
-- Use the Anthropic Agent SDK's process spawning to start Claude Code in the project folder.
-- Capture stdout, stderr, tool-call events.
+### D1: Starting Claude Code through the SDK sidecar
+- Use the Claude Agent SDK in the Node sidecar to start Claude Code in the project folder.
+- Capture SDK messages, stderr diagnostics, and tool-call events.
 - AC: Claude Code starts, reads CLAUDE.md, and emits a Plan block within 30 seconds.
 
 ### D2: Tool-call parsing and human translation
@@ -212,7 +222,7 @@ A4 is split across three sub-tasks because the Node-sidecar architecture chosen 
 - AC: a forced drift event triggers the banner; novice's choice writes to `drift-log.md` and resumes correctly.
 
 ### D6: Pause, resume, stop, crash recovery
-- Implement Flow H: pause finishes current tool call then halts; resume reads state and continues; stop kills the subprocess; crash recovery reads `state.json` on app open.
+- Implement Flow H: pause finishes current tool call then halts; resume reads state and continues; stop cancels the active SDK stream by stream/project id; crash recovery reads `state.json` on app open.
 - Tests: integration test that kills the orchestrator mid-task and asserts recovery on next launch.
 
 ### Phase D definition of done
@@ -224,7 +234,7 @@ A4 is split across three sub-tasks because the Node-sidecar architecture chosen 
 ## Phase E: Deploy, export, polish, ship
 
 ### E1: Vercel deploy
-- Capture Vercel access token via the same modal pattern as the API key.
+- Capture Vercel access token via the same secure modal pattern as other third-party credentials.
 - Run `vercel deploy` from the project folder; stream output to the live tail.
 - Run smoke E2E against the preview URL.
 - Copy URL to clipboard.
@@ -239,7 +249,7 @@ A4 is split across three sub-tasks because the Node-sidecar architecture chosen 
 - AC: a test feed with a higher version triggers the update flow on app launch.
 
 ### E4: Cost ceiling
-- Implement the daily cap from spec.md section 6 NFR: soft warn at 50 percent, hard stop at 100 percent.
+- Implement the optional per-project spend cap from spec.md section 6 NFR: soft warn at 50 percent, hard stop at 100 percent when the novice sets a cap.
 
 ### E5: Sentry opt-in
 - One-time prompt after first successful build.
@@ -252,6 +262,49 @@ A4 is split across three sub-tasks because the Node-sidecar architecture chosen 
 - Signed installers downloadable from the marketing site.
 - Three external testers complete a build without intervention.
 - `/recheck` reports zero blocker drift; `drift-log.md` is reviewed and clean.
+
+## Phase F: Novice-ready hardening
+
+Phase F is the post-review hardening pass for the eight recommendations surfaced in the codebase review. It focuses on structure, novice safety, and making the generated end product easier to reach without developer intervention.
+
+### F1: Unify chat and build on the SDK sidecar
+- Move interview chat and build orchestration to the Claude Agent SDK in the Node sidecar.
+- Keep `claude` CLI detection/auth as the first-run prerequisite.
+- AC: chat and build both stream through sidecar JSON-RPC notifications; ADR-0005 reflects the architecture.
+
+### F2: Make Stop reliable
+- Track active runs by stream id and project id.
+- `orchestrator.stop` accepts stream id, project id, or cancels all as a fallback.
+- AC: the Build dashboard Stop button cancels the active project run.
+
+### F3: Add final readiness and echo-back gating
+- Persist the novice's "Looks right" confirmation per project.
+- Disable Start build until all required questions are answered and the final echo-back is confirmed.
+- AC: direct Start build and chat-intent build requests both respect the readiness result.
+
+### F4: Validate interview question ids
+- Define the allowed Q1-Q32 id set in one sidecar module.
+- Validate `record_answer.question_id` and `queue_questions.items[].id` against that set.
+- AC: invalid ids are rejected before they can pollute the answers table.
+
+### F5: Require file approval and PII review
+- Add approved/pending file state in the workspace.
+- Block chat/build when a PII warning is pending review.
+- AC: the novice must approve, skip, or review flagged files before the file content informs the spec.
+
+### F6: Carry approved source materials into the spec
+- Prepend approved file summaries to generated `spec.md` section 0.
+- Use redacted PII summaries when PII was detected.
+- AC: approved uploads appear as source material in the spec preview and saved spec.
+
+### F7: Harden novice project templates and package scripts
+- Replace placeholder target-app rules with concrete build rules.
+- Use `corepack pnpm` in scripts that spawn nested pnpm commands.
+- AC: `corepack pnpm verify` works in a Corepack-only shell.
+
+### F8: Refresh docs and traceability
+- Update README, CLAUDE.md, spec.md, ADRs, build-order, drift log, runbook, and generated target-app template docs.
+- AC: Markdown no longer describes the old API-key, stream-json, answers.json, or unreviewed-file behaviours as current.
 
 ## Phase E0: Signing and updater procurement (deferred)
 
@@ -269,9 +322,9 @@ E0 runs in parallel with Phases A through D and must complete before E3 (auto-up
 - AC: `signtool sign` against a test binary succeeds; `signtool verify` reports trusted.
 
 ### E0.3: Tauri updater keypair
-- Run `pnpm tauri signer generate` once Tauri is scaffolded by A1.
+- Run `corepack pnpm tauri signer generate` once Tauri is scaffolded by A1.
 - Public key committed in `src-tauri/tauri.conf.json`; private key stored in OS keychain and as GitHub Actions secret `TAURI_SIGNING_PRIVATE_KEY`.
-- AC: `pnpm tauri build` produces a signed update artifact; the public key in `tauri.conf.json` matches the keypair used for signing.
+- AC: `corepack pnpm tauri build` produces a signed update artifact; the public key in `tauri.conf.json` matches the keypair used for signing.
 
 ### Phase E0 definition of done
 - All three artefacts (Apple cert, Windows cert, Tauri keypair) are provisioned and stored as documented.

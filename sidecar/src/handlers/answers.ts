@@ -3,12 +3,13 @@ import { ulid } from "ulid";
 import { z } from "zod";
 
 import { getDb } from "../db.js";
+import { QUESTION_IDS } from "../interview-question-ids.js";
 import { answers, type Answer } from "../schema/answers.js";
 import { auditLog } from "../schema/audit-log.js";
 
 const RecordParamsSchema = z.object({
   projectId: z.string().min(1),
-  questionId: z.string().min(1),
+  questionId: z.enum(QUESTION_IDS),
   answerText: z.string().min(1),
   confidence: z.enum(["confident", "tentative", "default-applied"]).default("tentative"),
   source: z.enum(["chat", "file", "default"]).default("chat"),

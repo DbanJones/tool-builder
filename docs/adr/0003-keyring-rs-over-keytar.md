@@ -20,14 +20,14 @@ The Builder uses the [`keyring` Rust crate](https://crates.io/crates/keyring) in
 - Windows Credential Manager
 - Linux Secret Service
 
-No Node sidecar is bundled.
+At A2, no Node sidecar was bundled. ADR-0004 later introduced a Node sidecar for SQLite/Drizzle, and ADR-0005 made it load-bearing for Claude SDK streaming. This ADR still stands for keychain access: secrets remain in the Rust/Tauri keyring layer rather than moving to Node `keytar`.
 
 ## Consequences
 
 **Positive**
 - Tauri's idiomatic shape (Rust commands + IPC) is preserved end to end. No additional process model.
 - One Rust crate covers all three platforms; no per-platform branching in Builder code.
-- No sidecar means no extra binary to ship, sign, or update separately.
+- Keychain access does not add another sidecar dependency or `keytar` native module to ship.
 - The webview never sees the secret in transit unless it explicitly asks for it, and the IPC surface is allow-listed per [rules/02-backend.md](../../rules/02-backend.md) B18.
 
 **Negative**

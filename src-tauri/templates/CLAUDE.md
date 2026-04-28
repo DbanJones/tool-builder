@@ -20,8 +20,8 @@ project root. Read that file first.
    error messages you generate. No jargon in the UI copy.
 3. Maintain a `## Plan` (via the TodoWrite tool) with the next 3-7 steps
    so the novice can see where you are and what's coming.
-4. After every meaningful change, run `pnpm verify` (or whichever
-   verification the project uses) before saying you're done.
+4. After every meaningful change, run `corepack pnpm verify` (or whichever
+   verification command the project defines) before saying you're done.
 5. If a step you intended to take turns out to be wrong (e.g. spec was
    ambiguous, a tool failed), update your TodoWrite plan to reflect it
    and explain in one sentence what you changed and why.

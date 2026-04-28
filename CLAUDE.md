@@ -5,26 +5,27 @@ A desktop app, built with Tauri and Next.js, that lets an absolute novice build 
 production-grade web app by chatting with Claude. The Builder runs offline on
 the novice's machine, conducts a recursive interview to populate spec.md, ingests
 uploaded files (PRDs, screenshots, schemas, transcripts), then orchestrates
-Claude Code via the `claude` CLI to build the novice's app (see ADR-0002). Primary user:
+Claude Code through the Claude Agent SDK in the local sidecar (the `claude` CLI
+remains the auth prerequisite; see ADR-0005). Primary user:
 non-technical founders and operators. Success metric: a novice can ship a
 deployed Phase 1 app in under 90 minutes from first launch, on their own.
 
 ## Stack (pinned, do not deviate without an ADR)
-- Tauri 2 shell (Rust), bundled Node 22, pnpm 9, git, and Claude Code CLI
+- Tauri 2 shell (Rust), Node 22 sidecar runtime, pnpm 9 through Corepack, git, and Claude Code CLI
 - Next.js 15 App Router (UI), React 19, TypeScript strict
 - shadcn/ui + Tailwind for all UI; Radix primitives where shadcn falls short
-- Claude Code CLI (`claude`) for all the orchestrator's Claude interactions: interview chat, ingestion, drift checks, and build-phase subprocesses (see ADR-0002). Headless invocations use `claude -p --output-format stream-json`; tool use is wired via a local MCP server.
+- Claude Agent SDK in the Node sidecar for interview chat and build orchestration. The `claude` CLI is still required for local authentication, but the Builder no longer drives its main flows by parsing CLI `stream-json`; see ADR-0005.
 - Drizzle ORM with better-sqlite3 for local state in `.builder/builder.db`, hosted in a Node sidecar process spawned by the Tauri shell. Webview talks to the sidecar via JSON-RPC over stdin/stdout brokered by a `sidecar_rpc` Tauri command. See ADR-0004.
 - Vitest (unit + integration), Playwright (E2E against the running Tauri app)
 - Tauri updater (signed) for auto-updates
 - Sentry for error reporting, opt-in only; no analytics by default
 
 ## Binding rules (these override everything else)
-1. MUST run `pnpm verify` (typecheck + lint + unit + integration) before declaring any task done.
+1. MUST run `corepack pnpm verify` (typecheck + lint + unit + integration) before declaring any task done.
 2. MUST NOT use `any`, `as any`, or `// @ts-ignore`. Use `unknown` and narrow.
 3. MUST validate every novice input and every file ingested with Zod at the trust boundary.
-4. MUST NOT manage Anthropic credentials. The `claude` CLI handles its own auth (see ADR-0002). The OS keychain (via `keytar` or Tauri's secure store) is reserved for the Vercel access token at E1 and any future third-party credential; never on disk in plain text, never in git.
-5. MUST treat the novice's project folder (`~/Documents/ClaudeBuilds/{name}`) as untrusted from the Builder's perspective; sanitise every path read, never execute arbitrary code outside the sandboxed Claude Code subprocess.
+4. MUST NOT manage Anthropic credentials. The `claude` CLI handles its own auth (see ADR-0002 and ADR-0005). The OS keychain/Tauri keyring wrapper is reserved for the Vercel access token at E1 and any future third-party credential; never on disk in plain text, never in git.
+5. MUST treat the novice's project folder (`~/Documents/ClaudeBuilds/{name}`) as untrusted from the Builder's perspective; sanitise every path read, never execute arbitrary code outside the sandboxed Claude Code SDK session.
 6. MUST NOT commit secrets. `.env.example` lists every variable; real values live in OS keychain or `.env.local`.
 7. MUST log every Claude Code tool call to `.builder/history.log` as JSON lines; the live tail reads from this file.
 8. MUST stop and ask before any irreversible action (deleting a project, overwriting a non-empty folder, force-pushing). See `rules/06-other.md`.
@@ -38,27 +39,28 @@ deployed Phase 1 app in under 90 minutes from first launch, on their own.
 - `src-tauri/` Rust shell: window management, keychain access, file system bridge, updater
 - `app/` Next.js App Router (the UI inside the Tauri webview)
   - `app/(welcome)/` first-run flow: Claude Code CLI detection, project creation
-  - `app/(interview)/` chat + spec preview + file panel
-  - `app/(build)/` dashboard + live tail + approval modals
+  - `app/project/page.tsx` unified workspace: interview chat, spec preview, file approvals, build dashboard, deploy/export
 - `components/ui/` shadcn primitives, `components/features/{feature}/` feature components
-- `lib/orchestrator/` the engine that drives Claude Code: spawns CLI, parses tool calls, manages phases
-- `lib/interview/` recursive chat: prompt construction, `record_answer` tool wiring, spec rebuilding
-- `lib/ingest/` file ingestion pipeline: text extract, image vision, schema parse, PII guard
-- `lib/db/` Drizzle schema and queries against `.builder/builder.db`
+- `lib/orchestrator/` webview wrapper + event types for SDK-driven build orchestration
+- `sidecar/src/orchestrator-driver.ts` build-phase Claude Agent SDK driver and permission bridge
+- `sidecar/src/chat-driver.ts` recursive interview SDK driver with `record_answer` and `queue_questions` tools
+- `lib/interview/` question library, readiness checks, and spec rebuilding
+- `lib/files/` file ingestion pipeline: text extract, image vision, schema parse, PII guard
+- `sidecar/src/schema/` and `sidecar/src/handlers/` Drizzle schema and queries against `.builder/builder.db`
 - `lib/eta/` time and cost estimator: per-phase budgets, online updates
 - `lib/keychain/` cross-platform secret storage wrapper
 - `tests/unit/`, `tests/integration/`, `tests/e2e/` Playwright against the built Tauri app
 - `docs/adr/` architecture decision records, `docs/agent-runbook.md` self-drive instructions
 - `.claude/agents/`, `.claude/commands/` slash commands and subagent definitions
-- `.builder/` runtime state: `state.json`, `answers.json`, `history.log`, `builder.db`
+- `.builder/` runtime state: `state.json`, `history.log`, `builder.db`; `answers.json` remains a legacy seed/reference file, not the runtime source of truth
 
 ## Verification commands (run these, do not guess)
-- `pnpm dev` start Next.js dev server
-- `pnpm tauri dev` start Tauri shell pointing at the dev server
-- `pnpm verify` typecheck + lint + unit + integration (the merge gate)
-- `pnpm e2e` Playwright against a built Tauri binary
-- `pnpm tauri build` produce signed installers for Mac, Windows, Linux
-- `pnpm db:migrate` apply Drizzle migrations to `.builder/builder.db`
+- `corepack pnpm dev` start Next.js dev server
+- `corepack pnpm tauri dev` start Tauri shell pointing at the dev server
+- `corepack pnpm verify` typecheck + lint + unit + integration (the merge gate)
+- `corepack pnpm e2e` Playwright against a built Tauri binary
+- `corepack pnpm tauri build` produce signed installers for Mac, Windows, Linux
+- `corepack pnpm --dir sidecar build` build the Node sidecar
 
 ## Echo-back Protocol (gate before any new feature)
 Before writing code for any feature, you MUST output:

@@ -18,7 +18,7 @@ L8. MUST use `next/image` for all raster images and `next/font` for all fonts. (
 
 ## Framework: Tauri 2
 L9b. MUST use Tauri 2's allowlist to restrict file system, shell, and network access. Default deny; explicitly allow only what's needed per command.
-L9c. MUST use Tauri's `secure-storage` plugin (or `keytar` via Node sidecar) for the Vercel access token (E1) and any future third-party credential; do not implement custom encryption. The Builder does not store Anthropic credentials (see ADR-0002).
+L9c. MUST use the Tauri/Rust keyring wrapper for the Vercel access token (E1) and any future third-party credential; do not implement custom encryption. The Builder does not store Anthropic credentials (see ADR-0002 and ADR-0005).
 L9d. MUST use Tauri's `updater` plugin with a signed feed; do not roll a custom updater.
 
 ## ORM
@@ -26,23 +26,23 @@ L9. Default per kit: Drizzle. **Builder uses Drizzle with better-sqlite3** (not 
 L10. MUST run Drizzle in `strict: true` mode so renames are not silently turned into drop+add.
 
 ## Auth library
-L11. **Override for Builder (revised per ADR-0002)**: no auth library. The Builder holds no Anthropic credential; the `claude` CLI handles its own auth. See B13 and ADR-0002.
+L11. **Override for Builder (revised per ADR-0002/ADR-0005)**: no auth library. The Builder holds no Anthropic credential; the `claude` CLI handles its own auth. See B13, ADR-0002, and ADR-0005.
 
 ## Payments
 L12-L16. **Not applicable to the Builder** (it is free; novices pay Anthropic directly). These rules apply when the Builder generates a target app that takes payments.
 
 ## AI / LLM
-L17. Default: Anthropic SDK via Vercel AI SDK (`@ai-sdk/anthropic`) for streaming, tool use, and provider abstraction. **Override for Builder (revised per ADR-0002)**: the Builder uses the Claude Code CLI (`claude`) as a subprocess for all Claude interactions: interview chat, file ingestion summaries, drift audits, and target-app build phases. Headless invocations use `claude -p --output-format stream-json`; tool use is wired through a local MCP server hosted by the orchestrator and consumed by the CLI via `--mcp-config`. The Anthropic Agent SDK and Vercel AI SDK are NOT used.
+L17. Default for generated target apps: Anthropic SDK via Vercel AI SDK (`@ai-sdk/anthropic`) for streaming, tool use, and provider abstraction. **Override for the Builder itself (revised per ADR-0005)**: interview chat and target-app build orchestration use `@anthropic-ai/claude-agent-sdk` inside the Node sidecar. The `claude` CLI remains required only as the local auth backend. Tool use is registered through the SDK sidecar drivers; do not reintroduce CLI `stream-json` parsing for core Builder flows.
 L18. MUST stream responses to the UI via `streamText` to keep INP healthy on long generations.
 L19. MUST implement tool-use loops with explicit `maxSteps` (default 8) to bound runaway calls.
 L20. MUST version every prompt as a file under `lib/llm/prompts/{name}.v{n}.md` and reference by import; bump the version on any change.
 L21. MUST add a Promptfoo eval suite under `evals/` with at least one assertion per prompt; run on every PR that touches `lib/llm/`.
 L22. MUST track per-request token usage and cost; expose them on the dashboard cost meter.
-L23. **Override for Builder (revised per ADR-0002)**: no daily LLM spend cap is enforced by the Builder; the `claude` CLI's underlying account (subscription or API key) governs throttling. The Builder MUST detect the CLI's rate-limit error and surface a "wait until HH:MM" message; the build pauses gracefully.
+L23. **Override for Builder (revised per ADR-0002/ADR-0005)**: no daily LLM spend cap is enforced by default; the underlying Claude account governs throttling. The Builder MUST detect SDK/CLI rate-limit errors and surface a "wait until HH:MM" message; the build pauses gracefully. Any spend cap is novice-opt-in.
 
 ## Testing libraries
 L24. MUST use Vitest for unit and integration; Playwright for E2E (against the built Tauri binary); MSW for HTTP boundary mocks; Testing Library for DOM assertions; jest-axe + @axe-core/playwright for a11y.
 
 ## Update / audit
-L25. MUST run `pnpm audit --audit-level=high` in CI; high or critical fails the build.
+L25. MUST run `corepack pnpm audit --audit-level=high` in CI; high or critical fails the build.
 L26. MUST publish a CycloneDX SBOM on every release tag.

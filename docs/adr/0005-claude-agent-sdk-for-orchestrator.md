@@ -1,7 +1,7 @@
-# ADR-0005: Use the Claude Agent SDK for the build orchestrator
+# ADR-0005: Use the Claude Agent SDK for chat and build orchestration
 
 **Status**: accepted, 2026-04-27.
-**Supersedes**: ADR-0002 *for the orchestrator only*. The interview chat path stays on the CLI subprocess until a follow-up migration; the orchestrator (Flow E/F/G/H) moves to the SDK now.
+**Supersedes**: ADR-0002 for the orchestrator and, as of the Phase F hardening pass, the interview chat path too. The Claude Code CLI remains the auth prerequisite, but both long-running Builder interactions now go through the Claude Agent SDK in the Node sidecar.
 
 ## Context
 
@@ -20,19 +20,19 @@ B was rejected because it forces the novice to obtain + pay for an Anthropic API
 
 ## Decision
 
-Use `@anthropic-ai/claude-agent-sdk` (v0.2.x) inside the Node sidecar to drive the build-phase orchestrator. The SDK runs in the sidecar process (which already has Node, Drizzle, MCP infra). The Tauri Rust shell becomes a thin streaming bridge: webview → Tauri → sidecar (JSON-RPC notifications) → SDK `query()` → callbacks back through the same wire.
+Use `@anthropic-ai/claude-agent-sdk` (v0.2.x) inside the Node sidecar to drive both the recursive interview chat and the build-phase orchestrator. The SDK runs in the sidecar process (which already has Node, Drizzle, and persistence infra). The Tauri Rust shell becomes a thin streaming bridge: webview → Tauri → sidecar (JSON-RPC notifications) → SDK `query()` → callbacks back through the same wire.
 
 ### Concretely
 
 - **New dep**: `@anthropic-ai/claude-agent-sdk` in `sidecar/package.json`.
-- **New sidecar module**: `sidecar/src/orchestrator-driver.ts`. Exports `runOrchestrator({projectId, projectPath, sessionId, prompt}, onEvent)`. Calls `query()` from the SDK; iterates the `AsyncGenerator<SDKMessage>`; pushes typed events to `onEvent`.
+- **Sidecar modules**: `sidecar/src/orchestrator-driver.ts` for build sessions and `sidecar/src/chat-driver.ts` for interview turns. Both call `query()` from the SDK, iterate the `AsyncGenerator<SDKMessage>`, and push typed events through the sidecar notification bridge.
 - **`canUseTool` wiring**: the callback inserts a row into `permission_requests` (already exists per Commit B), polls until the dashboard `PermissionPromptBanner` resolves it (already exists), returns `{behavior: "allow"|"deny"}` to the SDK. The dead code from Commit B becomes live.
 - **Streaming wire**: extend the sidecar's JSON-RPC protocol with notification messages (`{notification: {channel, payload}}` — no `id`, no response). Tauri's `sidecar.rs` parses notifications and forwards to per-stream Tauri `Channel<T>` instances the webview registered when calling `orchestrator_start`.
-- **Tauri Rust commands**: `orchestrator_start` and `orchestrator_stop` keep the same TS-side signatures but their bodies become thin pass-throughs. `chat.rs` for the interview chat is UNCHANGED — only the orchestrator migrates this round.
+- **Tauri Rust commands**: `orchestrator_start` and `orchestrator_stop` keep the same TS-side signatures but their bodies become thin pass-throughs.
+- **Interview chat**: `chat_send` and `chat_stop` now use the same streaming sidecar bridge (`chat.start` / `chat.stop`). The sidecar hosts SDK MCP tools for `record_answer` and `queue_questions`, and validates question ids against the known Q1-Q32 set.
 
 ### Out of scope for this ADR
 
-- Migrating the interview chat (`chat.rs`) to the SDK. Tracked as a follow-up; can land independently.
 - Eliminating the `claude` CLI dependency entirely. The SDK still requires the CLI to be installed (it's the auth backend); we keep the A3 detection.
 
 ## Consequences
@@ -46,10 +46,9 @@ Use `@anthropic-ai/claude-agent-sdk` (v0.2.x) inside the Node sidecar to drive t
 **Losses**:
 - Sidecar gets a non-trivial new dependency. `@anthropic-ai/claude-agent-sdk` v0.2.x is well-maintained by Anthropic but new (v0 still). Pin exactly per L4.
 - Streaming over the sidecar JSON-RPC wire is a new pattern in the codebase. Documented in this ADR + a code comment.
-- ADR-0002's reasoning still applies to the chat path; partial migration means two different driving mechanisms coexist for a while. Acceptable; the chat path works fine.
+- The sidecar is now load-bearing for both chat and build streaming, so packaging must bundle the sidecar runtime rather than relying on a system `node`.
 
 ## Follow-up
 
-- Migrate `chat.rs` to the SDK once the orchestrator is stable. Same shape; trivial after the streaming wire exists.
-- Retire `chat.rs` and `orchestrator.rs`'s spawn code; the Tauri commands become tiny pass-throughs.
-- Reconsider ADR-0002 entirely once both paths are on the SDK.
+- Package the sidecar runtime for production installers so novices do not need Node installed.
+- ADR-0002 has been narrowed to the credential/auth decision; keep it that way unless the auth model changes.

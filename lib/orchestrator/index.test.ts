@@ -130,14 +130,30 @@ describe("orchestratorStart", () => {
       mockInvoke.mockResolvedValueOnce(undefined);
       const r = await orchestratorStop("stream-abc");
       expect(r.isOk()).toBe(true);
-      expect(mockInvoke).toHaveBeenCalledWith("orchestrator_stop", { streamId: "stream-abc" });
+      expect(mockInvoke).toHaveBeenCalledWith("orchestrator_stop", {
+        streamId: "stream-abc",
+        projectId: null,
+      });
+    });
+
+    it("invokes orchestrator_stop with a projectId when provided", async () => {
+      mockInvoke.mockResolvedValueOnce(undefined);
+      const r = await orchestratorStop({ projectId: "01PROJ" });
+      expect(r.isOk()).toBe(true);
+      expect(mockInvoke).toHaveBeenCalledWith("orchestrator_stop", {
+        streamId: null,
+        projectId: "01PROJ",
+      });
     });
 
     it("invokes orchestrator_stop with null streamId when omitted", async () => {
       mockInvoke.mockResolvedValueOnce(undefined);
       const r = await orchestratorStop();
       expect(r.isOk()).toBe(true);
-      expect(mockInvoke).toHaveBeenCalledWith("orchestrator_stop", { streamId: null });
+      expect(mockInvoke).toHaveBeenCalledWith("orchestrator_stop", {
+        streamId: null,
+        projectId: null,
+      });
     });
 
     it("returns Transport error when the kill fails", async () => {

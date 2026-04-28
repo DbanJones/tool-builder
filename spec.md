@@ -6,14 +6,14 @@
 
 ## 1. Problem and users
 - Problem: absolute novices cannot use Claude Code in VS Code; the terminal, file system, git, and prompt-engineering knowledge required are insurmountable. Existing "no-code" builders trade away ownership and quality.
-- Primary user: non-technical founder, operator, or domain expert who has an idea and an Anthropic API key.
+- Primary user: non-technical founder, operator, or domain expert who has an idea and an authenticated Claude Code CLI account.
 - Status quo: they hire a developer, give up, or paste prompts into Claude.ai and copy code into a ZIP.
 - Success in 30 days of beta: at least 60 percent of first-time users reach a deployed Phase 1 preview URL within 90 minutes; at least 30 percent return within 7 days for a second project.
 
 ## 2. Scope
 In scope:
 - Tauri 2 desktop app, signed installers for macOS (Apple silicon and Intel), Windows x64, Linux x64.
-- First-run flow: welcome, API key paste, project creation.
+- First-run flow: welcome, Claude Code CLI detection/auth check, project creation.
 - Recursive chat interview that populates `spec.md` via the kit's question library and decision table.
 - File ingestion pipeline for: text docs (PDF, DOCX, MD, TXT), images (PNG, JPG, PDF-as-image), schemas (SQL, JSON, YAML, OpenAPI), data samples (CSV, JSON, SQL dump), reference URLs.
 - Build dashboard with phase bar, task lanes, live tail, ETA, cost meter, drift status.
@@ -31,7 +31,7 @@ Out of scope:
 
 Explicit non-goals:
 - The Builder will not "fix" novice answers. It surfaces ambiguity and applies defaults; it does not silently improve.
-- The Builder will not retain novice content on any server. All data stays on the novice's machine except the prompts sent to the Anthropic API.
+- The Builder will not retain novice content on any server. All data stays on the novice's machine except prompts sent to Claude through the local Claude Code auth path.
 
 ## 3. Core flows (Given/When/Then)
 
@@ -46,7 +46,7 @@ Explicit non-goals:
   - **Flow A AC5**: The audit log records `app_first_run`.
 
 ### Flow B: Project creation
-- **Given** a novice has a working API key,
+- **Given** a novice has passed Claude Code CLI detection and auth,
 - **When** they enter a project name and pick a folder (default `~/Documents/ClaudeBuilds/`),
 - **Then**:
   - **Flow B AC1**: The Builder creates `{folder}/{name}/`.
@@ -60,7 +60,7 @@ Explicit non-goals:
 - **Then**:
   - **Flow C AC1**: The Builder calls Claude with the interview system prompt and the running answers.
   - **Flow C AC2**: Claude responds with either a follow-up question or a `record_answer` tool call.
-  - **Flow C AC3**: On `record_answer`, the orchestrator writes to `.builder/answers.json` and rebuilds `spec.md` from the kit's decision table.
+  - **Flow C AC3**: On `record_answer`, the sidecar validates the question id against Q1-Q32, writes the answer to the SQLite `answers` table, and rebuilds `spec.md` from the kit's decision table.
   - **Flow C AC4**: The spec preview panel updates within 500ms.
   - **Flow C AC5**: The topic counter increments.
   - **Flow C AC6**: The audit log records `answer_recorded` with the question id.
@@ -71,18 +71,18 @@ Explicit non-goals:
 - **Then**:
   - **Flow D AC1**: The ingestor classifies the file and extracts content (text, image, schema, data).
   - **Flow D AC2**: The PII guard runs against the extracted content.
-  - **Flow D AC3**: A summary is presented in the chat as "I see you uploaded X. Here is what I read. Should I proceed on that basis?".
-  - **Flow D AC4**: On novice approval, extracted answers merge into `answers.json` with `confidence: tentative`.
-  - **Flow D AC5**: The spec preview reflects the merge.
+  - **Flow D AC3**: A summary is presented in the workspace for novice review. If PII is detected, the next chat/build action is blocked until the novice reviews or skips the file; summaries sent onward use redacted text.
+  - **Flow D AC4**: On novice approval, the file summary is marked as approved source material with `confidence: tentative`; file contents do not silently create interview answers.
+  - **Flow D AC5**: The generated spec includes approved source materials in section 0 before the interview-derived sections.
   - **Flow D AC6**: The file is copied to `{project}/inputs/` and listed in `spec.md` section 0.
 
 ### Flow E: Ready to build
-- **Given** all 28 fast-path questions and all activated high-stakes questions have answers,
-- **When** the novice clicks Start build,
+- **Given** all 32 fast-path questions and all activated high-stakes questions have answers,
+- **When** the novice confirms the final echo-back and clicks Start build,
 - **Then**:
-  - **Flow E AC1**: The Builder runs a final echo-back ("Here is what I'll build, three things ranked. Anything wrong?").
-  - **Flow E AC2**: On confirmation, the Builder transitions to the Build screen.
-  - **Flow E AC3**: The orchestrator spawns Claude Code in the project folder with `CLAUDE.md` and `rules/` already present.
+  - **Flow E AC1**: The Builder shows a final echo-back ("Here is what I'll build, three things ranked. Anything wrong?") and requires an explicit "Looks right" confirmation.
+  - **Flow E AC2**: On confirmation, the unified project workspace enables Start build and switches into the build dashboard state.
+  - **Flow E AC3**: The sidecar starts a Claude Agent SDK session in the project folder with `CLAUDE.md` and `rules/` already present, using the `claude` CLI only as the auth backend.
   - **Flow E AC4**: The dashboard begins streaming.
 
 ### Flow F: Build phase execution
@@ -121,6 +121,12 @@ Explicit non-goals:
   - **Flow H AC3**: The orchestrator reads `state.json`, replays no actions, and resumes from the next incomplete task.
   - **Flow H AC4**: The dashboard surfaces "Recovered from crash; resumed at task N".
 
+**Scenario H.3: Stop**
+- **Given** a build is in progress,
+- **When** the novice clicks Stop,
+- **Then**:
+  - **Flow H AC5**: The Builder cancels the active SDK session for the current project/stream and marks the dashboard as stopped.
+
 ### Flow I: Deploy and export
 
 **Scenario I.1: Deploy preview to Vercel**
@@ -153,15 +159,15 @@ Explicit non-goals:
 - `actions` table (the live tail backing store): id, project_id, ts, tool, raw_input (jsonb), human_line, phase, task_id
 - `drift_events` table: id, project_id, phase, type (implementation | scope | silent_assumption | nfr), description, resolution (revert | amend_spec | accept), commit_hash, occurred_at
 - `costs` table: id, project_id, ts, model, input_tokens, output_tokens, usd_cents
-- `keychain_meta` (no secrets): map of `project_id` to keychain item names; the actual API and Vercel keys live in the OS keychain, not the database.
+- `keychain_meta` (no secrets): map of `project_id` to keychain item names; Vercel and any future third-party keys live in the OS keychain, not the database.
 
-PII held: project paths only. No novice content is held in the database; chat transcripts and uploaded files live in the project folder, owned by the novice.
+PII and novice content are held locally only: interview answers and approved file summaries live in `.builder/builder.db`, uploaded files live in the project folder, and no content leaves the machine except as prompts sent to Claude through the local Claude Code auth path.
 
 ## 5. Integrations
-- Claude Code CLI (`claude`), required, novice authenticates the CLI separately (Pro / Max subscription or API key configured inside the CLI). See ADR-0002.
+- Claude Code CLI (`claude`), required as the local auth backend. Interview chat and build orchestration use the Claude Agent SDK in the Node sidecar. See ADR-0002 and ADR-0005.
 - Vercel CLI, optional, used only if novice clicks Deploy.
 - GitHub via `gh` CLI, optional, used only if novice clicks Push to GitHub.
-- OS keychain, required, via `keytar` (Mac, Windows) and Secret Service (Linux); used for the Vercel access token only.
+- OS keychain, required, via the Tauri/Rust keyring wrapper; used for the Vercel access token only.
 - Tauri updater, required, signed feed hosted on the project's distribution endpoint.
 
 ## 6. Non-functional requirements
@@ -174,14 +180,14 @@ PII held: project paths only. No novice content is held in the database; chat tr
 - Crash recovery: 100 percent of state recoverable from `state.json` and `history.log`.
 - Accessibility: WCAG 2.2 AA across all screens, axe-core zero violations.
 - Security: the Builder holds no Anthropic credential (the `claude` CLI manages its own auth per ADR-0002); the Vercel access token (E1) lives in the OS keychain. Project folder writes confined to the novice's chosen path; Tauri's allowlist restricts file system access to that path.
-- Privacy: no telemetry by default; Sentry opt-in with a clear explainer; novice content never leaves the machine except as prompts to Anthropic.
-- Cost transparency: real-time token usage parsed from the `claude` CLI's stream-json output; honesty rule per kit section 14.5.3 (past P90, switch to "more than expected"). Spend is shown as token count plus an estimated GBP figure based on the active model's published rate; subscription users (Pro / Max) may treat the figure as informational only.
+- Privacy: no telemetry by default; Sentry opt-in with a clear explainer; novice content never leaves the machine except as prompts to Claude through the local Claude Code auth path.
+- Cost transparency: real-time token usage from Claude Agent SDK events; honesty rule per kit section 14.5.3 (past P90, switch to "more than expected"). Spend is shown as token count plus an estimated GBP figure based on the active model's published rate; subscription users (Pro / Max) may treat the figure as informational only.
 - Rate limits: the CLI's underlying account governs throttling; the Builder detects the CLI's rate-limit error and surfaces a "wait until HH:MM" message; the build pauses gracefully. No hard daily spend cap is enforced by the Builder (deferred to a later phase if required).
 
 ## 7. Phased plan
-The Builder follows the kit's own phased build pattern. Five phases A to E, each shippable as a private beta to a small test group.
+The Builder follows the kit's own phased build pattern. The base plan is five phases A to E, each shippable as a private beta to a small test group, followed by Phase F novice-readiness hardening.
 
-Phase A: Tauri shell, project create, API key flow, basic chat with Claude that writes spec.md (no recursion, no library). Demo: a tester can chat their way to a spec.
+Phase A: Tauri shell, project create, Claude Code detection/auth flow, basic chat with Claude that writes spec.md (no recursion, no library). Demo: a tester can chat their way to a spec.
 
 Phase B: Question library wiring, recursive follow-ups, fast-path gating, decision-table-driven spec rebuild. Demo: a tester can produce a fast-path-complete spec.
 
@@ -191,7 +197,9 @@ Phase D: Build dashboard, live tail, ETA, approval gates, drift surfacing. Demo:
 
 Phase E: Deploy to Vercel, export to GitHub, crash recovery, polish, signed installers, auto-update. Beta to real novices.
 
-Each phase ends with: passing `pnpm verify`, one Playwright E2E for the new core flow, signed installers for all three platforms, and a deployed preview URL of the Builder's marketing site (a separate one-page Next.js app, not in scope here).
+Phase F: Hardening for novice success: SDK-sidecar chat/build, cancel/stop, echo-back gating, Q1-Q32 validation, file approval with PII review, approved source-material injection, concrete target-app rules, Corepack scripts, and documentation/ADR alignment.
+
+Each phase ends with: passing `corepack pnpm verify`, one Playwright E2E for the new core flow where available, signed installers for all three platforms when signing artefacts exist, and a deployed preview URL of the Builder's marketing site (a separate one-page Next.js app, not in scope here).
 
 ## 8. Open questions for the user
 - Should the Sentry opt-in be a separate one-time prompt, or rolled into the Welcome screen? Default: separate, after first successful build, with a clear "no thanks" option. Confirm before Phase E.

@@ -1,6 +1,6 @@
 # Builder design pack for Claude Code
 
-This is the complete brief Claude Code reads in VS Code to build the Builder, a desktop app that lets absolute novices build production web apps by chatting with Claude. The pack is designed to let Claude Code self-drive the build through five phases (A to E), pausing only at the checkpoints the kit prescribes.
+This is the complete brief Claude Code reads in VS Code to build the Builder, a desktop app that lets absolute novices build production web apps by chatting with Claude. The pack is designed to let Claude Code self-drive the build through the base five phases (A to E), plus the Phase F hardening pass, pausing only at the checkpoints the kit prescribes.
 
 ## How to use
 
@@ -30,7 +30,7 @@ docs/
   build-order.md                  Phase-by-phase task breakdown with ACs
   agent-runbook.md                Self-drive instructions
 .builder/
-  answers.json                    The interview answer set that produced spec.md
+  answers.json                    Seed interview answer set that produced the original spec.md; runtime answers live in builder.db
   state.json                      Initial agent state, next_task = A1
 .claude/
   commands/
@@ -52,26 +52,26 @@ docs/
 5. Outputs an Echo-back: goal, files to change, ACs, risks, plan.
 6. Asks "Proceed?" and waits.
 
-You reply "go". The agent scaffolds Next.js + Tauri, runs `pnpm verify`, commits, updates `state.json` to `next_task: A2`, and continues to A2 without further prompting.
+You reply "go". The agent scaffolds Next.js + Tauri, runs `corepack pnpm verify`, commits, updates `state.json` to `next_task: A2`, and continues to A2 without further prompting.
 
 It only stops when it hits a mandatory pause point (see `docs/agent-runbook.md` section 3): phase boundary, blocker drift, irreversible action, spec ambiguity with no default, cost overrun, three failed retries, or external dependency change.
 
-## Five phases, summarised
+## Phases, summarised
 
-- **Phase A**: Tauri shell, project create, API key flow, basic chat. Demo-able.
+- **Phase A**: Tauri shell, project create, Claude Code detection/auth flow, basic chat. Demo-able.
 - **Phase B**: Recursive interview, question library, decision-table-driven spec rebuild.
 - **Phase C**: File ingestion (text, image, schema, data, URL).
 - **Phase D**: Build dashboard, live tail, ETA, approval gates, drift surfacing.
 - **Phase E**: Deploy to Vercel, export to GitHub, signed installers, auto-update.
+- **Phase F**: Novice-ready hardening: SDK-sidecar chat/build, stop cancellation, readiness echo-back, question-id validation, file approval/PII review, template rules, Corepack scripts, and documentation refresh.
 
-Each phase ends with: passing `pnpm verify`, the relevant Playwright E2E green, signed installers building, and `/recheck` reporting zero blocker drift.
+Each phase ends with: passing `corepack pnpm verify`, the relevant Playwright E2E green, signed installers building, and `/recheck` reporting zero blocker drift.
 
 ## What you need on your machine
 
-- Node 22 and pnpm 9 (the agent will install them if missing, but having them helps).
+- Node 22 with Corepack enabled. The repo pins pnpm 9 and runs it through `corepack pnpm`.
 - Rust toolchain for Tauri builds.
-- Claude Code CLI installed (`npm i -g @anthropic-ai/claude-code` or per Anthropic docs).
-- An Anthropic API key.
+- Claude Code CLI installed and authenticated (`npm i -g @anthropic-ai/claude-code` or per Anthropic docs). The Builder does not store an Anthropic API key.
 - For Phase E, code-signing certificates for macOS (Apple Developer ID) and Windows (Authenticode).
 
 ## Where to intervene

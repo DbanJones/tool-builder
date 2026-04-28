@@ -17,15 +17,15 @@ C8. MUST use branded types for ids that should not be interchanged (`type Projec
 ## Error handling
 C9. MUST fail fast on programmer errors (invariant violations) using `invariant()`; do not try/catch them.
 C10. MUST return `Result<T, E>` from boundary functions (DB queries, third-party calls, IPC commands). Convert thrown exceptions at the boundary using `Result.fromThrowable`.
-C11. MUST handle every Result; the `eslint-plugin-neverthrow` rule `must-use-result` is enabled.
+C11. MUST handle every Result. The `eslint-plugin-neverthrow` `must-use-result` rule is currently deferred per drift D-001 until it supports the repo's TypeScript/ESLint versions, so reviews and tests must enforce consumption.
 
 ## Performance
 C12. MUST measure before optimising. Add a Sentry transaction or `performance.mark` and capture a number in the PR description.
 C13. MUST NOT introduce a memo/cache without a measured win.
 
 ## Concurrency
-C14. MUST pass an `AbortSignal` to every `fetch` and propagate it from request scope. The orchestrator MUST cancel in-flight Anthropic calls on Pause.
-C15. MUST set explicit timeouts on outbound calls; default 30s, override per integration. Anthropic streaming calls have no timeout but MUST be cancellable via AbortSignal.
+C14. MUST pass an `AbortSignal` to every `fetch` and propagate it from request scope. The orchestrator MUST cancel in-flight Claude SDK work on Pause or Stop.
+C15. MUST set explicit timeouts on outbound calls; default 30s, override per integration. Claude streaming calls have no timeout but MUST be cancellable via AbortSignal.
 C16. MUST use `Promise.all` (or `allSettled`) when independent calls can be parallelised; never await sequentially without a reason.
 
 ## Comments

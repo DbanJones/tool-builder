@@ -54,14 +54,15 @@ pub async fn orchestrator_start(
 pub async fn orchestrator_stop(
   state: State<'_, SidecarState>,
   stream_id: Option<String>,
+  project_id: Option<String>,
 ) -> Result<(), String> {
-  // Without a streamId we have nothing specific to cancel. The webview is
-  // expected to remember the streamId from the start call; if it doesn't
-  // (or the build was started by a different window), this is a no-op.
-  let Some(sid) = stream_id else {
-    return Ok(());
-  };
-  let params = serde_json::json!({ "streamId": sid });
+  // Prefer stream-specific cancellation when available, fall back to
+  // project-scoped cancellation, and finally "cancel all" for the global
+  // tab-strip Stop button.
+  let params = serde_json::json!({
+    "streamId": stream_id,
+    "projectId": project_id,
+  });
   sidecar_rpc(state, "orch.stop".to_string(), params).map(|_| ())
 }
 

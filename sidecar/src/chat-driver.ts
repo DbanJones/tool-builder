@@ -20,6 +20,7 @@ import {
 import { z } from "zod";
 
 import { list as listAnswers, record as recordAnswer } from "./handlers/answers.js";
+import { QUESTION_IDS } from "./interview-question-ids.js";
 
 const INTERVIEW_SYSTEM_PROMPT = `You are the Builder's recursive interviewer. Your job is to populate the project's spec.md by asking the novice the kit's fast-path questions (28 baseline, plus high-stakes follow-ups when activated, plus any extra questions the project genuinely needs — you are NOT capped at 28).
 
@@ -36,6 +37,8 @@ The first turn is special:
 - In your first reply: briefly (one sentence) reflect what you understood, then state 'Question bank ready: ~32 fast-path questions to work through.', then call \`queue_questions\` with the FIRST batch of up to 10 questions. Do NOT call record_answer for the freeform first message.
 
 Files: The first batch SHOULD include one question asking the novice if they have any supporting files (PDFs, screenshots, schemas, CSVs, spreadsheets, transcripts) they'd like to share. Tell them they can drop files anywhere on the workspace; the right rail's Files tab shows what they've shared. If they reference a file with @filename in chat, the workspace will inject the file's structural summary into your context — treat the summary as authoritative for that file.
+
+Valid question ids are Q1 through Q32 only. The Builder will reject any other id.
 
 How to write each queued question:
 - Plain language. No jargon unless you have just defined it.
@@ -88,7 +91,7 @@ function buildChatMcp(projectId: string, onQueue: (items: QueuedQuestion[]) => v
         "record_answer",
         "Persist the novice's answer to an interview question.",
         {
-          question_id: z.string().min(1),
+          question_id: z.enum(QUESTION_IDS),
           answer: z.string().min(1),
           confidence: z.enum(["confident", "tentative", "default-applied"]).optional(),
           rationale: z.string().nullable().optional(),
@@ -119,7 +122,7 @@ function buildChatMcp(projectId: string, onQueue: (items: QueuedQuestion[]) => v
           items: z
             .array(
               z.object({
-                id: z.string().min(1),
+                id: z.enum(QUESTION_IDS),
                 text: z.string().min(1),
                 options: z.array(z.string().min(1)).length(3).optional(),
                 allow_freeform: z.boolean().optional(),

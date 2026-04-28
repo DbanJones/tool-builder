@@ -104,6 +104,25 @@ const rowToRebuildAnswer = (row: AnswerRow): RebuildAnswer => ({
   rationale: row.rationale,
 });
 
+function appendApprovedSourceMaterials(
+  specMarkdown: string,
+  files: readonly IngestedFile[],
+  approvedFileIds: ReadonlySet<string>,
+): string {
+  const approved = files.filter((f) => approvedFileIds.has(f.id) && f.summary);
+  if (approved.length === 0) return specMarkdown;
+  const lines = [
+    "## 0. Source materials",
+    "",
+    ...approved.flatMap((f) => [
+      `- **${f.name}** (${f.kind}${f.hasPiiWarning ? ", PII warning reviewed" : ""})`,
+      `  ${f.summary!.replace(/\s+/g, " ").trim().slice(0, 900)}`,
+    ]),
+    "",
+  ];
+  return `${lines.join("\n")}\n${specMarkdown}`;
+}
+
 export default function ProjectPage() {
   return (
     <Suspense
@@ -138,6 +157,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   // Spec / readiness / interview pipeline
   const [spec, setSpec] = useState<string>("");
   const [readiness, setReadiness] = useState<ReadinessResult>(() => checkReadiness([]));
+  const [echoBackConfirmed, setEchoBackConfirmed] = useState(false);
   const [questionQueue, setQuestionQueue] = useState<readonly QueuedQuestion[]>([]);
   const [bufferedAnswers, setBufferedAnswers] = useState<
     readonly { id: string; text: string; question: string }[]
@@ -148,6 +168,12 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
 
   // Files (drag-drop ingest)
   const [files, setFiles] = useState<readonly IngestedFile[]>([]);
+  const [approvedFileIds, setApprovedFileIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [pendingFileApprovals, setPendingFileApprovals] = useState<
+    readonly { fileId: string; name: string; summary: string; hasPiiWarning: boolean }[]
+  >([]);
 
   // Build orchestrator state
   const [targetState, setTargetState] = useState<TargetState | null>(null);
@@ -304,19 +330,40 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
       (rows) => {
         const rebuildAnswers = rows.map(rowToRebuildAnswer);
         try {
-          setSpec(rebuildSpec(rebuildAnswers));
+          setSpec(
+            appendApprovedSourceMaterials(
+              rebuildSpec(rebuildAnswers),
+              files,
+              approvedFileIds,
+            ),
+          );
         } catch (e) {
           setSpec(`# Spec preview error\n\n${e instanceof Error ? e.message : String(e)}`);
         }
-        setReadiness(checkReadiness(rebuildAnswers));
+        setReadiness(checkReadiness(rebuildAnswers, { echoBackConfirmed }));
       },
       () => undefined,
     );
-  }, [projectId]);
+  }, [projectId, echoBackConfirmed, files, approvedFileIds]);
 
   useEffect(() => {
     if (project) void refreshSpec();
   }, [project, refreshSpec]);
+
+  useEffect(() => {
+    if (!project || typeof window === "undefined") return;
+    setEchoBackConfirmed(
+      window.localStorage.getItem(`builder.echoBackConfirmed.${project.id}`) === "true",
+    );
+  }, [project]);
+
+  useEffect(() => {
+    if (!project || typeof window === "undefined") return;
+    window.localStorage.setItem(
+      `builder.echoBackConfirmed.${project.id}`,
+      String(echoBackConfirmed),
+    );
+  }, [project, echoBackConfirmed]);
 
   // Rehydrate chat scrollback so a reload mid-session doesn't show empty.
   useEffect(() => {
@@ -390,7 +437,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     if (readiness.fastPathAnswered < readiness.fastPathTotal) return;
     announcedReadyRef.current = true;
     appendAssistantMessage(
-      `${STAGE_SENTINELS.ready} Say "build it" when you're ready and I'll start, or keep talking to flesh out anything I missed.`,
+      `${STAGE_SENTINELS.ready} Review the final check above the chat, then confirm it when it looks right. After that, say "build it" and I'll start.`,
     );
   }, [
     readiness.fastPathAnswered,
@@ -525,6 +572,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
 
   const sendInterview = async (text: string): Promise<void> => {
     if (!project) return;
+    if (!hasStarted && echoBackConfirmed) setEchoBackConfirmed(false);
     const isFirstTurn = interviewSessionRef.current === null;
     setStatus({ kind: "streaming" });
     if (isFirstTurn) setIsPreparingBank(true);
@@ -569,6 +617,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     if (!head || !project) return;
     const trimmed = answerText.trim();
     if (trimmed.length === 0) return;
+    if (!hasStarted && echoBackConfirmed) setEchoBackConfirmed(false);
     const entry = { id: head.id, text: trimmed, question: head.text };
     const newBuffer = [...bufferedAnswers, entry];
     const newQueue = questionQueue.slice(1);
@@ -656,6 +705,10 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
 
   const startBuild = useCallback(async (): Promise<void> => {
     if (!project || status.kind === "running" || status.kind === "streaming") return;
+    if (!hasStarted && !readiness.ready) {
+      appendAssistantMessage(readiness.reason);
+      return;
+    }
 
     // Refuse to start a second concurrent build. The orchestrator subprocess
     // is process-global; running two would either error on spawn or compete
@@ -705,7 +758,11 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     });
     if (answersResult.isOk() && answersResult.value.length > 0) {
       try {
-        const specMarkdown = rebuildSpec(answersResult.value.map(rowToRebuildAnswer));
+        const specMarkdown = appendApprovedSourceMaterials(
+          rebuildSpec(answersResult.value.map(rowToRebuildAnswer)),
+          files,
+          approvedFileIds,
+        );
         await invoke("write_target_spec", {
           projectPath: project.path,
           specText: specMarkdown,
@@ -735,11 +792,21 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
       setStatus({ kind: "idle" });
       void sidecarCall("projects.setStatus", { id: project.id, status: "paused" });
     }
-  }, [project, status.kind, buildEventHandler]);
+  }, [
+    project,
+    status.kind,
+    hasStarted,
+    readiness.ready,
+    readiness.reason,
+    files,
+    approvedFileIds,
+    appendAssistantMessage,
+    buildEventHandler,
+  ]);
 
   const stopBuild = useCallback(async (): Promise<void> => {
     if (!project) return;
-    await orchestratorStop();
+    await orchestratorStop({ projectId: project.id });
     buildSessionRef.current = null;
     setStatus({ kind: "idle" });
     await sidecarCall("projects.setStatus", {
@@ -809,6 +876,11 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
       hasReview: reviewMarkdown !== null,
     });
     if (intent !== "none") {
+      if (intent === "build" && !hasStarted && !readiness.ready) {
+        echoUserMessage(trimmed, readiness.reason);
+        setInput("");
+        return;
+      }
       echoUserMessage(trimmed, ackForIntent(intent));
       setInput("");
       switch (intent) {
@@ -982,6 +1054,20 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
                 };
               }),
             );
+            setPendingFileApprovals((prev) => [
+              ...prev,
+              {
+                fileId,
+                name: ingested.name,
+                summary: result.summary,
+                hasPiiWarning: result.hasPiiWarning,
+              },
+            ]);
+            appendAssistantMessage(
+              result.hasPiiWarning
+                ? `I read ${ingested.name}, but it may contain personal data. Review the file banner before I use it in the spec.`
+                : `I read ${ingested.name}. Review the file banner if you want me to use it in the spec.`,
+            );
           },
           (e) => {
             setFiles((prev) =>
@@ -1011,9 +1097,34 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     setTab("files");
   };
 
+  const approveFileForSpec = (fileId: string): void => {
+    setApprovedFileIds((prev) => new Set(prev).add(fileId));
+    const pending = pendingFileApprovals.find((f) => f.fileId === fileId);
+    setPendingFileApprovals((prev) => prev.filter((f) => f.fileId !== fileId));
+    if (pending) {
+      appendAssistantMessage(`I'll use ${pending.name} as source material for the spec.`);
+    }
+    void refreshSpec();
+  };
+
+  const skipFileForSpec = (fileId: string): void => {
+    const pending = pendingFileApprovals.find((f) => f.fileId === fileId);
+    setPendingFileApprovals((prev) => prev.filter((f) => f.fileId !== fileId));
+    if (pending) {
+      appendAssistantMessage(`Okay, I won't use ${pending.name} in the spec.`);
+    }
+  };
+
   // ---- Derived UI labels -----------------------------------------------
   const isRunning = status.kind === "running" || status.kind === "streaming";
-  const isBlocked = isRunning || status.kind === "rate_limited" || !project;
+  const blockingPiiApproval = pendingFileApprovals.find((f) => f.hasPiiWarning);
+  const isBlocked = isRunning || status.kind === "rate_limited" || !project || blockingPiiApproval !== undefined;
+  const canStartOrResume = hasStarted || readiness.ready;
+  const finalEchoBackOpen =
+    !hasStarted &&
+    readiness.fastPathTotal > 0 &&
+    readiness.fastPathAnswered >= readiness.fastPathTotal &&
+    !echoBackConfirmed;
   const inProgressIdx = plan.findIndex((t) => t.status === "in_progress");
   const completedSteps = plan.filter((t) => t.status === "completed").length;
   const totalSteps = plan.length;
@@ -1097,8 +1208,9 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
           ) : (
             <Button
               size="sm"
-              disabled={ceiling.state === "stop"}
+              disabled={ceiling.state === "stop" || !canStartOrResume}
               onClick={() => void startBuild()}
+              title={!canStartOrResume ? readiness.reason : undefined}
             >
               <Play className="mr-1 h-3 w-3" />
               {hasStarted ? "Resume" : "Build it"}
@@ -1176,6 +1288,12 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         showSentryPrompt={showSentryPrompt}
         onSentryDecided={() => setShowSentryPrompt(false)}
         ceiling={ceiling}
+        finalEchoBackOpen={finalEchoBackOpen}
+        onEchoBackConfirmed={() => setEchoBackConfirmed(true)}
+        pendingFileApproval={pendingFileApprovals[0] ?? null}
+        pendingFileApprovalCount={pendingFileApprovals.length}
+        onApproveFile={approveFileForSpec}
+        onSkipFile={skipFileForSpec}
         recoveredFromCrash={recoveredFromCrash}
         openPermissions={openPermissions}
         onPermissionResolved={(id) =>
@@ -1203,6 +1321,8 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
               ? "Loading project..."
               : status.kind === "rate_limited"
                 ? "Rate-limited; please wait."
+                : blockingPiiApproval
+                  ? `Review ${blockingPiiApproval.name} before sending more.`
                 : isRunning
                   ? "Wait for the current turn to finish"
                   : null
@@ -1295,6 +1415,17 @@ interface BannerStackProps {
   showSentryPrompt: boolean;
   onSentryDecided: () => void;
   ceiling: CostCeilingResult;
+  finalEchoBackOpen: boolean;
+  onEchoBackConfirmed: () => void;
+  pendingFileApproval: {
+    fileId: string;
+    name: string;
+    summary: string;
+    hasPiiWarning: boolean;
+  } | null;
+  pendingFileApprovalCount: number;
+  onApproveFile: (fileId: string) => void;
+  onSkipFile: (fileId: string) => void;
   recoveredFromCrash: boolean;
   openPermissions: readonly OpenPermissionRequest[];
   onPermissionResolved: (id: string) => void;
@@ -1362,6 +1493,57 @@ function BannerStack(props: BannerStackProps) {
             {props.ceiling.state === "stop" ? "Spend cap reached" : "Approaching spend cap"}
           </AlertTitle>
           <AlertDescription>{props.ceiling.message}</AlertDescription>
+        </Alert>
+      ) : null}
+      {props.finalEchoBackOpen ? (
+        <Alert className="mx-4 mt-3 mb-1">
+          <AlertTitle>Final check before building</AlertTitle>
+          <AlertDescription>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <p>
+                The spec has enough answers to start. Give the Spec tab one last look so
+                the first build matches what you meant.
+              </p>
+              <Button size="sm" onClick={props.onEchoBackConfirmed}>
+                Looks right
+              </Button>
+            </div>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+      {props.pendingFileApproval ? (
+        <Alert
+          variant={props.pendingFileApproval.hasPiiWarning ? "destructive" : "default"}
+          className="mx-4 mt-3 mb-1"
+          role={props.pendingFileApproval.hasPiiWarning ? "alert" : undefined}
+        >
+          <AlertTitle>
+            {props.pendingFileApproval.hasPiiWarning
+              ? "Review personal data before using this file"
+              : "Use this file in the spec?"}
+            {props.pendingFileApprovalCount > 1 ? ` (${props.pendingFileApprovalCount} pending)` : ""}
+          </AlertTitle>
+          <AlertDescription>
+            <p className="mb-2 text-sm font-medium">{props.pendingFileApproval.name}</p>
+            <p className="mb-3 max-h-24 overflow-auto whitespace-pre-wrap text-xs">
+              {props.pendingFileApproval.summary}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                onClick={() => props.onApproveFile(props.pendingFileApproval!.fileId)}
+              >
+                {props.pendingFileApproval.hasPiiWarning ? "Use reviewed summary" : "Use in spec"}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => props.onSkipFile(props.pendingFileApproval!.fileId)}
+              >
+                Not for now
+              </Button>
+            </div>
+          </AlertDescription>
         </Alert>
       ) : null}
       {props.otherBuildBlock ? (

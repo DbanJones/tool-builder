@@ -57,6 +57,7 @@ interface ParseDataSampleResult {
 interface PiiGuardResult {
   hasPii: boolean;
   hits: Array<{ kind: string; masked: string }>;
+  redactedText: string;
 }
 
 export interface IngestResult {
@@ -181,7 +182,7 @@ function ingestSpreadsheet(
             .mapErr(fromSidecarError)
             .map<IngestResult>((g) => ({
               summary: g.hasPii
-                ? `${summaryMd}\n\n_PII detected (${g.hits.length} hit${g.hits.length === 1 ? "" : "s"}); review before sending to Claude._`
+                ? `${compactSummary(g.redactedText, 900)}\n\n_PII detected (${g.hits.length} hit${g.hits.length === 1 ? "" : "s"}); redacted summary shown for review._`
                 : summaryMd,
               hasPiiWarning: g.hasPii,
               storedPath,
@@ -200,6 +201,12 @@ function encodeUtf8Base64(s: string): string {
     bin += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunk, bytes.length)));
   }
   return btoa(bin);
+}
+
+function compactSummary(text: string, max = 500): string {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  if (collapsed.length <= max) return collapsed;
+  return collapsed.slice(0, max - 3) + "...";
 }
 
 /**
@@ -239,7 +246,7 @@ export function ingestFile(
           .mapErr(fromSidecarError)
           .map<IngestResult>((g) => ({
             summary: g.hasPii
-              ? `${summary}\nPII detected (${g.hits.length} hit${g.hits.length === 1 ? "" : "s"}); review before sending to Claude.`
+              ? `${compactSummary(g.redactedText)}\nPII detected (${g.hits.length} hit${g.hits.length === 1 ? "" : "s"}); redacted summary shown for review.`
               : summary,
             hasPiiWarning: g.hasPii,
             storedPath,

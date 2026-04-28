@@ -40,14 +40,14 @@ SC18. MUST search for non-default choices the agent made without an ADR. The def
 - Pagination style: cursor (default per B10) or offset?
 - Job runner: in-process orchestrator (override per B22) or other?
 - ORM: Drizzle (default per L9) or other?
-- Auth: OS keychain + Anthropic API key (override per B13) or other?
-- LLM provider: Anthropic via Agent SDK (override per L17)?
+- Auth: OS keychain for third-party tokens + Claude Code CLI auth prerequisite (override per B13) or other?
+- LLM provider: Claude Agent SDK in the sidecar for Builder chat/build (override per L17)?
 SC19. MUST flag any non-default choice without an ADR as silent assumption drift; either write the ADR now or revert.
 
 ### Level 5: Non-functional drift
-SC20. MUST run `pnpm verify` and the launch-time check; compare numbers against `spec.md` section 6 budgets. Any miss is drift, not a "to fix later".
+SC20. MUST run `corepack pnpm verify` and the launch-time check; compare numbers against `spec.md` section 6 budgets. Any miss is drift, not a "to fix later".
 SC21. MUST run a Tauri allowlist linter to assert the allowlist is deny-by-default with explicit allows only.
-SC22. MUST run `pnpm e2e -- --grep smoke`; smoke must be green at every checkpoint, no exceptions.
+SC22. MUST run `corepack pnpm e2e -- --grep smoke`; smoke must be green at every checkpoint, no exceptions.
 
 ## Course correction (what to do when drift is found)
 SC23. MUST stop adding new features the moment any blocker drift is found at a checkpoint. The next action is correction, not progress.

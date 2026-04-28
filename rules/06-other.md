@@ -13,20 +13,20 @@ O6. MUST run migrations in CI against an ephemeral SQLite before deploy.
 ## Observability
 O7. MUST install Sentry for errors with sourcemaps uploaded on every build. **Sentry is opt-in**: novice consents on first run after their first successful build.
 O8. MUST log structured events to `.builder/builder.log` with daily rotation and a 7-day retention.
-O9. MUST run an in-app health check that verifies: keychain accessible, Anthropic reachable, project folder writable. Surface failures as a banner.
-O10. MUST instrument key flows with Sentry transactions; trace interview -> orchestrator -> Claude Code subprocess.
+O9. MUST run an in-app health check that verifies: keychain accessible, Claude Code auth/session reachable, project folder writable. Surface failures as a banner.
+O10. MUST instrument key flows with Sentry transactions; trace interview -> sidecar orchestrator -> Claude SDK session.
 
 ## Security (OWASP Top 10 2021, enforceable items)
-O11. MUST set a Content Security Policy in the Tauri webview: `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' https://api.anthropic.com`. No `'unsafe-inline'` for scripts.
+O11. MUST set a Content Security Policy in the Tauri webview: `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'`. The sidecar owns Claude/third-party network calls unless an ADR explicitly allows a webview endpoint. No `'unsafe-inline'` for scripts.
 O12. MUST set Tauri allowlist deny-by-default; explicitly allow file system reads/writes only within the project folder and `.builder/`.
-O13. MUST rate-limit the orchestrator's outbound Anthropic calls per the daily cap; surface backpressure to the UI.
+O13. MUST surface Claude rate-limit backpressure to the UI. Any spend cap is novice-opt-in; when exceeded, it must stop new AI work and leave the current project resumable.
 O14. MUST sanitise and validate every input with Zod (covers OWASP A03 Injection by removing string concat into queries; OWASP A04 Insecure Design via explicit schemas).
 O15. MUST use parameterised queries via Drizzle exclusively (A03).
 O16. MUST scrub PII from Sentry events with `beforeSend`. The novice's project paths and chat content MUST NOT reach Sentry.
-O17. MUST encrypt secrets at rest via the OS keychain; rotate Anthropic and Vercel keys when the novice clicks "Disconnect" in settings.
+O17. MUST encrypt secrets at rest via the OS keychain; rotate Vercel and future third-party keys when the novice clicks "Disconnect" in settings. The Builder does not hold Anthropic credentials.
 
 ## Privacy / GDPR
-O18. MUST minimise data: collect only fields with a documented purpose in `docs/data-inventory.md`. The Builder's database holds project paths and metadata only; no novice content.
+O18. MUST minimise data: collect only fields with a documented purpose in `docs/data-inventory.md`. The Builder may store interview answers and approved file summaries locally in `.builder/builder.db`; novice content must not leave the machine except as prompts sent to Claude.
 O19. MUST implement a "Delete this project" flow that removes the project folder, the `projects` row, and any keychain entries scoped to that project. Confirm via double-confirm modal.
 O20. MUST present no cookie banner; the Builder is not a web app and sets no cookies.
 O21. MUST list every sub-processor (Anthropic, Sentry if opted-in, Vercel if used) in `docs/sub-processors.md`.
@@ -40,8 +40,8 @@ O24. MUST keep `README.md` to a quickstart (clone, install, run, test) within 50
 O25. MUST maintain `CONTRIBUTING.md` (branch, commit, PR conventions), `docs/runbook.md` (incident playbooks), `docs/adr/` (decisions).
 
 ## Cost / quota
-O26. MUST set Anthropic billing alerts at 50/80/100% of monthly budget. The Builder shows the novice's spend in real time.
-O27. MUST implement a global LLM kill switch readable by every AI call site. Triggered when daily cap exceeded.
+O26. MUST show the novice's token/cost estimate in real time. External Claude billing alerts are managed by the novice's Claude account.
+O27. MUST implement a global AI stop/cancel path readable by every AI call site. If a novice-opt-in spend cap is exceeded, new AI work must be blocked until the novice changes the cap or resumes deliberately.
 
 ## Licensing
 O28. Default: MIT for OSS components. The Builder shell itself: TBD by maintainers; likely AGPL or commercial.

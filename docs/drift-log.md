@@ -2,6 +2,26 @@
 
 Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction or accepted drift is logged here with date, AC id or scope item, drift type, resolution, and commit hash. This is the audit trail.
 
+## 2026-04-28
+
+### D-022 — Phase F novice-readiness hardening closes several accepted gaps
+- **Drift type**: implementation alignment (hardening pass against the codebase review recommendations and prior accepted drift).
+- **Discovered at**: review of novice buildability and tool structure after Phase E.
+- **Cause**: the product was functionally broad but still carried rough edges that would trip a novice: stop/cancel was stream-id-only, final echo-back was documented but not enforced, file summaries could influence the spec before explicit approval, PII review was too passive, question ids were unconstrained, scripts assumed a global `pnpm`, target-app template rules were placeholders, and several docs still described the pre-SDK CLI/stream-json architecture.
+- **Resolution**: implemented in Phase F:
+  - `orchestrator.stop` now cancels by stream id, project id, or all active runs as a fallback.
+  - Readiness now requires all fast-path answers plus explicit "Looks right" echo-back confirmation before build can start.
+  - `record_answer` and `queue_questions` validate ids against Q1-Q32.
+  - Uploaded files require approval; PII warnings block the next chat/build action until reviewed or skipped.
+  - Approved file summaries are included in `spec.md` section 0 as source materials; PII summaries use redacted text.
+  - Target-app template rules are concrete, and nested pnpm calls use `corepack pnpm`.
+  - ADR/build/spec/runbook docs now describe the SDK sidecar and current novice gates.
+- **Commit**: TBD (Phase F hardening commit).
+- **Follow-up**:
+  1. Persist file approval/review state in SQLite instead of UI memory.
+  2. Replace the remaining placeholder question wording/decision table once the authoritative kit is sourced.
+  3. Bundle the sidecar runtime in production installers so novices do not need Node installed.
+
 ## 2026-04-25
 
 ### D-021 — `--permission-prompt-tool` is SDK-only; reverted Commit B's permission-routing flag wiring
@@ -11,13 +31,14 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 - **Resolution**: drift accepted. Reverted the spawn args to the previous state (`--permission-mode bypassPermissions` + `--add-dir <cwd>`, no `--mcp-config` / `--permission-prompt-tool` / `--allowed-tools` for the orchestrator). The `permission_requests` table, sidecar handlers, dashboard `PermissionPromptBanner`, and `mcp-orchestrator.ts` MCP server all REMAIN in the codebase as dead code (marked `#[allow(dead_code)]` on the Rust helper) so the hooks-based rewire can re-enable them without re-implementing the wiring.
 - **Commit**: TBD (revert commit).
 - **Follow-up**: implement the permission flow via Claude Code's `PreToolUse` hook system instead of `--permission-prompt-tool`. The hook script (a small shell command) talks to the sidecar's `permissionRequests.append` + `poll` over stdio; on novice click the hook returns `{decision: "block"|"allow"}` to claude. All the existing dashboard UI + DB plumbing stays; only the Rust spawn args + a new hook script change.
+- **2026-04-28 update**: ADR-0005 superseded the hook/CLI-spawn path for build orchestration. The build driver now uses the Claude Agent SDK in the Node sidecar, and stop/cancel is wired by project/stream id.
 
 ### D-020 — E6 marketing site ships with placeholder downloads + no demo recording
 - **Drift type**: scope drift (deferral, against [docs/build-order.md](build-order.md) E6: "one-page Next.js site at apps/marketing/ with download links and a 90-second screen recording").
 - **Discovered at**: E6.
-- **Cause**: real download links require Phase E0 (signed installer artefacts) and a release pipeline that publishes to a CDN/GitHub Releases — both deferred. The 90-second screen recording can only be made after a real end-to-end build runs in `pnpm tauri dev` (which depends on the user's claude CLI auth + a real test project).
+- **Cause**: real download links require Phase E0 (signed installer artefacts) and a release pipeline that publishes to a CDN/GitHub Releases — both deferred. The 90-second screen recording can only be made after a real end-to-end build runs in `corepack pnpm tauri dev` (which depends on the user's claude CLI auth + a real test project).
 - **Resolution**: drift accepted. E6 ships:
-  - `apps/marketing/` — minimal Next.js 15 + React 19 + Tailwind sibling project (NOT a pnpm workspace member; runs via `pnpm install && pnpm dev` from inside the dir; serves on port 3001 to avoid clashing with the root Builder dev server).
+  - `apps/marketing/` — minimal Next.js 15 + React 19 + Tailwind sibling project (NOT a pnpm workspace member; runs via `corepack pnpm install && corepack pnpm dev` from inside the dir; serves on port 3001 to avoid clashing with the root Builder dev server).
   - `apps/marketing/app/page.tsx` — hero + 90s-demo placeholder block + three download cards (macOS/Windows/Linux) gated on a `DOWNLOAD_LINKS_PENDING` flag (currently true). When E0 ships, flip the flag and set the URLs.
   - Root `tsconfig.json` excludes `apps/marketing` so the Builder's strict typecheck doesn't trip on the marketing site's looser settings; ESLint config does the same.
 - **Commit**: 08cce5a (E6 commit).
@@ -36,7 +57,7 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
   - Dashboard triggers the prompt once after the first `done` event, gated on `hasMadeSentryDecision()` being false.
 - **Commit**: 85beb46 (E5 commit).
 - **Follow-up**: Phase F-style polish ticket adds the SDK:
-  1. `pnpm add @sentry/react` (or @sentry/nextjs if the Tauri webview shim works for Next App Router).
+  1. `corepack pnpm add @sentry/react` (or @sentry/nextjs if the Tauri webview shim works for Next App Router).
   2. Initialise in `app/layout.tsx` gated on `getSentryDecision() === "accepted"`.
   3. Replace the `reportError` body with `Sentry.captureException(error, { extra: scrubExtra(error) })`.
   4. Add `beforeSend` PII scrub per O16.
@@ -68,7 +89,7 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
   - `tauri.conf.json` plugins.updater config has placeholder pubkey `REPLACE_WITH_TAURI_SIGNER_PUBKEY_FROM_PHASE_E0` and endpoint `https://updates.airtec.example/builder/...`.
 - **Commit**: bc2ed73 (E3 commit).
 - **Follow-up**: when Phase E0 ships:
-  1. Run `pnpm tauri signer generate` to produce a keypair.
+  1. Run `corepack pnpm tauri signer generate` to produce a keypair.
   2. Replace the `pubkey` in `tauri.conf.json` with the public half.
   3. Replace the `endpoints` URL with the real GitHub Releases / S3 / etc. feed.
   4. Add the private key to GitHub Actions secrets as `TAURI_SIGNING_PRIVATE_KEY` (per E0.3 in build-order).
@@ -82,22 +103,23 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 - **Commit**: de3b0eb (Phase D boundary commit).
 - **Follow-up**: Phase E ticket adds a Vitest perf harness that fires N synthetic orchestrator events and asserts the time from event arrival to `actions.length` increment is < 200ms p95.
 
-### D-015 — D5/D6 follow-ups: orchestrator-side report_drift + phase_complete MCP tools, echo-back modal, "task N" recovery suffix
+### D-015 — D5/D6 follow-ups: orchestrator-side report_drift + phase_complete tools, echo-back modal, "task N" recovery suffix
 - **Drift type**: scope drift (deferrals, against [docs/build-order.md](build-order.md) D5 second bullet + spec.md Flows E AC1 / F AC5 / H AC4).
 - **Discovered at**: Phase D boundary self-check.
 - **Cause**: D5 originally scoped to ship the drift banner UI + the drift_events table + drift-log writer (the load-bearing AC) as a single < 400-line slice (binding rule 9). The orchestrator-side automation (report_drift MCP tool + phase_complete marker) was deferred so the slice fit. Same shape applies to Flow E AC1's echo-back modal (deferred under "phase boundary modal" wording) and Flow H AC4's "task N" suffix (depends on F AC5's phase markers, so can't ship before them).
 - **Resolution**: drift accepted. The dev "Inject drift" button (now NODE_ENV-guarded as of this audit) gives us manual AC coverage. Phase E follow-up wires:
-  - A new Builder MCP server `builder-orchestrator` exposing `report_drift({phase, kind, description})` and `phase_complete({phase, summary})` tools.
-  - The orchestrator passes `--mcp-config` for this server when spawning claude.
+  - Sidecar SDK tools/callbacks exposing `report_drift({phase, kind, description})` and `phase_complete({phase, summary})` semantics.
+  - The orchestrator registers those tools/callbacks through the Claude Agent SDK session.
   - The kickoff prompt instructs claude to call `phase_complete` at phase boundaries and `report_drift` whenever its `/recheck` finds blocker drift.
   - The dashboard shows the echo-back modal on `phase_complete`; the recovered-from-crash banner gains the "resumed at task N" suffix using the latest `phase` from state.json.
 - **Commit**: de3b0eb (Phase D boundary commit).
 - **Follow-up**: Phase E ticket per the above.
+- **2026-04-28 update**: the final echo-back/readiness portion is closed in Phase F. Orchestrator-side `report_drift`, `phase_complete`, and richer recovered-at-task markers remain follow-ups.
 
 ### D-014 — D4 ETA observed at TURN granularity, not per-task
 - **Drift type**: implementation drift (against [docs/build-order.md](build-order.md) D4: "kit section 14.5.3 estimator with median, P90, online updates").
 - **Discovered at**: D4.
-- **Cause**: the kit's estimator wants per-task-id observations so the dashboard can say "remaining tasks × per-task estimate". The orchestrator does not yet emit phase/task markers in the stream-json (D5 wires those). Building a per-task estimator now would have nothing to estimate against; building a per-turn estimator now gives the novice live feedback ("a turn takes ~2 min on this build") and is the correct primitive for the per-task estimator on top.
+- **Cause**: the kit's estimator wants per-task-id observations so the dashboard can say "remaining tasks × per-task estimate". The orchestrator does not yet emit phase/task markers in the SDK stream (D5/Future phase-marker work wires those). Building a per-task estimator now would have nothing to estimate against; building a per-turn estimator now gives the novice live feedback ("a turn takes ~2 min on this build") and is the correct primitive for the per-task estimator on top.
 - **Resolution**: drift accepted. D4 ships `lib/eta` as a pure (observations[], elapsedMs) → {median, p90, mode} estimator with full mode transitions (estimating → normal → past_p90) and the honesty fallback. The dashboard records one observation per claude `result.success` event (= one per turn) and labels the footer as "ETA per turn". When D5 wires phase markers, change the observation source from `done` events to `phase_complete` markers; the estimator function does not change.
 - **Commit**: 340bd7a (D4 commit).
 - **Follow-up**: D5 swaps the observation source. No schema change needed (per-turn durations are kept in component state; the persisted `actions` rows already carry the timestamps for any future per-task derivation).
@@ -109,6 +131,7 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 - **Resolution**: drift accepted. C8 ships items (1) and (2): `lib/files/ingest.ts::ingestFile` saves via the new `file_save_uploaded` Tauri command, dispatches by `IngestedFileKind`, runs `files.guardPii` on extracted text, and returns `{ summary, hasPiiWarning, storedPath }` to the file panel. The summary + PII warning render inline in the file row (status icon flips to a yellow `AlertTriangle` when `hasPiiWarning === true`). The file panel surfaces what was extracted; the chat-message injection and modal-confirm flows land later.
 - **Commit**: a0c1c27 (C8 commit).
 - **Follow-up**: Phase D ticket adds (a) a `chat.injectSystemMessage` path that posts a "I see you uploaded {name}: {summary}. Proceed on that basis?" message into the interview turn list, route the novice's yes/no through `record_answer` so the file's content lands in the spec; (b) a `<PiiConfirmDialog>` Radix Dialog gated on `files.some(f => f.hasPiiWarning)` that blocks the next chat send until the novice confirms, with a "redact and send" path that swaps in the synthetic-redacted text returned by `files.guardPii`.
+- **2026-04-28 update**: Phase F closes the novice-approval and PII-blocking parts. The approved summary is injected into `spec.md` section 0 instead of auto-merging extracted answers. Persistent DB-backed approval state remains a follow-up.
 
 ### D-001 — `eslint-plugin-neverthrow` `must-use-result` enforcement gap
 - **Drift type**: silent assumption drift (against [CLAUDE.md](../CLAUDE.md) binding rule indirectly via [rules/03-code.md](../rules/03-code.md) C11).
@@ -180,7 +203,8 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 - **Cause**: build-order's B5 says "Eval: a Promptfoo suite with 12 fixture conversations asserts on follow-up presence and 'you choose' handling." Promptfoo is its own infra setup (config, fixtures, CI hookup) and the assertions need a fixed model + reproducible fixtures. Combined with the current absence of the kit's authoritative question phrasing (D-005), an eval suite written today would lock in placeholder behaviour.
 - **Resolution**: drift accepted. B5 ships the upgraded interview system prompt directly in `src-tauri/src/chat.rs::INTERVIEW_SYSTEM_PROMPT` covering the four behaviours called out in build-order (one-question-per-turn, follow-ups on vague/contradictory/high-stakes, 'you choose' default-application, topic counter). The Promptfoo suite lands in a Phase D quality task once D-005 is closed (real question phrasing in place) and we've picked a fixed eval model.
 - **Commit**: fdfc445 (B5+B6 commit).
-- **Follow-up**: Phase D task to add `evals/` with the 12 fixture conversations + `pnpm eval` script.
+- **Follow-up**: Phase D task to add `evals/` with the 12 fixture conversations + `corepack pnpm eval` script.
+- **2026-04-28 update**: the live interview prompt/tool path now lives in `sidecar/src/chat-driver.ts` per ADR-0005. The Promptfoo-style eval suite is still deferred.
 
 ### D-007 — Spec-preview diff highlighting deferred from B4
 - **Drift type**: scope drift (deferral, against the B4 plan in [docs/build-order.md](build-order.md)).
@@ -202,7 +226,7 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 - **Drift type**: scope drift (placeholder content, against the B1 plan in [docs/build-order.md](build-order.md)).
 - **Discovered at**: B1, extended at B3.
 - **Cause**: the build-order's B1 reads "Copy the kit's question library and decision table into `lib/interview/library.ts` as typed data". B3 extends the same gap: "rebuilds spec.md ... using the kit's spec template" — that template is also missing. The original Build Spec Kit's authoritative content has not been sourced into this repo. Same pattern as the placeholder templates at A4c (per human direction 2026-04-25 to defer real content).
-- **Resolution**: drift accepted. `lib/interview/library.ts` ships 28 fast-path questions whose **ids and topics** are taken from `.builder/answers.json` (the recorded interview that produced spec.md), but whose **exact prompt strings** are inferred placeholder phrasing. Decision table is a thin starter set covering the most obvious mappings (PII, accessibility, webhooks, jobs, i18n). At B3, `lib/interview/rebuild-spec.ts` ships a section emitter set that mirrors the Builder's own spec.md as a stand-in for the kit's authoritative spec template; the function is pure, deterministic, and snapshot-tested against three fixture answer sets (minimal, partial, full). When the kit is sourced, replace prompt strings + extend decision table + swap section emitters; tests should pass without schema changes.
+- **Resolution**: drift accepted. `lib/interview/library.ts` ships 32 fast-path questions whose **ids and topics** are taken from `.builder/answers.json` plus the Phase F added app-shape questions (Q29-Q32), but whose **exact prompt strings** are inferred placeholder phrasing. Decision table is a thin starter set covering the most obvious mappings (PII, accessibility, webhooks, jobs, i18n). At B3, `lib/interview/rebuild-spec.ts` ships a section emitter set that mirrors the Builder's own spec.md as a stand-in for the kit's authoritative spec template; the function is pure, deterministic, and snapshot-tested against three fixture answer sets (minimal, partial, full). When the kit is sourced, replace prompt strings + extend decision table + swap section emitters; tests should pass without schema changes.
 - **Commits**: a534bd5 (B1), 163677d-ish (B3 extends).
 - **Follow-up**: when the kit is sourced, replace `prompt` strings and extend the decision table; tests should still pass without schema changes.
 
@@ -212,7 +236,7 @@ Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction o
 - **Cause**: tests that exercise the real Tauri webview (Welcome E2E from A3, chat smoke E2E from A5, rate-limit integration test from A5) all need `tauri-driver` (a separate setup) or full webview/IPC mocking, both of which are larger than fit inside the originating tasks. The "stubbed `claude` binary on PATH" part is straightforward (a small shell script); the harness around it is the work.
 - **Resolution**: drift accepted across both tasks. The logical surface is covered by smaller-scope tests with mocked boundaries:
   - A3: 7 unit tests in `lib/cli-detection/index.test.ts` cover all three Welcome states with `invoke` mocked.
-  - A5: 11 Rust tests in `src-tauri/src/chat.rs` cover the stream-json parser and rate-limit detector with raw lines as fixtures; 5 unit tests in `lib/chat/client.test.ts` cover the Channel-based wrapper with `invoke` and `Channel` mocked.
+  - A5: historical Rust parser tests in `src-tauri/src/chat.rs` covered the earlier stream-json path; current live chat coverage should target `sidecar/src/chat-driver.ts` and the Channel-based wrapper.
   Real-binary E2E and rate-limit integration land in Phase D when `tauri-driver` is set up.
 - **Commits**: 81bbc66 (A3 origin); A5 extends scope (this commit).
 - **Follow-up**: Phase D ticket to install `tauri-driver` + fixture `claude` binary, write:

@@ -86,10 +86,19 @@ export function orchestratorStart(
  * silently rather than guessing which build to kill.
  */
 export function orchestratorStop(
-  streamId?: string | null,
+  options:
+    | string
+    | {
+        streamId?: string | null;
+        projectId?: string | null;
+      } = {},
 ): ResultAsync<void, OrchestratorError> {
+  const normalized = typeof options === "string" ? { streamId: options } : options;
   return ResultAsync.fromPromise(
-    invoke<void>("orchestrator_stop", { streamId: streamId ?? null }),
+    invoke<void>("orchestrator_stop", {
+      streamId: normalized.streamId ?? null,
+      projectId: normalized.projectId ?? null,
+    }),
     fromInvokeError,
   );
 }

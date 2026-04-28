@@ -103,9 +103,16 @@ export type OrchestratorEvent =
 const PERMISSION_POLL_INTERVAL_MS = 200;
 const PERMISSION_TIMEOUT_MS = 5 * 60 * 1000;
 
-// In-flight abort controllers keyed by streamId so orchestrator_stop
-// can cancel a running query without killing the sidecar process.
-const inflight = new Map<string, AbortController>();
+// In-flight abort controllers keyed by streamId so orchestrator_stop can
+// cancel a running query without killing the sidecar process. We also keep
+// projectId because the webview historically did not know the generated
+// streamId; project-scoped cancellation is the practical dashboard API.
+interface InflightRun {
+  controller: AbortController;
+  projectId: string;
+}
+
+const inflight = new Map<string, InflightRun>();
 
 /**
  * Start a build-phase orchestrator query. Streams events to `onEvent` and
@@ -117,7 +124,7 @@ export async function runOrchestrator(
   onEvent: (event: OrchestratorEvent) => void,
 ): Promise<void> {
   const ac = new AbortController();
-  inflight.set(streamId, ac);
+  inflight.set(streamId, { controller: ac, projectId: opts.projectId });
   try {
     const sdkOptions: Options = {
       cwd: opts.projectPath,
@@ -153,10 +160,31 @@ export async function runOrchestrator(
 
 /** Cancel an in-flight orchestrator run by stream id. */
 export function cancelOrchestrator(streamId: string): boolean {
-  const ac = inflight.get(streamId);
-  if (!ac) return false;
-  ac.abort();
+  const run = inflight.get(streamId);
+  if (!run) return false;
+  run.controller.abort();
   return true;
+}
+
+/** Cancel every in-flight run for one project. Returns the number cancelled. */
+export function cancelOrchestratorByProject(projectId: string): number {
+  let cancelled = 0;
+  for (const run of inflight.values()) {
+    if (run.projectId !== projectId) continue;
+    run.controller.abort();
+    cancelled++;
+  }
+  return cancelled;
+}
+
+/** Cancel all in-flight runs. Used by the global tab-strip Stop button. */
+export function cancelAllOrchestrators(): number {
+  let cancelled = 0;
+  for (const run of inflight.values()) {
+    run.controller.abort();
+    cancelled++;
+  }
+  return cancelled;
 }
 
 /**

@@ -33,10 +33,10 @@ T15. MUST run Lighthouse CI on the embedded Next.js dev server with budgets: LCP
 T16. MUST measure app launch time in CI: cold start to Welcome render <= 1.5s on the test runner; fail the build if exceeded.
 
 ## Security
-T17. MUST run Snyk SAST, `pnpm audit`, gitleaks, and a Tauri-specific allowlist linter in CI.
+T17. MUST run Snyk SAST, `corepack pnpm audit`, gitleaks, and a Tauri-specific allowlist linter in CI.
 
 ## Mocking
-T18. MUST mock at the boundary only (Anthropic API via MSW, file system via temp dirs, time via Vitest fake timers); never mock the system under test.
+T18. MUST mock at the boundary only (third-party AI APIs via MSW or SDK boundary fakes, file system via temp dirs, time via Vitest fake timers); never mock the system under test.
 
 ## Manual QA
 T19. MUST write a charter for every exploratory session and a SEV1-SEV4 bug taxonomy in `docs/qa.md`.
