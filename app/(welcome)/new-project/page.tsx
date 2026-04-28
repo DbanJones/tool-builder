@@ -2,10 +2,10 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { open } from "@tauri-apps/plugin-dialog";
-import { ChevronDown, ChevronRight, FolderOpen, Loader2 } from "lucide-react";
+import { ChevronDown, ChevronRight, FolderOpen, Loader2, RefreshCw, Search } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -67,6 +67,39 @@ function statusDotClass(status: Project["status"]): string {
   }
 }
 
+const ALL_STATUSES: readonly Project["status"][] = [
+  "interviewing",
+  "ready",
+  "building",
+  "paused",
+  "done",
+];
+
+type SortKey = "lastOpened" | "created" | "name";
+
+const SORT_OPTIONS: readonly { key: SortKey; label: string }[] = [
+  { key: "lastOpened", label: "Last opened" },
+  { key: "created", label: "Created" },
+  { key: "name", label: "Name" },
+];
+
+function sortProjects(
+  projects: readonly Project[],
+  key: SortKey,
+): readonly Project[] {
+  const copy = [...projects];
+  switch (key) {
+    case "lastOpened":
+      return copy.sort((a, b) => b.lastOpenedAt - a.lastOpenedAt);
+    case "created":
+      return copy.sort((a, b) => b.createdAt - a.createdAt);
+    case "name":
+      return copy.sort((a, b) => a.name.localeCompare(b.name));
+  }
+}
+
+const POLL_MS = 4000;
+
 const FormSchema = z.object({
   name: z
     .string()
@@ -113,6 +146,16 @@ export default function NewProjectPage() {
   // can re-open a project whose tab was closed (or lost via the prune
   // bug fixed alongside this list).
   const [existingProjects, setExistingProjects] = useState<readonly Project[] | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  // Search by name + path (case-insensitive). Filter by status (empty set =
+  // all). Sort key drives the order. Refresh button + a 4s poll keep the
+  // list current with the DB so a project created from elsewhere shows up
+  // without a manual reload.
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<ReadonlySet<Project["status"]>>(
+    new Set(),
+  );
+  const [sortKey, setSortKey] = useState<SortKey>("lastOpened");
   // Collapsed by default — creating a new project is the primary task on
   // this page; the recovery list is one click away. Persist the preference
   // so users who use the recovery list often don't have to re-expand.
@@ -129,23 +172,62 @@ export default function NewProjectPage() {
     );
   }, [isExistingOpen]);
 
+  const fetchProjects = useCallback(async (): Promise<void> => {
+    const r = await sidecarCall<Project[]>("projects.list", {});
+    r.match(
+      (rows) => setExistingProjects(rows),
+      () => setExistingProjects((prev) => prev ?? []),
+    );
+  }, []);
+
+  // Initial load + 4s poll. Polling is cheap (single sqlite query against a
+  // local file) and means a project created via another path shows up in
+  // the recovery list without the user having to reload.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const r = await sidecarCall<Project[]>("projects.list", {});
+      await fetchProjects();
       if (cancelled) return;
-      r.match(
-        (rows) =>
-          setExistingProjects(
-            [...rows].sort((a, b) => b.lastOpenedAt - a.lastOpenedAt),
-          ),
-        () => setExistingProjects([]),
-      );
     })();
+    const handle = setInterval(() => void fetchProjects(), POLL_MS);
     return () => {
       cancelled = true;
+      clearInterval(handle);
     };
-  }, []);
+  }, [fetchProjects]);
+
+  const onRefresh = async (): Promise<void> => {
+    setIsRefreshing(true);
+    try {
+      await fetchProjects();
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  const filteredProjects = useMemo<readonly Project[]>(() => {
+    if (existingProjects === null) return [];
+    const q = searchQuery.trim().toLowerCase();
+    let out: readonly Project[] = existingProjects;
+    if (q.length > 0) {
+      out = out.filter(
+        (p) => p.name.toLowerCase().includes(q) || p.path.toLowerCase().includes(q),
+      );
+    }
+    if (statusFilter.size > 0) {
+      out = out.filter((p) => statusFilter.has(p.status));
+    }
+    return sortProjects(out, sortKey);
+  }, [existingProjects, searchQuery, statusFilter, sortKey]);
+
+  const toggleStatus = (s: Project["status"]): void => {
+    setStatusFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(s)) next.delete(s);
+      else next.add(s);
+      return next;
+    });
+  };
   const {
     register,
     handleSubmit,
@@ -223,13 +305,109 @@ export default function NewProjectPage() {
               )}
             </button>
             {isExistingOpen ? (
-              <ul
-                id="existing-projects-list"
-                className="divide-y border-t"
-                role="list"
-              >
-                {existingProjects.map((p) => (
-                  <li key={p.id}>
+              <div id="existing-projects-list" className="border-t">
+                <div className="flex flex-wrap items-center gap-2 px-6 py-3">
+                  <div className="relative min-w-0 flex-1">
+                    <Search
+                      className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+                      aria-hidden="true"
+                    />
+                    <input
+                      type="search"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Search by name or path…"
+                      aria-label="Filter projects by name or path"
+                      className="block w-full rounded-md border border-input bg-background py-1.5 pl-8 pr-3 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                    />
+                  </div>
+                  <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <span className="sr-only sm:not-sr-only">Sort by</span>
+                    <select
+                      value={sortKey}
+                      onChange={(e) => setSortKey(e.target.value as SortKey)}
+                      className="rounded-md border border-input bg-background px-2 py-1.5 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      aria-label="Sort projects"
+                    >
+                      {SORT_OPTIONS.map((o) => (
+                        <option key={o.key} value={o.key}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => void onRefresh()}
+                    aria-label="Refresh project list"
+                    title="Refresh project list"
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                  >
+                    <RefreshCw
+                      className={
+                        "h-4 w-4 " + (isRefreshing ? "animate-spin motion-reduce:animate-none" : "")
+                      }
+                      aria-hidden="true"
+                    />
+                  </button>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5 px-6 pb-3 text-xs">
+                  <span className="text-muted-foreground">Status:</span>
+                  <button
+                    type="button"
+                    onClick={() => setStatusFilter(new Set())}
+                    aria-pressed={statusFilter.size === 0}
+                    className={
+                      "rounded-full px-2.5 py-0.5 transition-colors " +
+                      (statusFilter.size === 0
+                        ? "bg-foreground text-background"
+                        : "bg-muted text-muted-foreground hover:bg-muted-foreground/20")
+                    }
+                  >
+                    All
+                  </button>
+                  {ALL_STATUSES.map((s) => {
+                    const active = statusFilter.has(s);
+                    return (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => toggleStatus(s)}
+                        aria-pressed={active}
+                        className={
+                          "flex items-center gap-1.5 rounded-full px-2.5 py-0.5 transition-colors " +
+                          (active
+                            ? statusBadgeClass(s) + " ring-1 ring-current/30"
+                            : "bg-muted text-muted-foreground hover:bg-muted-foreground/20")
+                        }
+                      >
+                        <span
+                          className={"inline-block h-1.5 w-1.5 rounded-full " + statusDotClass(s)}
+                          aria-hidden="true"
+                        />
+                        {s}
+                      </button>
+                    );
+                  })}
+                </div>
+                {filteredProjects.length === 0 ? (
+                  <p className="px-6 pb-4 text-sm text-muted-foreground">
+                    No projects match your filters.{" "}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearchQuery("");
+                        setStatusFilter(new Set());
+                      }}
+                      className="underline hover:text-foreground"
+                    >
+                      Clear
+                    </button>
+                  </p>
+                ) : (
+                  <ul className="divide-y border-t" role="list">
+                    {filteredProjects.map((p) => (
+                      <li key={p.id}>
                     <Link
                       href={`/project?id=${encodeURIComponent(p.id)}`}
                       className="group flex items-center gap-4 px-6 py-3 transition-colors hover:bg-muted/40 focus-visible:bg-muted/60 focus-visible:outline-none"
@@ -275,8 +453,10 @@ export default function NewProjectPage() {
                       />
                     </Link>
                   </li>
-                ))}
-              </ul>
+                    ))}
+                  </ul>
+                )}
+              </div>
             ) : null}
           </Card>
         ) : null}
