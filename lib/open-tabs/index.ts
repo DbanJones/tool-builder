@@ -1,53 +1,54 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import type { Project } from "@/lib/project";
 import { sidecarCall } from "@/lib/sidecar/client";
 
-// Tab strip state. Tabs ARE the projects in the DB (every non-deleted
-// project shows up as a tab automatically). The novice doesn't have to
-// "open" a project to see it in the strip — that mental model was confusing
-// and meant builds running in another project couldn't be seen at a glance.
+// Tabs in the strip are projects the novice has explicitly opened during
+// this install. Two-layer state:
 //
-// We keep a localStorage cache of the project list so the strip renders
-// instantly on cold start, then refresh from the sidecar every POLL_MS so
-// build-status pills + name changes stay current.
+//   1. localStorage holds the curated list of *opened* project ids — that's
+//      the source of truth for which tabs render.
+//   2. sidecar.projects.list polls the live status (building / paused /
+//      done / …) so the per-tab pill stays current. Polling is keyed by the
+//      curated list so we never widen the visible set behind the user's
+//      back.
+//
+// Adding a tab: a project is pushed into the curated list when its
+// workspace mounts (so navigating to /project?id=X opens its tab). Closing
+// removes the id from the curated list — the project itself stays in the
+// DB, it just disappears from the strip.
 
-const CACHE_KEY = "builder.openTabs.v2";
+const KEY = "builder.openTabs.v1";
 const POLL_MS = 2000;
+
+interface StoredEntry {
+  id: string;
+  /** Cached so the strip can render the name before the first poll lands. */
+  name: string;
+}
 
 export interface TabSummary {
   id: string;
   name: string;
-  /** Mirrors Project.status so the tab pill can render running/idle/done. */
-  status: Project["status"];
-  lastOpenedAt: number;
+  /** null until the first sidecar poll resolves; treated as "loading". */
+  status: Project["status"] | null;
 }
 
-function readCache(): TabSummary[] {
+function readStored(): StoredEntry[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(CACHE_KEY);
+    const raw = window.localStorage.getItem(KEY);
     if (raw === null) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    const out: TabSummary[] = [];
+    const out: StoredEntry[] = [];
     for (const item of parsed) {
       if (typeof item !== "object" || item === null) continue;
       const o = item as Record<string, unknown>;
-      if (
-        typeof o.id === "string" &&
-        typeof o.name === "string" &&
-        typeof o.status === "string" &&
-        typeof o.lastOpenedAt === "number"
-      ) {
-        out.push({
-          id: o.id,
-          name: o.name,
-          status: o.status as Project["status"],
-          lastOpenedAt: o.lastOpenedAt,
-        });
+      if (typeof o.id === "string" && typeof o.name === "string") {
+        out.push({ id: o.id, name: o.name });
       }
     }
     return out;
@@ -56,46 +57,58 @@ function readCache(): TabSummary[] {
   }
 }
 
-function writeCache(tabs: readonly TabSummary[]): void {
+function writeStored(entries: readonly StoredEntry[]): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(CACHE_KEY, JSON.stringify(tabs));
+    window.localStorage.setItem(KEY, JSON.stringify(entries));
   } catch {
-    /* quota / disabled — non-fatal, just no instant render on next reload. */
+    /* quota / disabled — non-fatal. */
   }
 }
 
-function projectsToTabs(projects: readonly Project[]): TabSummary[] {
-  return [...projects]
-    .sort((a, b) => b.lastOpenedAt - a.lastOpenedAt)
-    .map((p) => ({
-      id: p.id,
-      name: p.name,
-      status: p.status,
-      lastOpenedAt: p.lastOpenedAt,
-    }));
-}
+export function useOpenTabs(): {
+  tabs: readonly TabSummary[];
+  ensureOpen: (entry: StoredEntry) => void;
+  close: (id: string) => void;
+} {
+  const [stored, setStored] = useState<readonly StoredEntry[]>(() => readStored());
+  const [statusById, setStatusById] = useState<Map<string, Project>>(new Map());
 
-/**
- * Hook backing the tab strip. Returns tabs derived from sidecar.projects.list,
- * polled every 2s so build status pulses propagate without manual refresh.
- *
- * We render an immediate first frame from the localStorage cache so the strip
- * doesn't blink empty between mount and the first poll's resolution.
- */
-export function useOpenTabs(): { tabs: readonly TabSummary[] } {
-  const [tabs, setTabs] = useState<readonly TabSummary[]>(() => readCache());
-
+  // Cross-tab sync (relevant if we ever open multiple webview windows).
   useEffect(() => {
+    const onStorage = (e: StorageEvent): void => {
+      if (e.key === KEY) setStored(readStored());
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  // Poll status for the curated set so the build pill pulses in near real
+  // time. We deliberately don't widen `stored` from the poll result — the
+  // curated list is the source of truth for *visibility*; the poll only
+  // refreshes status of already-visible tabs (and prunes any whose project
+  // has been deleted from the DB).
+  useEffect(() => {
+    if (stored.length === 0) {
+      setStatusById(new Map());
+      return;
+    }
     let cancelled = false;
     const tick = async (): Promise<void> => {
       const r = await sidecarCall<Project[]>("projects.list", {});
       if (cancelled) return;
       r.match(
-        (projects) => {
-          const next = projectsToTabs(projects);
-          setTabs(next);
-          writeCache(next);
+        (rows) => {
+          const m = new Map<string, Project>();
+          for (const p of rows) m.set(p.id, p);
+          setStatusById(m);
+          // Prune curated entries whose project no longer exists.
+          const aliveIds = new Set(rows.map((p) => p.id));
+          const pruned = stored.filter((e) => aliveIds.has(e.id));
+          if (pruned.length !== stored.length) {
+            setStored(pruned);
+            writeStored(pruned);
+          }
         },
         () => undefined,
       );
@@ -106,7 +119,36 @@ export function useOpenTabs(): { tabs: readonly TabSummary[] } {
       cancelled = true;
       clearInterval(handle);
     };
+  }, [stored]);
+
+  const ensureOpen = useCallback((entry: StoredEntry): void => {
+    setStored((prev) => {
+      const existing = prev.find((e) => e.id === entry.id);
+      if (existing && existing.name === entry.name) return prev;
+      const next = existing
+        ? prev.map((e) => (e.id === entry.id ? { ...e, name: entry.name } : e))
+        : [...prev, entry];
+      writeStored(next);
+      return next;
+    });
   }, []);
 
-  return { tabs };
+  const close = useCallback((id: string): void => {
+    setStored((prev) => {
+      const next = prev.filter((e) => e.id !== id);
+      writeStored(next);
+      return next;
+    });
+  }, []);
+
+  const tabs: TabSummary[] = stored.map((e) => {
+    const live = statusById.get(e.id);
+    return {
+      id: e.id,
+      name: live?.name ?? e.name,
+      status: live?.status ?? null,
+    };
+  });
+
+  return { tabs, ensureOpen, close };
 }

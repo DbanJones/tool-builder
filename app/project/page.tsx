@@ -29,6 +29,7 @@ import {
   type OpenPermissionRequest,
 } from "@/components/features/project-workspace/permission-prompt-banner";
 import { RightRail, type RightTab } from "@/components/features/project-workspace/right-rail";
+import { ackForIntent, detectIntent } from "@/lib/chat-intent";
 import { chatSend, type ChatChunk, type QueuedQuestion } from "@/lib/chat/client";
 import {
   readHistoryLogTail,
@@ -50,6 +51,7 @@ import { exportToGithub, isGhInstalled } from "@/lib/export";
 import { ingestFile } from "@/lib/files/ingest";
 import { classifyByName, type IngestedFile } from "@/lib/files/types";
 import type { QuestionId } from "@/lib/interview/library";
+import { useOpenTabs } from "@/lib/open-tabs";
 import { checkReadiness, type ReadinessResult } from "@/lib/interview/readiness";
 import { rebuildSpec, type RebuildAnswer } from "@/lib/interview/rebuild-spec";
 import {
@@ -183,6 +185,11 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   const [tab, setTab] = useState<RightTab>("spec");
   const tabPinnedRef = useRef(false);
 
+  // Pin the current project as a visible tab in the strip. The strip
+  // shows opened-only projects, not every project in the DB; without this
+  // call a project visited via deep link wouldn't get a tab.
+  const { ensureOpen: ensureTabOpen } = useOpenTabs();
+
   // If another open project's build is already running, the orchestrator
   // singleton can't take a second one. We surface a banner with the
   // offending project's name + a deep link to switch tabs.
@@ -214,6 +221,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
             return;
           }
           setProject(p);
+          ensureTabOpen({ id: p.id, name: p.name });
           buildSessionRef.current = p.currentSessionId;
           // Crash recovery: a "building" status on cold open means the prior
           // process died mid-turn. Park as paused so the next click is
@@ -275,7 +283,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [projectId, ensureTabOpen]);
 
   // Pull spec from answers and rebuild the preview.
   const refreshSpec = useCallback(async (): Promise<void> => {
@@ -659,10 +667,61 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   );
 
   // ---- Chat input dispatcher --------------------------------------------
+  // Shared helper: echo the user's message to the scrollback + persist it,
+  // then optionally drop a synthetic assistant ack (e.g. "kicking off the
+  // build now") so the novice sees that their words triggered an action.
+  const echoUserMessage = (text: string, ack?: string): void => {
+    if (!project) return;
+    setMessages((prev) => {
+      const base = [...prev, { role: "user" as const, text }];
+      return ack ? [...base, { role: "assistant" as const, text: ack }] : base;
+    });
+    void sidecarCall("chatMessages.append", {
+      projectId: project.id,
+      role: "user",
+      text,
+    });
+    if (ack) {
+      void sidecarCall("chatMessages.append", {
+        projectId: project.id,
+        role: "assistant",
+        text: ack,
+      });
+    }
+  };
+
   const handleSendInput = (): void => {
     const trimmed = input.trim();
     if (trimmed.length === 0 || !project) return;
     if (status.kind === "streaming" || status.kind === "running") return;
+
+    // Intent matcher first: short imperative messages like "build it",
+    // "deploy", "stop" trigger the corresponding action so the chat is the
+    // primary control surface, not the buttons. Long messages or anything
+    // ambiguous fall through to the regular chat path.
+    const intent = detectIntent(trimmed, {
+      hasStarted,
+      isRunning,
+      hasReview: reviewMarkdown !== null,
+    });
+    if (intent !== "none") {
+      echoUserMessage(trimmed, ackForIntent(intent));
+      setInput("");
+      switch (intent) {
+        case "build":
+          void startBuild();
+          return;
+        case "stop":
+          void stopBuild();
+          return;
+        case "deploy":
+          void deployPreview();
+          return;
+        case "push":
+          void exportToGithubFlow();
+          return;
+      }
+    }
 
     if (!hasStarted) {
       // Pre-build: interview chat. If a queued question exists, treat the
@@ -672,24 +731,14 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         submitAnswerForHead(trimmed);
         return;
       }
-      setMessages((prev) => [...prev, { role: "user", text: trimmed }]);
-      void sidecarCall("chatMessages.append", {
-        projectId: project.id,
-        role: "user",
-        text: trimmed,
-      });
+      echoUserMessage(trimmed);
       setInput("");
       void sendInterview(trimmed);
       return;
     }
 
     // Build mode: send as a follow-up turn to the running session.
-    setMessages((prev) => [...prev, { role: "user", text: trimmed }]);
-    void sidecarCall("chatMessages.append", {
-      projectId: project.id,
-      role: "user",
-      text: trimmed,
-    });
+    echoUserMessage(trimmed);
     setInput("");
     void runFollowUpTurn(trimmed);
   };

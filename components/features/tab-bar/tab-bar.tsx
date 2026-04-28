@@ -1,8 +1,8 @@
 "use client";
 
-import { FilePlus, Plus } from "lucide-react";
+import { FilePlus, Plus, X } from "lucide-react";
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 
 import { useOpenTabs, type TabSummary } from "@/lib/open-tabs";
@@ -27,10 +27,21 @@ export function TabBar() {
 function TabBarInner() {
   const pathname = usePathname();
   const params = useSearchParams();
+  const router = useRouter();
   const activeId = pathname === "/project" ? params.get("id") : null;
   const onNewProjectRoute = pathname === "/new-project";
-  const { tabs } = useOpenTabs();
+  const { tabs, close } = useOpenTabs();
   const buildingCount = tabs.filter((t) => t.status === "building").length;
+
+  const onClose = (id: string, e: React.MouseEvent): void => {
+    e.preventDefault();
+    e.stopPropagation();
+    close(id);
+    if (id === activeId) {
+      const remaining = tabs.filter((t) => t.id !== id);
+      router.push(remaining[0] ? `/project?id=${encodeURIComponent(remaining[0].id)}` : "/");
+    }
+  };
 
   return (
     <div className="flex h-9 shrink-0 items-end gap-0 border-b bg-muted/40">
@@ -47,7 +58,12 @@ function TabBarInner() {
         Builder
       </Link>
       {tabs.map((t) => (
-        <Tab key={t.id} tab={t} active={t.id === activeId} />
+        <Tab
+          key={t.id}
+          tab={t}
+          active={t.id === activeId}
+          onClose={(e) => onClose(t.id, e)}
+        />
       ))}
       {onNewProjectRoute ? <NewProjectTab /> : null}
       <Link
@@ -74,7 +90,15 @@ function TabBarInner() {
   );
 }
 
-function Tab({ tab, active }: { tab: TabSummary; active: boolean }) {
+function Tab({
+  tab,
+  active,
+  onClose,
+}: {
+  tab: TabSummary;
+  active: boolean;
+  onClose: (e: React.MouseEvent) => void;
+}) {
   const isRunning = tab.status === "building";
   return (
     <Link
@@ -91,10 +115,18 @@ function Tab({ tab, active }: { tab: TabSummary; active: boolean }) {
       <StatusDot status={tab.status} />
       <span className="min-w-0 flex-1 truncate">{tab.name}</span>
       {isRunning ? (
-        <span className="ml-1 shrink-0 text-[9px] font-semibold uppercase tracking-wide text-primary">
+        <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-primary">
           building
         </span>
       ) : null}
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label={`Close ${tab.name}`}
+        className="ml-1 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground/60 opacity-0 hover:bg-muted hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
+      >
+        <X className="h-3 w-3" aria-hidden="true" />
+      </button>
     </Link>
   );
 }
@@ -140,7 +172,7 @@ function StatusDot({ status }: { status: TabSummary["status"] }) {
   }
   return (
     <span
-      aria-label={status}
+      aria-label={status ?? "loading"}
       className="inline-block h-2 w-2 shrink-0 rounded-full bg-muted-foreground/40"
     />
   );
