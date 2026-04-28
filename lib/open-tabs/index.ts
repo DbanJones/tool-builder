@@ -71,8 +71,15 @@ export function useOpenTabs(): {
   ensureOpen: (entry: StoredEntry) => void;
   close: (id: string) => void;
 } {
-  const [stored, setStored] = useState<readonly StoredEntry[]>(() => readStored());
+  // Initial state is always empty so the SSR / static-export render matches
+  // the first client render (no hydration mismatch). The first client-side
+  // effect rehydrates from localStorage on mount.
+  const [stored, setStored] = useState<readonly StoredEntry[]>([]);
   const [statusById, setStatusById] = useState<Map<string, Project>>(new Map());
+
+  useEffect(() => {
+    setStored(readStored());
+  }, []);
 
   // Cross-tab sync (relevant if we ever open multiple webview windows).
   useEffect(() => {
