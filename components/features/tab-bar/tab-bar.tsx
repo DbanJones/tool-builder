@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 
+import { DEMO_LABEL, DEMO_MODE } from "@/lib/demo";
 import { useOpenTabs, type TabSummary } from "@/lib/open-tabs";
 import { orchestratorStop } from "@/lib/orchestrator";
 import type { Project } from "@/lib/project";
@@ -68,15 +69,24 @@ function TabBarInner() {
     <div className="flex h-9 shrink-0 items-end gap-0 border-b bg-muted/40">
       <Link
         href="/"
-        aria-label="Builder home"
+        aria-label="Dave-Builder home"
         className={
-          "flex h-9 items-center px-3 text-xs font-semibold " +
+          "flex h-9 items-center gap-2 px-3 text-xs font-semibold " +
           (activeId === null && pathname === "/"
             ? "border-b-2 border-primary text-foreground"
             : "text-muted-foreground hover:text-foreground")
         }
       >
-        Builder
+        <span>Dave-Builder</span>
+        {DEMO_MODE ? (
+          <span
+            aria-label="Demo build"
+            title="Demo build — locks down on the configured demo expiry date"
+            className="rounded-md border border-amber-500/40 bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+          >
+            {DEMO_LABEL}
+          </span>
+        ) : null}
       </Link>
       {tabs.map((t) => (
         <Tab

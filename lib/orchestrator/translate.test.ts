@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { translate } from "./translate";
+import { extractDiffSnippet, translate } from "./translate";
 
 describe("translate", () => {
   it("Bash with description prefers the description and shows the command in parens", () => {
@@ -134,5 +134,79 @@ describe("translate", () => {
 
   it("missing file_path on Read returns a fallback line rather than throwing", () => {
     expect(translate("Read", JSON.stringify({}))).toBe("Reading a file");
+  });
+});
+
+describe("extractDiffSnippet", () => {
+  it("returns Edit's new_string", () => {
+    const snippet = extractDiffSnippet(
+      "Edit",
+      JSON.stringify({ file_path: "x.ts", old_string: "foo", new_string: "bar" }),
+    );
+    expect(snippet).toBe("bar");
+  });
+
+  it("returns Write's content", () => {
+    const snippet = extractDiffSnippet(
+      "Write",
+      JSON.stringify({ file_path: "x.ts", content: "export const a = 1;" }),
+    );
+    expect(snippet).toBe("export const a = 1;");
+  });
+
+  it("clips snippets to <=10 lines", () => {
+    const longContent = Array.from({ length: 50 }, (_, i) => `line ${i}`).join("\n");
+    const snippet = extractDiffSnippet(
+      "Write",
+      JSON.stringify({ file_path: "x.ts", content: longContent }),
+    );
+    expect(snippet).not.toBeNull();
+    expect((snippet ?? "").split("\n").length).toBeLessThanOrEqual(10);
+  });
+
+  it("clips snippets to <=400 chars", () => {
+    const longLine = "x".repeat(2000);
+    const snippet = extractDiffSnippet(
+      "Write",
+      JSON.stringify({ file_path: "x.ts", content: longLine }),
+    );
+    expect(snippet).not.toBeNull();
+    expect((snippet ?? "").length).toBeLessThanOrEqual(401 + 2);
+  });
+
+  it("MultiEdit concatenates the first couple of edits", () => {
+    const snippet = extractDiffSnippet(
+      "MultiEdit",
+      JSON.stringify({
+        file_path: "x.ts",
+        edits: [
+          { old_string: "a", new_string: "alpha" },
+          { old_string: "b", new_string: "beta" },
+          { old_string: "c", new_string: "gamma" },
+        ],
+      }),
+    );
+    expect(snippet).not.toBeNull();
+    expect(snippet).toContain("alpha");
+    expect(snippet).toContain("beta");
+  });
+
+  it("returns null for non-mutating tools", () => {
+    expect(extractDiffSnippet("Read", JSON.stringify({ file_path: "x.ts" }))).toBeNull();
+    expect(extractDiffSnippet("Bash", JSON.stringify({ command: "ls" }))).toBeNull();
+    expect(extractDiffSnippet("TodoWrite", JSON.stringify({ todos: [] }))).toBeNull();
+  });
+
+  it("returns null when content is empty or whitespace-only", () => {
+    expect(
+      extractDiffSnippet("Edit", JSON.stringify({ file_path: "x.ts", new_string: "" })),
+    ).toBeNull();
+    expect(
+      extractDiffSnippet("Write", JSON.stringify({ file_path: "x.ts", content: "   \n  " })),
+    ).toBeNull();
+  });
+
+  it("malformed rawInput JSON returns null instead of throwing", () => {
+    expect(extractDiffSnippet("Edit", "{not json")).toBeNull();
   });
 });

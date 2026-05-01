@@ -18,8 +18,8 @@ export function InstallState({ onRecheck, errorMessage }: InstallStateProps) {
           <CardTitle>Install Claude Code</CardTitle>
         </div>
         <CardDescription>
-          The Builder needs the Claude Code CLI installed on your machine. The Builder talks to
-          Claude through it, so you do not need to paste an API key.
+          Dave-Builder needs the Claude Code CLI installed on your machine. Dave-Builder talks to
+          Dave through it, so you do not need to paste an API key.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">

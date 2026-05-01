@@ -113,7 +113,7 @@ export function ChatPanel({
           {isStreaming && messages[messages.length - 1]?.role === "user" && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground" aria-live="polite">
               <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-              Claude is thinking...
+              Dave is thinking...
             </div>
           )}
 

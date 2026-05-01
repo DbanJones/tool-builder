@@ -32,8 +32,18 @@ const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 export interface AnnotationModalProps {
   /** Image to annotate. null = empty modal showing the drop/paste placeholder. */
   initialImage: Blob | File | null;
-  /** Called when the novice clicks Send. Image bytes are pre-flattened (image+overlay). */
-  onSend: (args: { description: string; imageBytes: Uint8Array }) => Promise<void> | void;
+  /**
+   * Called when the novice clicks Send.
+   * - `imageBytes` is the flattened PNG (original image + overlay drawn).
+   * - `marks` is the raw Shape array in image-bitmap coordinates, included
+   *   so the agent gets exact mark positions in addition to the rasterised
+   *   pixels (the parent assembles the rest of the sidecar).
+   */
+  onSend: (args: {
+    description: string;
+    imageBytes: Uint8Array;
+    marks: readonly Shape[];
+  }) => Promise<void> | void;
   /** Called when the novice clicks Cancel or hits ESC. */
   onClose: () => void;
 }
@@ -199,7 +209,7 @@ export function AnnotationModal({ initialImage, onSend, onClose }: AnnotationMod
     setError(null);
     try {
       const bytes = await flattenAnnotations(imageRef.current, shapes);
-      await onSend({ description: description.trim(), imageBytes: bytes });
+      await onSend({ description: description.trim(), imageBytes: bytes, marks: shapes });
     } catch (e) {
       setError(`Couldn't send: ${e instanceof Error ? e.message : String(e)}`);
       setSending(false);

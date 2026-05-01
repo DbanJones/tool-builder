@@ -57,7 +57,7 @@ export function PermissionPromptBanner({
     <Alert className="mx-4 mt-3 mb-1 border-yellow-600/40 bg-yellow-50/30 dark:bg-yellow-950/20">
       <ShieldQuestion className="h-4 w-4" aria-hidden="true" />
       <AlertTitle>
-        Claude wants to run <span className="font-mono">{request.toolName}</span>
+        Dave wants to run <span className="font-mono">{request.toolName}</span>
         {totalOpen > 1 ? ` (${totalOpen} pending)` : null}
       </AlertTitle>
       <AlertDescription>

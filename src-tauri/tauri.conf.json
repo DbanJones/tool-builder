@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Builder",
+  "productName": "Dave-Builder (Demo)",
   "version": "0.1.0",
   "identifier": "com.airtec.builder",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Builder",
+        "title": "Dave-Builder (Demo)",
         "width": 1280,
         "height": 800,
         "minWidth": 1024,

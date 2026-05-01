@@ -16,7 +16,7 @@ export function AuthState({ onRecheck }: AuthStateProps) {
           <CardTitle>Sign in to Claude Code</CardTitle>
         </div>
         <CardDescription>
-          Claude Code is installed but not yet signed in. Sign in once and the Builder will pick it
+          Claude Code is installed but not yet signed in. Sign in once and Dave-Builder will pick it
           up automatically.
         </CardDescription>
       </CardHeader>

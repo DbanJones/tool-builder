@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  AlertTriangle,
   ExternalLink,
   Loader2,
   Maximize2,
@@ -10,11 +11,18 @@ import {
   RotateCw,
   Square,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import type { HistoryActionEntry, TargetState } from "@/lib/build-state";
 import type { TodoItem } from "@/lib/orchestrator";
+import { extractDiffSnippet } from "@/lib/orchestrator/translate";
+import {
+  formatBridgeEventForLiveTail,
+  getBridgeListener,
+  type BridgeEvent,
+  type BridgeSnapshot,
+} from "@/lib/preview-bridge";
 
 import { FilePanel } from "./file-panel";
 import type { IngestedFile } from "@/lib/files/types";
@@ -183,6 +191,53 @@ function SpecPanel({ spec }: { spec: string }) {
 // + completion ticks. Bottom half: live activity tail (latest tool calls)
 // so the novice can see the build advance in real time without flipping
 // to a separate tab. Recent commits sit at the very bottom.
+// One row in the live-status list. Either an orchestrator action (from
+// history.log) or a browser-side event from the preview bridge. Same shape
+// for both so the renderer is uniform; `kind` keys the styling.
+type LiveStatusRow =
+  | {
+      kind: "action";
+      ts: number;
+      key: string;
+      primary: string;
+      detail: string | null;
+      diffSnippet: string | null;
+    }
+  | { kind: "browser"; ts: number; key: string; primary: string; severity: "error" | "warn" };
+
+function rowsFromActions(
+  actions: readonly HistoryActionEntry[],
+  showTechnicalDetail: boolean,
+): LiveStatusRow[] {
+  return actions.map((a) => ({
+    kind: "action",
+    ts: a.ts,
+    key: `a-${a.id}`,
+    primary: a.humanLine ?? a.tool,
+    detail: showTechnicalDetail ? `${a.tool} · ${a.rawInput}` : null,
+    diffSnippet: extractDiffSnippet(a.tool, a.rawInput),
+  }));
+}
+
+function rowsFromBridgeEvents(events: readonly BridgeEvent[]): LiveStatusRow[] {
+  const out: LiveStatusRow[] = [];
+  for (const [i, ev] of events.entries()) {
+    const line = formatBridgeEventForLiveTail(ev);
+    if (!line) continue;
+    const severity: "error" | "warn" = isErrorSeverity(ev) ? "error" : "warn";
+    out.push({ kind: "browser", ts: ev.ts, key: `b-${ev.ts}-${i}`, primary: line, severity });
+  }
+  return out;
+}
+
+function isErrorSeverity(ev: BridgeEvent): boolean {
+  if (ev.kind === "error" || ev.kind === "unhandledrejection") return true;
+  if (ev.kind === "console" && ev.level === "error") return true;
+  if (ev.kind === "network" && (!ev.ok || ev.status >= 500 || ev.error !== null)) return true;
+  if (ev.kind === "server" && ev.severity === "error") return true;
+  return false;
+}
+
 function PlanAndStatusPanel({
   plan,
   recentHistory,
@@ -196,11 +251,22 @@ function PlanAndStatusPanel({
   showTechnicalDetail: boolean;
   isRunning: boolean;
 }) {
+  const [bridge, setBridge] = useState<BridgeSnapshot>({
+    status: "absent",
+    events: [],
+    errorCount: 0,
+  });
+  useEffect(() => getBridgeListener().subscribe(setBridge), []);
+
   const completed = plan.filter((t) => t.status === "completed").length;
   const total = plan.length;
-  // Most-recent first, capped — the full history.log is on disk if anyone
-  // really wants 200+ entries, but the rail is for at-a-glance status.
-  const recentActions = [...actions].slice(-30).reverse();
+  // Merge orchestrator actions with browser-side bridge events into one
+  // chronologically-sorted live status list. Cap at 30 entries because the
+  // rail is for at-a-glance; the full history.log + bridge ring buffer are
+  // available elsewhere if anyone needs more.
+  const merged = [...rowsFromActions(actions, showTechnicalDetail), ...rowsFromBridgeEvents(bridge.events)];
+  merged.sort((a, b) => a.ts - b.ts);
+  const recentActions = merged.slice(-30).reverse();
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="shrink-0 border-b px-4 py-3">
@@ -208,13 +274,13 @@ function PlanAndStatusPanel({
           Steps {total > 0 ? `· ${completed} / ${total}` : null}
         </h2>
         <p className="text-[11px] text-muted-foreground">
-          The plan Claude is working through. Live status is below.
+          The plan Dave is working through. Live status is below.
         </p>
       </div>
       <div className="max-h-[45%] shrink-0 overflow-auto p-4">
         {plan.length === 0 ? (
           <p className="text-xs text-muted-foreground">
-            Claude will lay out the steps here as soon as the build starts.
+            Dave will lay out the steps here as soon as the build starts.
           </p>
         ) : (
           <ol className="space-y-2 text-xs">
@@ -258,25 +324,43 @@ function PlanAndStatusPanel({
           {recentActions.length === 0 ? (
             <p className="text-muted-foreground">
               {isRunning
-                ? "Claude is reading your spec…"
-                : "Click Build it to begin. Claude reads your spec and lays out a plan."}
+                ? "Dave is reading your spec…"
+                : "Click Build it to begin. Dave reads your spec and lays out a plan."}
             </p>
           ) : (
             <ul className="space-y-1">
-              {recentActions.map((a) => (
-                <li key={a.id} className="flex items-baseline gap-2">
+              {recentActions.map((row) => (
+                <li key={row.key} className="flex items-baseline gap-2">
                   <time
-                    dateTime={new Date(a.ts).toISOString()}
+                    dateTime={new Date(row.ts).toISOString()}
                     className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70"
                   >
-                    {formatActionTime(a.ts)}
+                    {formatActionTime(row.ts)}
                   </time>
                   <div className="min-w-0 flex-1">
-                    <div>{a.humanLine ?? a.tool}</div>
-                    {showTechnicalDetail ? (
-                      <div className="font-mono text-[10px] text-muted-foreground">
-                        {a.tool} · {a.rawInput}
-                      </div>
+                    <div
+                      className={
+                        row.kind === "browser"
+                          ? row.severity === "error"
+                            ? "text-destructive"
+                            : "text-amber-600 dark:text-amber-500"
+                          : ""
+                      }
+                    >
+                      {row.primary}
+                    </div>
+                    {row.kind === "action" && row.detail ? (
+                      <div className="font-mono text-[10px] text-muted-foreground">{row.detail}</div>
+                    ) : null}
+                    {row.kind === "action" && row.diffSnippet ? (
+                      <details className="mt-0.5 group">
+                        <summary className="cursor-pointer select-none text-[10px] text-muted-foreground hover:text-foreground">
+                          show what changed
+                        </summary>
+                        <pre className="mt-1 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/40 px-2 py-1 font-mono text-[10px] leading-relaxed">
+                          {row.diffSnippet}
+                        </pre>
+                      </details>
                     ) : null}
                   </div>
                 </li>
@@ -325,6 +409,21 @@ function PreviewPanel({
   // (history-preserving src=src reassignment is finicky inside Tauri's
   // webview).
   const [refreshKey, setRefreshKey] = useState(0);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const [bridge, setBridge] = useState<BridgeSnapshot>({
+    status: "absent",
+    events: [],
+    errorCount: 0,
+  });
+
+  // Subscribe to the bridge listener while this panel is mounted. Reset on
+  // refresh / external bump so error counts reflect the current page only.
+  useEffect(() => {
+    const listener = getBridgeListener();
+    listener.bindIframe(iframeRef.current);
+    listener.reset();
+    return listener.subscribe(setBridge);
+  }, [refreshKey, externalRefreshTrigger, launchStatus.kind]);
 
   if (launchStatus.kind === "running") {
     return (
@@ -337,6 +436,17 @@ function PreviewPanel({
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-1">
+            {bridge.errorCount > 0 ? (
+              <span
+                role="status"
+                aria-label={`${bridge.errorCount} runtime error${bridge.errorCount === 1 ? "" : "s"} in the preview`}
+                title="Runtime errors caught by the preview bridge — see the live tail."
+                className="inline-flex items-center gap-1 rounded-md border border-destructive/40 bg-destructive/10 px-1.5 py-0.5 text-[11px] font-medium text-destructive"
+              >
+                <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+                {bridge.errorCount}
+              </span>
+            ) : null}
             <button
               type="button"
               onClick={() => setRefreshKey((k) => k + 1)}
@@ -388,6 +498,7 @@ function PreviewPanel({
         <div className="flex min-h-0 flex-1 bg-muted/40">
           <iframe
             key={refreshKey + externalRefreshTrigger}
+            ref={iframeRef}
             src={launchStatus.url}
             title="Live preview of the target app"
             // Sandbox tokens cover the basic functioning of an SPA; the
@@ -437,7 +548,7 @@ function PreviewPanel({
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
       <p className="text-sm text-muted-foreground">
-        See your built app live, right inside the Builder.
+        See your built app live, right inside Dave-Builder.
       </p>
       <p className="text-xs text-muted-foreground">
         Click Start preview to spawn the target app's dev server. Once it's running,

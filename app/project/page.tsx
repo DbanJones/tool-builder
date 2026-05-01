@@ -1,6 +1,7 @@
 "use client";
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type Event } from "@tauri-apps/api/event";
 import {
   ExternalLink,
   GitBranch,
@@ -26,6 +27,7 @@ import {
 } from "@/components/features/project-workspace/chat-panel";
 import { AnnotationModal } from "@/components/features/annotation/annotation-modal";
 import { DeployModal } from "@/components/features/project-workspace/deploy-modal";
+import { PlanAckModal } from "@/components/features/project-workspace/plan-ack-modal";
 import { DriftBanner } from "@/components/features/project-workspace/drift-banner";
 import {
   PermissionPromptBanner,
@@ -33,7 +35,16 @@ import {
 } from "@/components/features/project-workspace/permission-prompt-banner";
 import { RightRail, type RightTab } from "@/components/features/project-workspace/right-rail";
 import { StagesBar } from "@/components/features/project-workspace/stages-bar";
-import { bytesToBase64 } from "@/lib/annotation";
+import { bytesToBase64, type Shape } from "@/lib/annotation";
+import {
+  buildFeedbackSidecar,
+  getBridgeListener,
+  requestScreenshot,
+  requestSnapshot,
+  resolveElements,
+  type IframePoint,
+  type ResolvedElement,
+} from "@/lib/preview-bridge";
 import { ackForIntent, detectIntent } from "@/lib/chat-intent";
 import { chatSend, type ChatChunk, type QueuedQuestion } from "@/lib/chat/client";
 import {
@@ -237,6 +248,16 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   // build paused — user resumes via the normal Build button.
   const [annotationOpen, setAnnotationOpen] = useState(false);
   const [annotationInitialImage, setAnnotationInitialImage] = useState<Blob | null>(null);
+  // Tracks where the modal's image came from. "iframe" means the bytes were
+  // rendered by the bridge from the live DOM, so mark coordinates land in
+  // iframe-CSS pixel space and resolveElements() will give meaningful answers.
+  // "screen" means screencapture-i produced the bytes; marks live in
+  // screenshot-bitmap space with no DOM mapping (PR-2's known limitation).
+  const [annotationCaptureSource, setAnnotationCaptureSource] =
+    useState<"iframe" | "screen" | null>(null);
+  // Pre-build plan ack modal (PR-5 of D-031). Only fires for the first build
+  // of a session; correction-mode rebuilds skip the gate to avoid friction.
+  const [planAckOpen, setPlanAckOpen] = useState(false);
 
   // Counter the Preview tab uses as part of its iframe key. Bumped when the
   // agent emits a file-mutating tool_use (Edit/Write/MultiEdit/NotebookEdit)
@@ -607,6 +628,37 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [previewMaximized]);
 
+  // Subscribe to dev-server stdout/stderr events emitted by launch.rs
+  // (PR-3 of D-031). Lines that look like errors / warnings get pushed
+  // into the bridge listener so they merge into the live tail next to
+  // browser-side bridge events. Routine progress lines are filtered in
+  // Rust and never reach us.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    void (async () => {
+      const off = await listen("target-server-event", (event: Event<unknown>) => {
+        const payload = event.payload as Record<string, unknown> | null;
+        if (!payload) return;
+        const severity = payload.severity;
+        if (severity !== "error" && severity !== "warn" && severity !== "info") return;
+        const message = typeof payload.message === "string" ? payload.message : "";
+        const source = typeof payload.source === "string" ? payload.source : "stdout";
+        const ts = typeof payload.ts === "number" ? payload.ts : Date.now();
+        getBridgeListener().pushServerEvent({
+          kind: "server",
+          source,
+          severity,
+          message,
+          ts,
+        });
+      });
+      unlisten = off;
+    })();
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
   // ---- Interview chat (pre-build) ----------------------------------------
   const handleChunk = (chunk: ChatChunk): void => {
     switch (chunk.kind) {
@@ -791,6 +843,33 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
           event.tool === "NotebookEdit"
         ) {
           setPreviewRefreshTrigger((n) => n + 1);
+          // Auto-snapshot the iframe's current state (PR-4 of D-031). We let
+          // the iframe re-render first (small delay) so the snapshot reflects
+          // the post-edit state, not the stale pre-refresh state. Best-effort:
+          // failure (no preview running, bridge absent, render error) just
+          // skips this snapshot — there'll be more.
+          const tool = event.tool;
+          const projectPath = project.path;
+          window.setTimeout(() => {
+            void (async () => {
+              const listener = getBridgeListener();
+              if (listener.snapshot().status !== "connected") return;
+              const iframe = listener.getBoundIframe();
+              const shot = await requestScreenshot(iframe);
+              if (!shot) return;
+              try {
+                await invoke<string>("target_snapshot_save", {
+                  projectPath,
+                  contentBase64: shot.pngBase64,
+                  label: tool,
+                });
+              } catch (e) {
+                console.warn(
+                  `auto-snapshot save failed: ${e instanceof Error ? e.message : String(e)}`,
+                );
+              }
+            })();
+          }, 1500);
         }
       } else if (event.kind === "done") {
         if (turnStartRef.current !== null) {
@@ -980,6 +1059,14 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
       setConcurrentBuildPrompt({ conflicts });
       return;
     }
+    // Pre-build plan ack (PR-5). Only on the FIRST build of a session — once
+    // the agent is mid-plan, "rebuild" is correction mode and the modal would
+    // be friction. `hasStarted` flips true the moment any session/action/plan
+    // exists for this project.
+    if (!hasStarted) {
+      setPlanAckOpen(true);
+      return;
+    }
     await performBuild();
   }, [
     project,
@@ -1059,13 +1146,16 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
       });
     }
     setAnnotationInitialImage(null);
+    setAnnotationCaptureSource(null);
     setAnnotationOpen(true);
   }, [project, status.kind]);
 
-  // Capture-and-annotate (D-028 B). Spawns macOS's native region picker via
-  // `screencapture -i`, gets the PNG bytes back, and opens the AnnotationModal
-  // with the image already loaded. Three clicks: pick region → mark up → send.
-  // Pauses any in-flight build for the same reason as openAnnotation.
+  // Capture-and-annotate (D-028 + D-031 PR-4). Two-phase: first try the
+  // iframe-aware bridge screenshot (DOM-coord marks, elementFromPoint
+  // resolution on Send). If that fails (no preview running, bridge absent,
+  // cross-origin asset breaks the foreignObject render), fall back to the
+  // OS-level region picker (`screencapture -i`). Pauses any in-flight build
+  // for the same reason as openAnnotation.
   const captureRegionAndAnnotate = useCallback(async (): Promise<void> => {
     if (!project) return;
     if (status.kind === "running" || status.kind === "streaming") {
@@ -1076,6 +1166,29 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         status: "paused",
       });
     }
+
+    // Phase 1: iframe-aware bridge screenshot. Only attempted if the preview
+    // is running and the bridge has announced itself.
+    const listener = getBridgeListener();
+    const iframe = listener.getBoundIframe();
+    const bridgeReady =
+      launchStatus.kind === "running" && listener.snapshot().status === "connected";
+    if (bridgeReady && iframe) {
+      const shot = await requestScreenshot(iframe);
+      if (shot) {
+        const bin = atob(shot.pngBase64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const blob = new Blob([bytes], { type: "image/png" });
+        setAnnotationInitialImage(blob);
+        setAnnotationCaptureSource("iframe");
+        setAnnotationOpen(true);
+        return;
+      }
+      // null = rendering failed (cross-origin assets, etc). Fall through.
+    }
+
+    // Phase 2: OS region capture (existing path).
     try {
       const b64 = await invoke<string>("capture_region_to_png");
       const bin = atob(b64);
@@ -1083,6 +1196,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
       const blob = new Blob([bytes], { type: "image/png" });
       setAnnotationInitialImage(blob);
+      setAnnotationCaptureSource("screen");
       setAnnotationOpen(true);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -1092,10 +1206,38 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         appendAssistantMessage(`Couldn't capture: ${msg}`);
       }
     }
-  }, [project, status.kind, appendAssistantMessage]);
+  }, [project, status.kind, appendAssistantMessage, launchStatus.kind]);
+
+  // Centre point of a Shape in image-pixel coordinates. For iframe-rendered
+  // captures (bridge screenshot) this is also iframe-CSS pixel space, so it
+  // can be passed directly to elementFromPoint via the bridge.
+  const shapeCenter = useCallback((shape: Shape): IframePoint => {
+    switch (shape.kind) {
+      case "box":
+        return { x: shape.x + shape.width / 2, y: shape.y + shape.height / 2 };
+      case "arrow":
+        // Arrows point AT something — use the destination, not the midpoint.
+        return { x: shape.to.x, y: shape.to.y };
+      case "text":
+        return { x: shape.x, y: shape.y };
+      case "freedraw": {
+        if (shape.points.length === 0) return { x: 0, y: 0 };
+        const sum = shape.points.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), {
+          x: 0,
+          y: 0,
+        });
+        return { x: sum.x / shape.points.length, y: sum.y / shape.points.length };
+      }
+    }
+  }, []);
 
   const sendBuildFeedback = useCallback(
-    async (feedback: string, imageBytes?: Uint8Array): Promise<void> => {
+    async (
+      feedback: string,
+      imageBytes?: Uint8Array,
+      marks?: readonly Shape[],
+      captureSource?: "iframe" | "screen" | null,
+    ): Promise<void> => {
       const trimmed = feedback.trim();
       if (!project) return;
       if (trimmed.length === 0 && !imageBytes) return;
@@ -1115,6 +1257,46 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         }
       }
 
+      // Assemble the JSON sidecar (ADR-0014 PR-2 + PR-4). Best-effort: if the
+      // bridge isn't connected we still write a sidecar with the marks +
+      // description, just without iframe context. When the capture came from
+      // the iframe (PR-4), mark coords ARE iframe-CSS pixels, so each mark's
+      // centre is asked of elementFromPoint and the result is attached to the
+      // mark — the agent gets `<button class="cta">` instead of pixels.
+      let sidecarRelPath: string | null = null;
+      const listener = getBridgeListener();
+      const bridgeSnap = listener.snapshot();
+      const iframe = listener.getBoundIframe();
+      const iframeSnapshot = await requestSnapshot(iframe);
+
+      let resolvedElements: readonly (ResolvedElement | null)[] | null = null;
+      if (captureSource === "iframe" && iframe && marks && marks.length > 0) {
+        const points = marks.map(shapeCenter);
+        resolvedElements = await resolveElements(iframe, points);
+      }
+
+      const sidecar = buildFeedbackSidecar({
+        description: trimmed,
+        marks: marks ?? [],
+        imagePath: imageRelPath,
+        iframe: iframeSnapshot,
+        events: bridgeSnap.events,
+        bridgeConnected: bridgeSnap.status === "connected",
+        captureSource: captureSource ?? null,
+        resolvedElements,
+      });
+      try {
+        sidecarRelPath = await invoke<string>("feedback_sidecar_save", {
+          projectPath: project.path,
+          contentJson: JSON.stringify(sidecar, null, 2),
+        });
+      } catch (e) {
+        // Sidecar save is best-effort. Keep going with image-only feedback.
+        console.warn(
+          `feedback sidecar save failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+
       const userVisible = imageRelPath
         ? trimmed.length > 0
           ? `${trimmed}\n[attached: ${imageRelPath}]`
@@ -1128,6 +1310,9 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
           : "The novice just reviewed the build and sent an annotated screenshot without a written description.",
         imageRelPath
           ? `\nThey've attached an annotated screenshot at \`${imageRelPath}\`. Read that file with your Read tool — it returns image content; the red boxes / arrows / freehand marks / text labels indicate exactly what's wrong or where it should be different. Treat the visual annotations as authoritative; they're more precise than any text description.`
+          : "",
+        sidecarRelPath
+          ? `\nA structured context sidecar is at \`${sidecarRelPath}\` (JSON). Read it to get: the iframe URL/viewport at send time, mark coordinates and (when \`captureSource: "iframe"\`) per-mark \`resolvedElements\` — each entry is the DOM element each mark's centre landed on (tag/id/classes/text/outerHTML), so you know EXACTLY which element was being pointed at. Also includes recent browser console output, recent runtime errors, recent network requests (URL/method/status/duration/response sample for fetch + XHR), and recent dev-server stderr. Cross-reference these against the screenshot — the resolvedElements slice + the console + network + server-error slices are the highest-signal clues. A non-2xx response in the network slice or an "Error:" in serverErrors is usually the proximate cause.\nFor visual evolution context, you can also \`Read\` files in \`.builder/snapshots/\` — the Builder auto-saves a PNG of the preview after every Edit/Write/MultiEdit you perform (most recent ~50 are kept), so you can see how the build has changed over time and whether your last edit had the visual effect you expected.`
           : "",
         "",
         "Compare this against the deliverable artifact (Q33), reference anchors (Q34), and non-negotiables (Q35) in spec.md. Adjust the build to match. When done, re-run the spec coverage check and rewrite .builder/review.md with the updated state.",
@@ -1321,6 +1506,23 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
       (e) => setLaunchStatus({ kind: "error", message: e.message }),
     );
   }, []);
+
+  // Preview-tab variant of launchApp: never opens the browser as a side
+  // effect (the iframe IS the preview). Idempotent — clicking Start preview
+  // when the dev server is already running is a no-op rather than popping
+  // a browser window. Distinct from launchApp which preserves the header
+  // Launch app button's "give me the link" gesture.
+  const startPreviewServer = useCallback(async (): Promise<void> => {
+    if (!project) return;
+    if (launchStatus.kind === "starting" || launchStatus.kind === "running") return;
+    setLaunchStatus({ kind: "starting" });
+    void targetAppWriteLaunchScripts(project.path);
+    const r = await targetAppLaunch(project.path, { openBrowser: false });
+    r.match(
+      (info) => setLaunchStatus({ kind: "running", url: info.url }),
+      (e) => setLaunchStatus({ kind: "error", message: e.message }),
+    );
+  }, [project, launchStatus]);
 
   const exportToGithubFlow = useCallback(async (): Promise<void> => {
     if (!project) return;
@@ -1775,7 +1977,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
           echoBackPreview={echoBackPreview}
           onSendBuildFeedback={sendBuildFeedback}
           launchStatus={launchStatus}
-          onStartPreview={() => void launchApp()}
+          onStartPreview={() => void startPreviewServer()}
           onStopPreview={() => void stopLaunchedApp()}
           onCaptureAndAnnotate={() => void captureRegionAndAnnotate()}
           previewRefreshTrigger={previewRefreshTrigger}
@@ -1817,13 +2019,30 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
       {annotationOpen ? (
         <AnnotationModal
           initialImage={annotationInitialImage}
-          onSend={async ({ description, imageBytes }) => {
+          onSend={async ({ description, imageBytes, marks }) => {
             setAnnotationOpen(false);
-            await sendBuildFeedback(description, imageBytes);
+            await sendBuildFeedback(
+              description,
+              imageBytes,
+              marks,
+              annotationCaptureSource,
+            );
           }}
           onClose={() => setAnnotationOpen(false)}
         />
       ) : null}
+
+      <PlanAckModal
+        open={planAckOpen}
+        spec={spec}
+        approvedFileCount={approvedFileIds.size}
+        onConfirm={() => {
+          setPlanAckOpen(false);
+          void performBuild();
+        }}
+        onCancel={() => setPlanAckOpen(false)}
+      />
+
 
       {isDraggingOverWorkspace ? (
         <div
@@ -1833,7 +2052,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
           <div className="rounded-lg border-2 border-dashed border-primary bg-background px-8 py-6 text-center shadow-lg">
             <p className="text-base font-semibold text-foreground">Drop to add</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              PDFs, screenshots, schemas, CSVs, or spreadsheets — Claude reads the structure on
+              PDFs, screenshots, schemas, CSVs, or spreadsheets — Dave reads the structure on
               the next turn.
             </p>
           </div>
@@ -1951,7 +2170,7 @@ function ConcurrentBuildPromptDialog({
           {single
             ? `Run this build alongside it, or stop ${onlyName} first?`
             : "Run this build alongside them, or stop them first?"}
-          {" "}Both can share the same Claude rate-limit budget if you run alongside.
+          {" "}Both can share the same Dave rate-limit budget if you run alongside.
         </p>
         {!single ? (
           <ul className="mt-2 list-disc pl-5 text-sm">

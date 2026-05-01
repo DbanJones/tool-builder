@@ -5,10 +5,16 @@ import { ResultAsync } from "neverthrow";
 // Rust side spawns `npm run dev` in the project folder, watches stdout
 // for the first localhost URL, opens it in the user's browser, and keeps
 // the process alive until target_app_stop is called.
+//
+// `url` is the iframe-facing URL — typically the preview proxy (ADR-0014)
+// which sits in front of the dev server and injects the bridge script.
+// `upstreamUrl` is the raw dev URL; mostly for diagnostics.
 
 export interface LaunchInfo {
-  /** The localhost URL the dev server printed first (e.g. http://localhost:3000). */
+  /** Iframe-facing URL. Proxy when up, raw upstream as a fallback. */
   url: string;
+  /** Raw dev server URL (e.g. http://localhost:3000), pre-proxy. */
+  upstreamUrl: string;
   /** OS process id, useful for the live tail / debug surfaces. */
   pid: number;
 }
@@ -20,9 +26,15 @@ const fromInvokeError = (e: unknown): LaunchError => ({
   message: e instanceof Error ? e.message : String(e),
 });
 
-export function targetAppLaunch(projectPath: string): ResultAsync<LaunchInfo, LaunchError> {
+export function targetAppLaunch(
+  projectPath: string,
+  options: { openBrowser?: boolean } = {},
+): ResultAsync<LaunchInfo, LaunchError> {
   return ResultAsync.fromPromise(
-    invoke<LaunchInfo>("target_app_launch", { projectPath }),
+    invoke<LaunchInfo>("target_app_launch", {
+      projectPath,
+      openBrowser: options.openBrowser ?? true,
+    }),
     fromInvokeError,
   );
 }

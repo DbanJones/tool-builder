@@ -6,16 +6,26 @@
 //
 // State is global to the Builder process — only one target app at a time
 // to keep the live-tail and the "running" indicator coherent.
+//
+// On success, also start the preview proxy (ADR-0014) in front of the dev
+// server. The iframe URL we report is the proxy's, so the bridge script gets
+// injected into HTML responses. The "Open in browser" gesture still uses the
+// proxy URL — same effect as the raw dev URL but with the bridge active.
 
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::State;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::{AppHandle, Emitter, State};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::oneshot;
 use tokio::time::timeout;
+
+use crate::preview_proxy::{self, PreviewProxyState};
+
+const TARGET_SERVER_EVENT: &str = "target-server-event";
 
 const URL_DETECTION_TIMEOUT_SECS: u64 = 45;
 
@@ -34,7 +44,13 @@ impl LaunchState {
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LaunchInfo {
+  /// URL the iframe should load. This is the proxy URL when the proxy is up,
+  /// or the upstream dev URL as a fallback. Either way, novice-facing.
   url: String,
+  /// Raw dev server URL, before the proxy. Useful for diagnostics and for
+  /// the "Open in your default browser" gesture if the user prefers the
+  /// un-instrumented page.
+  upstream_url: String,
   pid: u32,
 }
 
@@ -42,10 +58,22 @@ pub struct LaunchInfo {
 /// browser. Returns once a localhost URL has been detected on stdout (or the
 /// detection times out). The process keeps running; use target_app_stop to
 /// kill it.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TargetServerEvent {
+  source: &'static str,
+  severity: &'static str,
+  message: String,
+  ts: u128,
+}
+
 #[tauri::command]
 pub async fn target_app_launch(
+  app: AppHandle,
   state: State<'_, LaunchState>,
+  proxy_state: State<'_, PreviewProxyState>,
   project_path: String,
+  open_browser: Option<bool>,
 ) -> Result<LaunchInfo, String> {
   // Refuse to start a second instance — only one tail and one URL banner.
   {
@@ -105,8 +133,8 @@ pub async fn target_app_launch(
   let (url_tx, url_rx) = oneshot::channel::<String>();
   let url_tx_shared = std::sync::Arc::new(Mutex::new(Some(url_tx)));
 
-  spawn_drain_task(stdout, "stdout", url_tx_shared.clone());
-  spawn_drain_task(stderr, "stderr", url_tx_shared);
+  spawn_drain_task(stdout, "stdout", url_tx_shared.clone(), app.clone());
+  spawn_drain_task(stderr, "stderr", url_tx_shared, app.clone());
 
   // Stash the child so target_app_stop can kill it.
   {
@@ -117,7 +145,7 @@ pub async fn target_app_launch(
     *guard = Some(child);
   }
 
-  let url = match timeout(
+  let upstream_url = match timeout(
     Duration::from_secs(URL_DETECTION_TIMEOUT_SECS),
     url_rx,
   )
@@ -144,19 +172,63 @@ pub async fn target_app_launch(
     }
   };
 
+  // Stand up the preview proxy in front of the dev server (ADR-0014). The
+  // proxy is best-effort: if it fails to bind, we degrade to the raw upstream
+  // URL and the bridge simply doesn't load. The bridge is dev-time
+  // instrumentation, not a hard dependency.
+  let upstream_port = match parse_port(&upstream_url) {
+    Some(p) => Some(p),
+    None => {
+      log::warn!(
+        "Couldn't parse port from {upstream_url}; preview proxy disabled (bridge will not load)"
+      );
+      None
+    }
+  };
+
+  let proxy_url = if let Some(port) = upstream_port {
+    match preview_proxy::start(port).await {
+      Ok(handle) => {
+        let proxy_url = format!("http://localhost:{}", handle.port);
+        proxy_state.install(handle).await;
+        Some(proxy_url)
+      }
+      Err(e) => {
+        log::warn!("preview proxy failed to start ({e}); falling back to upstream URL");
+        None
+      }
+    }
+  } else {
+    None
+  };
+
+  let serving_url = proxy_url.clone().unwrap_or_else(|| upstream_url.clone());
+
   // Best-effort: open in default browser. If it fails we still return the
-  // URL so the user can copy it from the dashboard.
-  if let Err(e) = open_in_browser(&url) {
-    log::warn!("Failed to open browser at {url}: {e}");
+  // URL so the user can copy it from the dashboard. The Preview tab passes
+  // open_browser=false because its iframe IS the preview surface.
+  if open_browser.unwrap_or(true) {
+    if let Err(e) = open_in_browser(&serving_url) {
+      log::warn!("Failed to open browser at {serving_url}: {e}");
+    }
   }
 
-  Ok(LaunchInfo { url, pid })
+  Ok(LaunchInfo {
+    url: serving_url,
+    upstream_url,
+    pid,
+  })
 }
 
 /// Kill the running target app, if any. Idempotent — safe to call when
-/// nothing is running.
+/// nothing is running. Also tears down the preview proxy so the next launch
+/// gets a fresh bind on a clean port.
 #[tauri::command]
-pub async fn target_app_stop(state: State<'_, LaunchState>) -> Result<(), String> {
+pub async fn target_app_stop(
+  state: State<'_, LaunchState>,
+  proxy_state: State<'_, PreviewProxyState>,
+) -> Result<(), String> {
+  proxy_state.shutdown().await;
   reap_child(&state).await
 }
 
@@ -198,6 +270,7 @@ fn spawn_drain_task<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
   pipe: R,
   source: &'static str,
   url_tx: std::sync::Arc<Mutex<Option<oneshot::Sender<String>>>>,
+  app: AppHandle,
 ) {
   tokio::spawn(async move {
     let mut reader = BufReader::new(pipe).lines();
@@ -210,8 +283,70 @@ fn spawn_drain_task<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
           }
         }
       }
+      if let Some(severity) = classify_server_line(&line) {
+        let now = SystemTime::now()
+          .duration_since(UNIX_EPOCH)
+          .map(|d| d.as_millis())
+          .unwrap_or_default();
+        let event = TargetServerEvent {
+          source,
+          severity,
+          message: line.clone(),
+          ts: now,
+        };
+        if let Err(e) = app.emit(TARGET_SERVER_EVENT, event) {
+          log::debug!("emit target server event failed: {e}");
+        }
+      }
     }
   });
+}
+
+/// Classify a dev-server output line by severity, or return None to skip.
+/// Most lines from `next dev` / `vite` are routine progress reports we don't
+/// want flooding the live tail; only the actionable ones get forwarded.
+pub fn classify_server_line(line: &str) -> Option<&'static str> {
+  let lower = line.to_ascii_lowercase();
+  // Order matters: error wins over warn. Whole-word matches where reasonable
+  // so "error.handler" doesn't trip the error branch.
+  let error_markers = [
+    "error:",
+    "error ",
+    "failed to",
+    "panic:",
+    "panicked",
+    "module not found",
+    "cannot find module",
+    "syntaxerror",
+    "typeerror",
+    "referenceerror",
+    "uncaught",
+    "eaddrinuse",
+    "eacces",
+    "enoent",
+    "fatal",
+  ];
+  if error_markers.iter().any(|m| lower.contains(m)) {
+    return Some("error");
+  }
+  let warn_markers = ["warning:", "warn:", "deprecat"];
+  if warn_markers.iter().any(|m| lower.contains(m)) {
+    return Some("warn");
+  }
+  None
+}
+
+/// Parse the port from a `http(s)://localhost:PORT[/path]` URL.
+fn parse_port(url: &str) -> Option<u16> {
+  for prefix in ["https://localhost:", "http://localhost:"] {
+    if let Some(rest) = url.strip_prefix(prefix) {
+      let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+      if let Ok(p) = digits.parse::<u16>() {
+        return Some(p);
+      }
+    }
+  }
+  None
 }
 
 fn extract_localhost_url(line: &str) -> Option<String> {
@@ -350,5 +485,40 @@ mod tests {
   fn win_script_uses_crlf() {
     assert!(WIN_LAUNCH_SCRIPT.contains("\r\n"));
     assert!(WIN_LAUNCH_SCRIPT.contains("npm run dev"));
+  }
+
+  #[test]
+  fn parses_port_from_localhost_url() {
+    assert_eq!(parse_port("http://localhost:3000"), Some(3000));
+    assert_eq!(parse_port("https://localhost:8443/path"), Some(8443));
+    assert_eq!(parse_port("http://localhost:65535"), Some(65535));
+  }
+
+  #[test]
+  fn parse_port_rejects_non_localhost_or_missing_port() {
+    assert_eq!(parse_port("http://example.com:3000"), None);
+    assert_eq!(parse_port("http://localhost/path"), None);
+    assert_eq!(parse_port(""), None);
+  }
+
+  #[test]
+  fn classify_server_line_flags_errors() {
+    assert_eq!(classify_server_line("Error: cannot find module 'foo'"), Some("error"));
+    assert_eq!(classify_server_line("TypeError: x is undefined"), Some("error"));
+    assert_eq!(classify_server_line("EADDRINUSE: address already in use"), Some("error"));
+    assert_eq!(classify_server_line("Failed to compile"), Some("error"));
+  }
+
+  #[test]
+  fn classify_server_line_flags_warnings() {
+    assert_eq!(classify_server_line("Warning: foo is deprecated"), Some("warn"));
+    assert_eq!(classify_server_line("warn: bar"), Some("warn"));
+  }
+
+  #[test]
+  fn classify_server_line_skips_routine_output() {
+    assert_eq!(classify_server_line(" - Local: http://localhost:3000"), None);
+    assert_eq!(classify_server_line("✓ Compiled in 234ms"), None);
+    assert_eq!(classify_server_line("ready - started server on..."), None);
   }
 }

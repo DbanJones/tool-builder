@@ -205,6 +205,68 @@ export function translate(tool: string, rawInput: string): string {
   }
 }
 
+// ---- redacted diff extraction (PR-5 of D-031) -----------------------------
+// Pull a small snippet out of an Edit / Write / MultiEdit / NotebookEdit
+// rawInput so the live tail can show the novice what actually changed
+// without forcing them to flip on the technical-detail toggle. We intentionally
+// truncate aggressively — this is a reassurance / awareness surface, not a
+// replacement for `git diff`.
+
+const SNIPPET_MAX_LINES = 10;
+const SNIPPET_MAX_CHARS = 400;
+
+function clipSnippet(text: string): string {
+  const lines = text.split("\n").slice(0, SNIPPET_MAX_LINES);
+  let s = lines.join("\n");
+  if (s.length > SNIPPET_MAX_CHARS) s = s.slice(0, SNIPPET_MAX_CHARS) + "\n…";
+  return s;
+}
+
+/**
+ * Returns a short, human-readable preview of what changed in a file-mutating
+ * tool call, or null if no preview can be derived. The snippet is the new
+ * content (Edit's `new_string`, Write's `content`), not a full diff —
+ * reading "+10 lines / -3 lines" without context would be less helpful for
+ * non-coders than showing the actual lines they're getting.
+ */
+export function extractDiffSnippet(tool: string, rawInput: string): string | null {
+  const input = safeParse(rawInput);
+  switch (tool) {
+    case "Edit": {
+      const next = asString(input["new_string"]);
+      return next && next.trim().length > 0 ? clipSnippet(next) : null;
+    }
+    case "Write": {
+      const content = asString(input["content"]);
+      return content && content.trim().length > 0 ? clipSnippet(content) : null;
+    }
+    case "MultiEdit": {
+      // MultiEdit's input has `edits: [{old_string, new_string}]`; concatenate
+      // the new_strings of the first couple of edits so the novice sees a
+      // representative slice without us serialising the whole batch.
+      const edits = input["edits"];
+      if (!Array.isArray(edits)) return null;
+      const fragments: string[] = [];
+      for (const e of edits.slice(0, 2)) {
+        if (e && typeof e === "object") {
+          const ns = asString((e as Record<string, unknown>)["new_string"]);
+          if (ns && ns.trim().length > 0) fragments.push(ns);
+        }
+        if (fragments.join("\n").length >= SNIPPET_MAX_CHARS) break;
+      }
+      if (fragments.length === 0) return null;
+      const joined = fragments.join("\n…\n");
+      return clipSnippet(joined);
+    }
+    case "NotebookEdit": {
+      const next = asString(input["new_source"]);
+      return next && next.trim().length > 0 ? clipSnippet(next) : null;
+    }
+    default:
+      return null;
+  }
+}
+
 function translateMcpOrFallback(tool: string, input: Record<string, unknown>): string {
   // claude exposes MCP tools as `mcp__<server>__<name>`. Strip the prefix and
   // present a slightly friendlier form so the novice doesn't see double

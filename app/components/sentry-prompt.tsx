@@ -24,11 +24,11 @@ export function SentryPrompt({ onDecided }: SentryPromptProps) {
 
   return (
     <Alert className="mx-4 mt-3 mb-1">
-      <AlertTitle>Help improve the Builder?</AlertTitle>
+      <AlertTitle>Help improve Dave-Builder?</AlertTitle>
       <AlertDescription>
         <p className="mb-2 text-xs">
           We can send anonymous error reports to Sentry when something goes wrong, so future
-          builds work better. We never send your chat with Claude, your spec.md, your project
+          builds work better. We never send your chat with Dave, your spec.md, your project
           path, or any file you uploaded — only the error itself and the line of code that
           threw.
         </p>

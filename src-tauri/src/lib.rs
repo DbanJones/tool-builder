@@ -3,6 +3,7 @@ mod deploy;
 mod export;
 mod launch;
 mod orchestrator;
+mod preview_proxy;
 mod sidecar;
 
 use keyring::Entry;
@@ -16,6 +17,7 @@ use deploy::{vercel_deploy, vercel_is_installed};
 use export::{gh_export, gh_is_installed};
 use launch::{target_app_launch, target_app_stop, target_app_write_launch_scripts, LaunchState};
 use orchestrator::{orchestrator_start, orchestrator_stop, OrchestratorState};
+use preview_proxy::PreviewProxyState;
 use sidecar::{sidecar_rpc, sidecar_rpc_stream, spawn_sidecar, SidecarState};
 
 // Bundled placeholder templates copied into every newly created project per
@@ -623,6 +625,183 @@ fn feedback_image_save(
   Ok(format!(".builder/feedback/{filename}"))
 }
 
+// Companion sidecar for feedback_image_save. Writes a JSON sidecar (e.g. mark
+// coordinates resolved to DOM elements, recent console events, iframe
+// snapshot) so the agent can correlate marks with browser-side context.
+//
+// Cap: 1 MB. Sidecars are mostly text + small element snippets; anything
+// bigger is almost certainly a bug or runaway DOM serialisation.
+
+const MAX_FEEDBACK_SIDECAR_BYTES: usize = 1 * 1024 * 1024;
+
+#[tauri::command]
+fn feedback_sidecar_save(
+  project_path: String,
+  content_json: String,
+) -> Result<String, String> {
+  use std::time::{SystemTime, UNIX_EPOCH};
+
+  if content_json.len() > MAX_FEEDBACK_SIDECAR_BYTES {
+    return Err(format!(
+      "feedback_sidecar_save: payload too large ({} bytes, max {})",
+      content_json.len(),
+      MAX_FEEDBACK_SIDECAR_BYTES
+    ));
+  }
+  // Validate it's actually JSON. We don't pin a schema (the schema lives in
+  // TypeScript and is allowed to evolve), but we want to reject obvious
+  // garbage at the trust boundary so the agent's Read tool doesn't choke.
+  serde_json::from_str::<serde_json::Value>(&content_json)
+    .map_err(|e| format!("feedback_sidecar_save: not valid JSON: {e}"))?;
+
+  let project_root = expand_tilde(&project_path);
+  if !project_root.exists() {
+    return Err(format!(
+      "feedback_sidecar_save: project folder not found: {}",
+      project_root.display()
+    ));
+  }
+  let canon_root = project_root
+    .canonicalize()
+    .map_err(|e| format!("feedback_sidecar_save: canonicalise project root: {e}"))?;
+
+  let feedback_dir = canon_root.join(".builder").join("feedback");
+  fs::create_dir_all(&feedback_dir)
+    .map_err(|e| format!("feedback_sidecar_save: create .builder/feedback/: {e}"))?;
+
+  let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+  let filename = format!("fb-{}-{:09}.json", now.as_secs(), now.subsec_nanos());
+  let target = feedback_dir.join(&filename);
+
+  let canon_target_parent = target
+    .parent()
+    .ok_or_else(|| "feedback_sidecar_save: target has no parent".to_string())?
+    .canonicalize()
+    .map_err(|e| format!("feedback_sidecar_save: canonicalise target parent: {e}"))?;
+  if !canon_target_parent.starts_with(&canon_root) {
+    return Err("feedback_sidecar_save: refused — write target escaped project root".to_string());
+  }
+
+  fs::write(&target, content_json.as_bytes())
+    .map_err(|e| format!("feedback_sidecar_save: write: {e}"))?;
+
+  Ok(format!(".builder/feedback/{filename}"))
+}
+
+// Auto-snapshot per agent edit (PR-4 of D-031). Stores a PNG of the iframe's
+// current state to .builder/snapshots/<ts>.png so the agent can read recent
+// snapshots and see how the build evolved over time.
+//
+// Cap: 50 most recent snapshots. Older ones are pruned on each save so the
+// folder doesn't grow unbounded.
+
+const TARGET_SNAPSHOT_KEEP: usize = 50;
+const MAX_TARGET_SNAPSHOT_BYTES: usize = 10 * 1024 * 1024;
+
+#[tauri::command]
+fn target_snapshot_save(
+  project_path: String,
+  content_base64: String,
+  label: Option<String>,
+) -> Result<String, String> {
+  use base64::Engine;
+  use std::time::{SystemTime, UNIX_EPOCH};
+
+  let bytes = base64::engine::general_purpose::STANDARD
+    .decode(content_base64.as_bytes())
+    .map_err(|e| format!("target_snapshot_save: base64 decode failed: {e}"))?;
+  if bytes.len() > MAX_TARGET_SNAPSHOT_BYTES {
+    return Err(format!(
+      "target_snapshot_save: image too large ({} bytes, max {})",
+      bytes.len(),
+      MAX_TARGET_SNAPSHOT_BYTES
+    ));
+  }
+  if bytes.len() < 8 || &bytes[0..8] != b"\x89PNG\r\n\x1a\n" {
+    return Err("target_snapshot_save: payload is not a PNG (magic bytes missing)".to_string());
+  }
+
+  let project_root = expand_tilde(&project_path);
+  if !project_root.exists() {
+    return Err(format!(
+      "target_snapshot_save: project folder not found: {}",
+      project_root.display()
+    ));
+  }
+  let canon_root = project_root
+    .canonicalize()
+    .map_err(|e| format!("target_snapshot_save: canonicalise project root: {e}"))?;
+
+  let snap_dir = canon_root.join(".builder").join("snapshots");
+  fs::create_dir_all(&snap_dir)
+    .map_err(|e| format!("target_snapshot_save: create .builder/snapshots/: {e}"))?;
+
+  let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+  // Sanitise the label to a small, filename-safe slug.
+  let slug = label
+    .map(|l| {
+      l.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .collect::<String>()
+        .chars()
+        .take(40)
+        .collect::<String>()
+    })
+    .filter(|s| !s.is_empty());
+  let filename = match slug {
+    Some(s) => format!("snap-{}-{:09}-{s}.png", now.as_secs(), now.subsec_nanos()),
+    None => format!("snap-{}-{:09}.png", now.as_secs(), now.subsec_nanos()),
+  };
+  let target = snap_dir.join(&filename);
+
+  let canon_target_parent = target
+    .parent()
+    .ok_or_else(|| "target_snapshot_save: target has no parent".to_string())?
+    .canonicalize()
+    .map_err(|e| format!("target_snapshot_save: canonicalise target parent: {e}"))?;
+  if !canon_target_parent.starts_with(&canon_root) {
+    return Err("target_snapshot_save: refused — write target escaped project root".to_string());
+  }
+
+  fs::write(&target, &bytes).map_err(|e| format!("target_snapshot_save: write: {e}"))?;
+
+  // Prune old snapshots so the folder doesn't grow unbounded.
+  if let Err(e) = prune_snapshots(&snap_dir, TARGET_SNAPSHOT_KEEP) {
+    log::debug!("target_snapshot_save: prune failed (non-fatal): {e}");
+  }
+
+  Ok(format!(".builder/snapshots/{filename}"))
+}
+
+fn prune_snapshots(dir: &std::path::Path, keep: usize) -> Result<(), String> {
+  let entries = fs::read_dir(dir).map_err(|e| format!("read_dir: {e}"))?;
+  let mut snaps: Vec<(std::time::SystemTime, std::path::PathBuf)> = vec![];
+  for entry in entries.flatten() {
+    let meta = match entry.metadata() {
+      Ok(m) => m,
+      Err(_) => continue,
+    };
+    if !meta.is_file() {
+      continue;
+    }
+    let path = entry.path();
+    if path.extension().and_then(|s| s.to_str()) != Some("png") {
+      continue;
+    }
+    let mtime = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+    snaps.push((mtime, path));
+  }
+  if snaps.len() <= keep {
+    return Ok(());
+  }
+  snaps.sort_by(|a, b| a.0.cmp(&b.0));
+  let to_remove = snaps.len() - keep;
+  for (_, p) in snaps.into_iter().take(to_remove) {
+    let _ = fs::remove_file(p);
+  }
+  Ok(())
+}
+
 // Project creation file-system work per build-order.md A4c and Flow B AC1-AC3.
 // The DB insert + audit row are handled by the sidecar (`projects.create`); the
 // webview orchestrates the two halves via lib/project/index.ts.
@@ -811,6 +990,7 @@ pub fn run() {
       app.manage(state);
       app.manage(OrchestratorState::new());
       app.manage(LaunchState::new());
+      app.manage(PreviewProxyState::new());
 
       // Tauri auto-updater (Flow J AC1-AC3). The actual signed feed +
       // pubkey are provisioned in Phase E0 (deferred per human direction
@@ -840,6 +1020,8 @@ pub fn run() {
       project_create_folder,
       file_save_uploaded,
       feedback_image_save,
+      feedback_sidecar_save,
+      target_snapshot_save,
       capture_region_to_png,
       read_target_state,
       read_review_md,
