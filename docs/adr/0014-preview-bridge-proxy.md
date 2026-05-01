@@ -1,6 +1,7 @@
 # ADR-0014: Preview bridge via a Builder-owned HTTP proxy
 
 **Status**: accepted, 2026-05-01.
+**Spec sections triggered**: `spec.md` §3 Flow K AC4 (annotation save), AC9 (Preview toolbar), AC11 (region capture). Per SC17.
 
 ## Context
 

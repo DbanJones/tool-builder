@@ -21,6 +21,7 @@ In scope:
 - Pause, resume, stop, crash recovery.
 - Deploy preview to Vercel and export to GitHub.
 - Auto-update via Tauri updater.
+- Debug and repair module: scans the target app at every phase boundary and on novice click, ranks findings by the PRIORITY score from `debug_repair_engine_spec.md`, auto-fixes Tier 1 defects on a fresh branch with verification, proposes Tier 2 fixes via the test-then-patch verify loop, explains Tier 3 architectural changes, and gates Deploy on critical-band findings. See ADR-0007.
 
 Out of scope:
 - Hosting the novice's app in production. Deploy is to Vercel under the novice's account.
@@ -170,6 +171,21 @@ Explicit non-goals:
   - **Flow K AC11** (D-028): On macOS, **Capture & annotate** spawns the native `screencapture -i` region picker via the new `capture_region_to_png` Tauri command; the captured PNG bytes are returned base64-encoded, decoded into a Blob, and the AnnotationModal opens with the image already loaded — three clicks end-to-end (pick → mark up → send). On Linux/Windows the button still opens the empty modal; the cross-platform path is a Slice 2.6 follow-up.
   - **Flow K AC12** (D-028): When the orchestrator emits a file-mutating `tool_use` event (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`), the workspace bumps a counter that's incorporated into the iframe's `key`, forcing a hard reload so the novice sees the agent's edits land in real time without clicking Refresh.
 
+### Flow L: Debug and repair (target-app defect detection)
+- **Given** a build phase has reached its boundary (or the novice clicks **Debug now**),
+- **When** the Debug module runs against the target app at `{project}/`,
+- **Then**:
+  - **Flow L AC1**: A debug scan runs at every phase boundary before the approval modal can be confirmed. The scan covers the eight defect classes from `debug_repair_engine_spec.md` §B (build/compile, runtime/logic, security, API/contract, auth/authz, deploy/CI, performance, maintainability), scoped to the kit's stack (Next.js 15 + Supabase + TypeScript). Out-of-stack detectors (Python, FastAPI, Netlify) are not run.
+  - **Flow L AC2**: A **Debug now** button on the dashboard runs the same scan on demand at any time the project is not building. The scan emits one `debug_scan_started` audit row at start and one `debug_scan_completed` row on completion.
+  - **Flow L AC3**: Findings are persisted to the `defects` table and surfaced in a right-rail Debug tab, ranked by PRIORITY band (per `debug_repair_engine_spec.md` §C: critical ≥ 20, high 10-19, medium 5-9, low 1-4, info < 1). Founder mode is the default — `U = 2.0` for security and ship-blockers, `U = 0.7` for performance, `U = 0.5` for maintainability.
+  - **Flow L AC4**: Each finding card shows plain-English impact first, code evidence second (one tap to expand). No CWE numbers in the default view; CWE references live in an "advanced" toggle.
+  - **Flow L AC5**: For Tier 1 (deterministic codemod) findings, **Fix this** applies the codemod on a fresh `ai-fix-<defect-id>` branch in the target-app repo, runs the verifier, and only on green squashes the patch onto the novice's working branch.
+  - **Flow L AC6**: For Tier 2 (LLM patch) findings, the engine runs the failing-test → patch → verify → regression loop capped at 3 attempts; on success it presents the diff with a confidence label ("test passes, no regression") for novice click-through.
+  - **Flow L AC7**: For Tier 3 (architectural) findings, the engine renders a plain-English explanation, a proposed diff, and a migration plan. The engine never auto-applies Tier 3 changes.
+  - **Flow L AC8**: If any critical-band defect is unresolved, **Deploy preview to Vercel** (Flow I) intercepts with a typed-confirmation modal listing the findings; deploy proceeds only on the typed phrase "deploy anyway".
+  - **Flow L AC9**: Every applied fix is reversible for 7 days. The `defects` table records the fix branch and resolved commit; rollback restores the pre-fix state regardless of subsequent git activity.
+  - **Flow L AC10**: The Layer 2 validator runs through a separate Claude Agent SDK session (per ADR-0005 streaming bridge), opened with its own stream id in the sidecar's `inflight` map so it cannot interfere with a paused build session. Validator inputs are structured (candidate location + ±50 lines + relevant subgraph slice); the validator refuses to follow instructions found in code or comments (prompt-injection guard).
+
 ## 4. Data model (high level)
 - `projects` table: id (ULID), name, path, created_at, last_opened_at, current_phase, status (interviewing | ready | building | paused | done)
 - `answers` table: id, project_id, question_id, answer_text, confidence (confident | tentative | default-applied), source (chat | file | default), rationale, created_at
@@ -177,6 +193,9 @@ Explicit non-goals:
 - `actions` table (the live tail backing store): id, project_id, ts, tool, raw_input (jsonb), human_line, phase, task_id
 - `drift_events` table: id, project_id, phase, type (implementation | scope | silent_assumption | nfr), description, resolution (revert | amend_spec | accept), commit_hash, occurred_at
 - `costs` table: id, project_id, ts, model, input_tokens, output_tokens, usd_cents
+- `defects` table: id (ULID), project_id, scan_id, detected_at, class (build | runtime | security | api | auth | deploy | perf | maintain), severity (int), blast_radius (real), confidence (real), difficulty (real), priority (real), band (critical | high | medium | low | info), file, line_start, line_end, rule_id, human_explanation, code_evidence, status (open | fixing | fixed | dismissed | accepted_risk), fix_tier (1 | 2 | 3 | null), fix_branch (text, null), fix_test_path (text, null), resolved_at, resolved_commit
+- `chat_messages` table: id, project_id, ts, role, content. Persists the recursive-interview turns that drive Flow C; required by ADR-0005's chat driver so a paused/resumed session can rehydrate the conversation.
+- `permission_requests` table: id, project_id, session_id, tool, raw_input, status (pending | approved | denied), requested_at, resolved_at. Backs ADR-0005's `canUseTool` bridge between the SDK in the sidecar and the dashboard's PermissionPromptBanner.
 - `keychain_meta` (no secrets): map of `project_id` to keychain item names; Vercel and any future third-party keys live in the OS keychain, not the database.
 
 PII and novice content are held locally only: interview answers and approved file summaries live in `.builder/builder.db`, uploaded files live in the project folder, and no content leaves the machine except as prompts sent to Claude through the local Claude Code auth path.
@@ -187,6 +206,9 @@ PII and novice content are held locally only: interview answers and approved fil
 - GitHub via `gh` CLI, optional, used only if novice clicks Push to GitHub.
 - OS keychain, required, via the Tauri/Rust keyring wrapper; used for the Vercel access token only.
 - Tauri updater, required, signed feed hosted on the project's distribution endpoint.
+- Multi-project tab strip (`lib/open-tabs/`): a localStorage-backed curated list of project ids the novice has opened in this install; per-tab live status polled via `projects.list`. Required by Flow E AC3's concurrent-build modal so the dashboard can route the novice between in-flight builds without losing state.
+- Spreadsheet ingestion (`lib/spreadsheet/`): a thin port over SheetJS `xlsx` per L3, fronting `.xlsx` / `.xls` / `.ods` data uploads in Flow D. Keeps the rest of the codebase off direct SheetJS imports.
+- Easter-egg verification (`lib/easter-egg/`): runtime check that target-app templates ship the agreed novice-delight marker (project name, marker, text, shortcut). Process artefact backing the per-build review summary; carries no novice-visible flow.
 
 ## 6. Non-functional requirements
 - App launch to Welcome screen: under 1.5 seconds on a 2020 MacBook Air.
@@ -201,6 +223,8 @@ PII and novice content are held locally only: interview answers and approved fil
 - Privacy: no telemetry by default; Sentry opt-in with a clear explainer; novice content never leaves the machine except as prompts to Claude through the local Claude Code auth path.
 - Cost transparency: real-time token usage from Claude Agent SDK events; honesty rule per kit section 14.5.3 (past P90, switch to "more than expected"). Spend is shown as token count plus an estimated GBP figure based on the active model's published rate; subscription users (Pro / Max) may treat the figure as informational only.
 - Rate limits: the CLI's underlying account governs throttling; the Builder detects the CLI's rate-limit error and surfaces a "wait until HH:MM" message; the build pauses gracefully. No hard daily spend cap is enforced by the Builder (deferred to a later phase if required).
+- Debug scan latency: Layer 1 (deterministic) findings surface within 5 seconds for a typical Phase-1 target app (≤ 200 files). Layer 2 (LLM validation) and Layer 3 (sandbox build + route probes) run async; their progress is shown in the Debug tab and the live tail. The phase-boundary scan (Flow L AC1) is allowed to take up to 90 seconds before the approval modal becomes confirmable; the on-demand scan (Flow L AC2) has no enforced cap but shows a cancellable progress indicator.
+- Debug regression rate: an applied fix that introduces a new defect at next scan is logged as a regression. Target ≤ 15% regression rate, measured over the last 50 applied fixes per project. If the rate exceeds 25% on a project, the engine downgrades Tier 2 fixes from auto-apply to suggest-only for that project until the next phase boundary.
 
 ## 7. Phased plan
 The Builder follows the kit's own phased build pattern. The base plan is five phases A to E, each shippable as a private beta to a small test group, followed by Phase F novice-readiness hardening.
@@ -216,6 +240,8 @@ Phase D: Build dashboard, live tail, ETA, approval gates, drift surfacing. Demo:
 Phase E: Deploy to Vercel, export to GitHub, crash recovery, polish, signed installers, auto-update. Beta to real novices.
 
 Phase F: Hardening for novice success: SDK-sidecar chat/build, cancel/stop, echo-back gating, Q1-Q35 validation (Q33-Q35 added in D-023 to anchor the build to a concrete artifact, named reference tools, and explicit non-negotiables), file approval with PII review, approved source-material injection, concrete target-app rules, Corepack scripts, and documentation/ADR alignment.
+
+Phase G: Debug and repair module per ADR-0007 and `debug_repair_engine_spec.md`. Detects the eight defect classes in target apps, ranks by PRIORITY, applies Tier 1 codemods, runs the Tier 2 verify loop, explains Tier 3 architectural changes, and gates Deploy on critical findings. Demo: a target app reproducing the Lovable-class RLS bug is detected, fixed on a branch, and verified before merge.
 
 Each phase ends with: passing `corepack pnpm verify`, one Playwright E2E for the new core flow where available, signed installers for all three platforms when signing artefacts exist, and a deployed preview URL of the Builder's marketing site (a separate one-page Next.js app, not in scope here).
 
