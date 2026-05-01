@@ -1,7 +1,16 @@
 "use client";
 
-import { Loader2 } from "lucide-react";
-import type { ReactNode } from "react";
+import {
+  ExternalLink,
+  Loader2,
+  Maximize2,
+  Minimize2,
+  Pencil,
+  Play,
+  RotateCw,
+  Square,
+} from "lucide-react";
+import { useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import type { HistoryActionEntry, TargetState } from "@/lib/build-state";
@@ -10,13 +19,25 @@ import type { TodoItem } from "@/lib/orchestrator";
 import { FilePanel } from "./file-panel";
 import type { IngestedFile } from "@/lib/files/types";
 
+export interface EchoBackPreview {
+  deliverable: string | null;
+  anchors: string | null;
+  nonNegotiables: string | null;
+}
+
+export type LaunchStatus =
+  | { kind: "idle" }
+  | { kind: "starting" }
+  | { kind: "running"; url: string }
+  | { kind: "error"; message: string };
+
 // Tabbed right rail. The parent owns the active tab; this component just
 // renders the strip and delegates content to the relevant panel.
 
 // "plan" tab is now Plan + live Status (the activity tail) on one tab so
 // the user never has to switch to see what's happening. "activity" was
 // dropped as a standalone — its content lives at the bottom of "plan".
-export type RightTab = "spec" | "plan" | "review" | "files";
+export type RightTab = "spec" | "plan" | "preview" | "review" | "files";
 
 interface RightRailProps {
   tab: RightTab;
@@ -34,10 +55,24 @@ interface RightRailProps {
   actions: readonly HistoryActionEntry[];
   showTechnicalDetail: boolean;
   isRunning: boolean;
+  // Preview (D-027 Slice 2 of the visual feedback feature)
+  launchStatus: LaunchStatus;
+  onStartPreview: () => void;
+  onStopPreview: () => void;
+  onCaptureAndAnnotate: () => void;
+  /** Bumped by the parent on each agent edit so the iframe re-keys and
+   *  reloads. Counter, not a date — monotonic is all the iframe needs. */
+  previewRefreshTrigger: number;
+  /** When true, the workspace has hidden the chat column to give the iframe
+   *  the full window width — controlled by the parent. */
+  previewMaximized: boolean;
+  onTogglePreviewMaximize: () => void;
   // Review
   reviewMarkdown: string | null;
   reviewIsRunning: boolean;
   onBuildMissingPieces: () => void;
+  echoBackPreview: EchoBackPreview;
+  onSendBuildFeedback: (feedback: string) => void;
   // Files
   files: readonly IngestedFile[];
   onFilesDropped: (files: readonly IngestedFile[], rawFiles: readonly File[]) => void;
@@ -49,6 +84,11 @@ export function RightRail(props: RightRailProps) {
   const tabs: { id: RightTab; label: string; visible: boolean }[] = [
     { id: "spec", label: "Spec", visible: true },
     { id: "plan", label: "Plan & status", visible: hasStarted },
+    // Preview is always available — the panel itself handles the
+    // not-yet-launched state with a Start preview button. Gating on
+    // hasStarted hid the tab on projects that had source code on disk
+    // (e.g. recovered or re-created builds) but no session id yet.
+    { id: "preview", label: "Preview", visible: true },
     { id: "review", label: "Review", visible: hasStarted && props.reviewMarkdown !== null },
     { id: "files", label: "Files", visible: true },
   ];
@@ -89,11 +129,24 @@ export function RightRail(props: RightRailProps) {
             isRunning={props.isRunning}
           />
         )}
+        {tab === "preview" && (
+          <PreviewPanel
+            launchStatus={props.launchStatus}
+            onStart={props.onStartPreview}
+            onStop={props.onStopPreview}
+            onCaptureAndAnnotate={props.onCaptureAndAnnotate}
+            externalRefreshTrigger={props.previewRefreshTrigger}
+            isMaximized={props.previewMaximized}
+            onToggleMaximize={props.onTogglePreviewMaximize}
+          />
+        )}
         {tab === "review" && props.reviewMarkdown !== null && (
           <ReviewPanel
             markdown={props.reviewMarkdown}
             isRunning={props.reviewIsRunning}
             onBuildMissing={props.onBuildMissingPieces}
+            echoBackPreview={props.echoBackPreview}
+            onSendBuildFeedback={props.onSendBuildFeedback}
           />
         )}
         {tab === "files" && (
@@ -211,13 +264,21 @@ function PlanAndStatusPanel({
           ) : (
             <ul className="space-y-1">
               {recentActions.map((a) => (
-                <li key={a.id}>
-                  <div>{a.humanLine ?? a.tool}</div>
-                  {showTechnicalDetail ? (
-                    <div className="font-mono text-[10px] text-muted-foreground">
-                      {a.tool} · {a.rawInput}
-                    </div>
-                  ) : null}
+                <li key={a.id} className="flex items-baseline gap-2">
+                  <time
+                    dateTime={new Date(a.ts).toISOString()}
+                    className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70"
+                  >
+                    {formatActionTime(a.ts)}
+                  </time>
+                  <div className="min-w-0 flex-1">
+                    <div>{a.humanLine ?? a.tool}</div>
+                    {showTechnicalDetail ? (
+                      <div className="font-mono text-[10px] text-muted-foreground">
+                        {a.tool} · {a.rawInput}
+                      </div>
+                    ) : null}
+                  </div>
                 </li>
               ))}
             </ul>
@@ -243,14 +304,165 @@ function PlanAndStatusPanel({
   );
 }
 
+function PreviewPanel({
+  launchStatus,
+  onStart,
+  onStop,
+  onCaptureAndAnnotate,
+  externalRefreshTrigger,
+  isMaximized,
+  onToggleMaximize,
+}: {
+  launchStatus: LaunchStatus;
+  onStart: () => void;
+  onStop: () => void;
+  onCaptureAndAnnotate: () => void;
+  externalRefreshTrigger: number;
+  isMaximized: boolean;
+  onToggleMaximize: () => void;
+}) {
+  // Bumping the key remounts the iframe — cheapest way to force a reload
+  // (history-preserving src=src reassignment is finicky inside Tauri's
+  // webview).
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  if (launchStatus.kind === "running") {
+    return (
+      <>
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b px-4 py-2">
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold">Live preview</h2>
+            <p className="truncate font-mono text-[11px] text-muted-foreground" title={launchStatus.url}>
+              {launchStatus.url}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setRefreshKey((k) => k + 1)}
+              aria-label="Refresh preview"
+              title="Reload the iframe"
+              className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <RotateCw className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                window.open(launchStatus.url, "_blank", "noopener,noreferrer")
+              }
+              aria-label="Open in external browser"
+              title="Open in your default browser"
+              className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onClick={onToggleMaximize}
+              aria-label={isMaximized ? "Restore split view" : "Maximize preview"}
+              aria-pressed={isMaximized}
+              title={
+                isMaximized
+                  ? "Restore the chat column (ESC also restores)"
+                  : "Hide the chat column to give the preview full width"
+              }
+              className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              {isMaximized ? (
+                <Minimize2 className="h-3.5 w-3.5" aria-hidden="true" />
+              ) : (
+                <Maximize2 className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+            </button>
+            <Button size="sm" variant="outline" onClick={onCaptureAndAnnotate}>
+              <Pencil className="mr-1 h-3 w-3" />
+              Capture & annotate
+            </Button>
+            <Button size="sm" variant="outline" onClick={onStop}>
+              <Square className="mr-1 h-3 w-3" />
+              Stop preview
+            </Button>
+          </div>
+        </div>
+        <div className="flex min-h-0 flex-1 bg-muted/40">
+          <iframe
+            key={refreshKey + externalRefreshTrigger}
+            src={launchStatus.url}
+            title="Live preview of the target app"
+            // Sandbox tokens cover the basic functioning of an SPA; the
+            // critical addition over the original list is allow-pointer-lock,
+            // without which any game that uses requestPointerLock (FPS-style
+            // mouse capture) loads but won't initialize. allow-downloads
+            // covers apps that let the novice export results.
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-pointer-lock allow-downloads allow-orientation-lock allow-presentation"
+            // Permissions Policy via the `allow` attribute — distinct from
+            // sandbox. Lets the framed app actually USE features it has
+            // permission for (sandbox just gates whether the API exists at
+            // all). Critical for canvas/WebGL games and media playback.
+            allow="fullscreen; pointer-lock; autoplay; gamepad; clipboard-read; clipboard-write"
+            className="h-full w-full border-0 bg-background"
+          />
+        </div>
+        <p className="shrink-0 border-t px-4 py-1.5 text-[10px] text-muted-foreground">
+          Cmd-Shift-4 to grab a region → Cmd-V into the annotate window. (Auto-capture from the iframe is a Slice 2.5 follow-up.)
+        </p>
+      </>
+    );
+  }
+
+  if (launchStatus.kind === "starting") {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-sm text-muted-foreground">
+        <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
+        <p>Starting the dev server…</p>
+      </div>
+    );
+  }
+
+  if (launchStatus.kind === "error") {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center text-sm">
+        <p className="text-destructive">Preview failed to start.</p>
+        <p className="font-mono text-xs text-muted-foreground">{launchStatus.message}</p>
+        <Button size="sm" variant="outline" onClick={onStart}>
+          <Play className="mr-1 h-3 w-3" />
+          Try again
+        </Button>
+      </div>
+    );
+  }
+
+  // idle
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
+      <p className="text-sm text-muted-foreground">
+        See your built app live, right inside the Builder.
+      </p>
+      <p className="text-xs text-muted-foreground">
+        Click Start preview to spawn the target app's dev server. Once it's running,
+        the iframe below renders it; refresh it whenever the agent lands an edit.
+      </p>
+      <Button size="sm" onClick={onStart}>
+        <Play className="mr-1 h-3 w-3" />
+        Start preview
+      </Button>
+    </div>
+  );
+}
+
 function ReviewPanel({
   markdown,
   isRunning,
   onBuildMissing,
+  echoBackPreview,
+  onSendBuildFeedback,
 }: {
   markdown: string;
   isRunning: boolean;
   onBuildMissing: () => void;
+  echoBackPreview: EchoBackPreview;
+  onSendBuildFeedback: (feedback: string) => void;
 }) {
   const counts = parseReviewCounts(markdown);
   const hasGaps = (counts?.partial ?? 0) + (counts?.missing ?? 0) > 0;
@@ -271,10 +483,100 @@ function ReviewPanel({
           </Button>
         ) : null}
       </div>
-      <pre className="flex-1 overflow-auto whitespace-pre-wrap break-words bg-muted/40 px-4 py-3 text-[11px] leading-relaxed">
-        {markdown}
-      </pre>
+      <div className="flex-1 overflow-auto">
+        <BuildPreviewVerifier
+          preview={echoBackPreview}
+          isRunning={isRunning}
+          onSendFeedback={onSendBuildFeedback}
+        />
+        <pre className="whitespace-pre-wrap break-words bg-muted/40 px-4 py-3 text-[11px] leading-relaxed">
+          {markdown}
+        </pre>
+      </div>
     </>
+  );
+}
+
+function BuildPreviewVerifier({
+  preview,
+  isRunning,
+  onSendFeedback,
+}: {
+  preview: EchoBackPreview;
+  isRunning: boolean;
+  onSendFeedback: (feedback: string) => void;
+}) {
+  const [feedback, setFeedback] = useState("");
+  const splitLines = (text: string): string[] =>
+    text
+      .split(/\r?\n/)
+      .map((s) => s.trim().replace(/^[-*]\s*/, ""))
+      .filter((s) => s.length > 0);
+  const send = (): void => {
+    const trimmed = feedback.trim();
+    if (trimmed.length === 0) return;
+    onSendFeedback(trimmed);
+    setFeedback("");
+  };
+  // Hide the verifier entirely when none of the three anchor answers exist
+  // — the novice has no reference point to compare against, and an empty
+  // block would just be noise.
+  if (
+    preview.deliverable === null &&
+    preview.anchors === null &&
+    preview.nonNegotiables === null
+  ) {
+    return null;
+  }
+  return (
+    <div className="border-b px-4 py-3 text-xs">
+      <h3 className="mb-2 text-sm font-semibold">Does the build match what you pictured?</h3>
+      {preview.deliverable !== null ? (
+        <div className="mb-2">
+          <p className="font-medium uppercase tracking-wide text-[10px] text-muted-foreground">
+            You said you wanted
+          </p>
+          <p className="mt-0.5">{preview.deliverable}</p>
+        </div>
+      ) : null}
+      {preview.nonNegotiables !== null ? (
+        <div className="mb-2">
+          <p className="font-medium uppercase tracking-wide text-[10px] text-muted-foreground">
+            Non-negotiables to verify
+          </p>
+          <ul className="mt-0.5 list-disc pl-5">
+            {splitLines(preview.nonNegotiables).map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      <div className="mt-3">
+        <label
+          htmlFor="build-feedback"
+          className="mb-1 block font-medium uppercase tracking-wide text-[10px] text-muted-foreground"
+        >
+          Anything missing or wrong? Tell the agent
+        </label>
+        <textarea
+          id="build-feedback"
+          value={feedback}
+          onChange={(e) => setFeedback(e.target.value)}
+          placeholder="e.g. it built a web view but I asked for an Excel file"
+          rows={3}
+          className="w-full resize-none rounded-md border bg-background px-2 py-1.5 text-xs"
+        />
+        <div className="mt-1.5 flex justify-end">
+          <Button
+            size="sm"
+            disabled={isRunning || feedback.trim().length === 0}
+            onClick={send}
+          >
+            Send feedback
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -292,6 +594,16 @@ function parseReviewCounts(
     partial: Number(partial[1]),
     missing: Number(missing[1]),
   };
+}
+
+function formatActionTime(ts: number): string {
+  const d = new Date(ts);
+  return d.toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
 }
 
 function PlanStatusIcon({ status }: { status: TodoItem["status"] }) {

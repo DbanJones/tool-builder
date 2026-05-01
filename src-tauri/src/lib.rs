@@ -1,6 +1,7 @@
 mod chat;
 mod deploy;
 mod export;
+mod launch;
 mod orchestrator;
 mod sidecar;
 
@@ -13,6 +14,7 @@ use tauri::Manager;
 use chat::{chat_send, chat_stop};
 use deploy::{vercel_deploy, vercel_is_installed};
 use export::{gh_export, gh_is_installed};
+use launch::{target_app_launch, target_app_stop, target_app_write_launch_scripts, LaunchState};
 use orchestrator::{orchestrator_start, orchestrator_stop, OrchestratorState};
 use sidecar::{sidecar_rpc, sidecar_rpc_stream, spawn_sidecar, SidecarState};
 
@@ -23,6 +25,7 @@ const TEMPLATE_CLAUDE_MD: &str = include_str!("../templates/CLAUDE.md");
 const TEMPLATE_SPEC_MD: &str = include_str!("../templates/spec.md");
 const TEMPLATE_BUILDER_STATE: &str = include_str!("../templates/builder-state.json");
 const TEMPLATE_RULES_README: &str = include_str!("../templates/rules-README.md");
+const TEMPLATE_DAVID_EASTER_EGG: &str = include_str!("../templates/david-easter-egg.md");
 
 // Builder-local keychain commands. See ADR-0003.
 //
@@ -490,6 +493,136 @@ fn file_save_uploaded(
     .map_err(|e| format!("file_save_uploaded: canonicalise: {e}"))
 }
 
+// Region screen capture for the Preview tab's "Capture & annotate" button
+// (D-028). Spawns macOS's native `screencapture -i <file>` which puts a
+// crosshair region picker on top of every window — the novice drags a
+// rectangle over the iframe (or anywhere on screen), screencapture writes
+// the PNG to a temp file, we read the bytes and return them base64-encoded
+// so the webview can construct a Blob and seed the AnnotationModal.
+//
+// macOS-only for slice 2.5. Linux/Windows fall back to the empty modal +
+// drag-drop / paste flow until we add a cross-platform path (likely the
+// `xcap` Rust crate, deferred to a later slice).
+
+#[tauri::command]
+fn capture_region_to_png() -> Result<String, String> {
+  use base64::Engine;
+  use std::process::Command;
+  use std::time::{SystemTime, UNIX_EPOCH};
+
+  if !cfg!(target_os = "macos") {
+    return Err(
+      "Region capture is currently macOS-only. Drop or paste a screenshot in the annotate window instead."
+        .to_string(),
+    );
+  }
+
+  let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+  let temp_path = std::env::temp_dir()
+    .join(format!("builder-capture-{}-{:09}.png", now.as_secs(), now.subsec_nanos()));
+
+  // -i: interactive region picker (drag to select; ESC cancels)
+  // -t png: explicit PNG (default, but be defensive)
+  let status = Command::new("screencapture")
+    .arg("-i")
+    .arg("-t")
+    .arg("png")
+    .arg(&temp_path)
+    .status()
+    .map_err(|e| format!("failed to spawn screencapture: {e}"))?;
+
+  if !status.success() || !temp_path.exists() {
+    // User pressed ESC, or the picker was dismissed without a region.
+    // No file means no capture; clean up if a stub was created.
+    let _ = fs::remove_file(&temp_path);
+    return Err("Capture cancelled.".to_string());
+  }
+
+  let bytes = fs::read(&temp_path).map_err(|e| format!("read capture: {e}"))?;
+  let _ = fs::remove_file(&temp_path);
+
+  if bytes.is_empty() {
+    return Err("Capture produced an empty file.".to_string());
+  }
+
+  Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+}
+
+// Visual-feedback PNG writer (Slice 1 of the annotation tool — D-026).
+// The novice pauses a build, annotates a screenshot of the built app inside
+// the Builder, and clicks Send. This command writes the flattened PNG
+// (image + annotation overlay, base64-encoded by the webview) into
+// {project}/.builder/feedback/ and returns the relative path the chat prompt
+// references so Claude's Read tool can pick it up. Path-sandboxed: the
+// webview supplies project_path; we always write to {project}/.builder/feedback/.
+//
+// Cap: 10 MB per AC6 of the D-026 spec — annotated screenshots over that
+// are vanishingly unlikely from a UI canvas; refusing them protects against
+// accidental huge uploads from a paste of the wrong thing.
+
+const MAX_FEEDBACK_IMAGE_BYTES: usize = 10 * 1024 * 1024;
+
+#[tauri::command]
+fn feedback_image_save(
+  project_path: String,
+  content_base64: String,
+) -> Result<String, String> {
+  use base64::Engine;
+  use std::time::{SystemTime, UNIX_EPOCH};
+
+  let bytes = base64::engine::general_purpose::STANDARD
+    .decode(content_base64.as_bytes())
+    .map_err(|e| format!("feedback_image_save: base64 decode failed: {e}"))?;
+  if bytes.len() > MAX_FEEDBACK_IMAGE_BYTES {
+    return Err(format!(
+      "feedback_image_save: image too large ({} bytes, max {})",
+      bytes.len(),
+      MAX_FEEDBACK_IMAGE_BYTES
+    ));
+  }
+  if bytes.len() < 8 || &bytes[0..8] != b"\x89PNG\r\n\x1a\n" {
+    return Err("feedback_image_save: payload is not a PNG (magic bytes missing)".to_string());
+  }
+
+  let project_root = expand_tilde(&project_path);
+  if !project_root.exists() {
+    return Err(format!(
+      "feedback_image_save: project folder not found: {}",
+      project_root.display()
+    ));
+  }
+  let canon_root = project_root
+    .canonicalize()
+    .map_err(|e| format!("feedback_image_save: canonicalise project root: {e}"))?;
+
+  let feedback_dir = canon_root.join(".builder").join("feedback");
+  fs::create_dir_all(&feedback_dir)
+    .map_err(|e| format!("feedback_image_save: create .builder/feedback/: {e}"))?;
+
+  let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+  let filename = format!("fb-{}-{:09}.png", now.as_secs(), now.subsec_nanos());
+  let target = feedback_dir.join(&filename);
+
+  // Defence in depth: confirm the resolved write target is still under the
+  // project root after canonicalisation (catches symlink games + any future
+  // filename that sneaks in `..`). The filename is generated server-side so
+  // this is belt-and-braces, but cheap.
+  let canon_target_parent = target
+    .parent()
+    .ok_or_else(|| "feedback_image_save: target has no parent".to_string())?
+    .canonicalize()
+    .map_err(|e| format!("feedback_image_save: canonicalise target parent: {e}"))?;
+  if !canon_target_parent.starts_with(&canon_root) {
+    return Err("feedback_image_save: refused — write target escaped project root".to_string());
+  }
+
+  fs::write(&target, &bytes).map_err(|e| format!("feedback_image_save: write: {e}"))?;
+
+  // Return the path relative to the project root so the chat message reads
+  // ".builder/feedback/fb-...png" (Claude's Read tool resolves it inside cwd).
+  Ok(format!(".builder/feedback/{filename}"))
+}
+
 // Project creation file-system work per build-order.md A4c and Flow B AC1-AC3.
 // The DB insert + audit row are handled by the sidecar (`projects.create`); the
 // webview orchestrates the two halves via lib/project/index.ts.
@@ -609,6 +742,11 @@ fn project_create_folder(name: String, folder: String) -> Result<String, String>
     .map_err(|e| format!("failed to write .builder/state.json: {e}"))?;
   fs::write(project_root.join("rules").join("README.md"), TEMPLATE_RULES_README)
     .map_err(|e| format!("failed to write rules/README.md: {e}"))?;
+  fs::write(
+    project_root.join("rules").join("david-easter-egg.md"),
+    TEMPLATE_DAVID_EASTER_EGG,
+  )
+  .map_err(|e| format!("failed to write rules/david-easter-egg.md: {e}"))?;
 
   // Project-local Claude Code settings: blanket-allow EVERY tool inside
   // this folder. Without this, the spawned claude reads any user-level
@@ -672,6 +810,7 @@ pub fn run() {
 
       app.manage(state);
       app.manage(OrchestratorState::new());
+      app.manage(LaunchState::new());
 
       // Tauri auto-updater (Flow J AC1-AC3). The actual signed feed +
       // pubkey are provisioned in Phase E0 (deferred per human direction
@@ -700,6 +839,8 @@ pub fn run() {
       cli_is_authenticated,
       project_create_folder,
       file_save_uploaded,
+      feedback_image_save,
+      capture_region_to_png,
       read_target_state,
       read_review_md,
       read_history_log_tail,
@@ -714,6 +855,9 @@ pub fn run() {
       vercel_deploy,
       gh_is_installed,
       gh_export,
+      target_app_launch,
+      target_app_stop,
+      target_app_write_launch_scripts,
       sidecar_rpc,
       sidecar_rpc_stream
     ])

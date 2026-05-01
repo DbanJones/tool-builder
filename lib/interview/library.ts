@@ -21,7 +21,8 @@ export type QuestionId =
   | "Q8" | "Q9" | "Q10" | "Q11" | "Q12" | "Q13" | "Q14"
   | "Q15" | "Q16" | "Q17" | "Q18" | "Q19" | "Q20" | "Q21"
   | "Q22" | "Q23" | "Q24" | "Q25" | "Q26" | "Q27" | "Q28"
-  | "Q29" | "Q30" | "Q31" | "Q32";
+  | "Q29" | "Q30" | "Q31" | "Q32"
+  | "Q33" | "Q34" | "Q35";
 
 export type QuestionType = "open" | "yes_no" | "single_select" | "multi_select" | "freeform_list";
 
@@ -296,6 +297,33 @@ export const QUESTION_LIBRARY: readonly Question[] = [
       "What is the minimum that has to work for you to call v1 'shipped' and put it in front of a real user? One paragraph. If you can't ship without feature X, X belongs in your top flows; everything else is v2.",
     fastPath: true,
     type: "open",
+    influencesSpecSections: ["§3"],
+  },
+  {
+    id: "Q33",
+    topic: "deliverable artifact",
+    prompt:
+      "When this is built, what does the end user actually open, download, or look at? Be concrete about the form, not the features. Examples: 'an .xlsx file with tabs for assumptions, P&L, and a sensitivity table', 'a web dashboard with a calendar and a list view', 'an emailed PDF report', 'a desktop app window with a single form'. If the form is wrong, the build is wrong — even if every feature works.",
+    fastPath: true,
+    type: "open",
+    influencesSpecSections: ["§3"],
+  },
+  {
+    id: "Q34",
+    topic: "reference anchors",
+    prompt:
+      "Name 1-3 existing tools, apps, or websites this should resemble, and for each say what's similar and what's different. Example: 'Like Notion's editor but for recipes; like Excel for the math but with form inputs instead of cells'. These anchors stop the agent from inventing a shape you didn't want.",
+    fastPath: true,
+    type: "freeform_list",
+    influencesSpecSections: ["§2"],
+  },
+  {
+    id: "Q35",
+    topic: "non-negotiables",
+    prompt:
+      "What features or properties are non-negotiable for v1 — the things that, if missing, would make you reject the build outright? Be ruthless; this is the wall the agent must not cross. Example for a financial-model builder: 'must produce an .xlsx file (not a web view)', 'must include a sensitivity table', 'must let me edit assumptions and regenerate'.",
+    fastPath: true,
+    type: "freeform_list",
     influencesSpecSections: ["§3"],
   },
 ];

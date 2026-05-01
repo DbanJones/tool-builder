@@ -22,6 +22,14 @@ import { sidecarCall } from "@/lib/sidecar/client";
 
 const KEY = "builder.openTabs.v1";
 const POLL_MS = 2000;
+// Browser quirk: the `storage` event fires only in OTHER windows that share
+// the same localStorage origin — never in the window that did the write.
+// Without an in-window signal, the TabBar (mounted in the root layout)
+// never re-reads localStorage after the workspace component calls
+// `ensureOpen`, so the active project's tab disappears until full reload.
+// Dispatch a CustomEvent on every write and listen for it alongside the
+// cross-window `storage` event.
+const SAME_WINDOW_EVENT = "builder.openTabs.changed";
 
 interface StoredEntry {
   id: string;
@@ -61,6 +69,7 @@ function writeStored(entries: readonly StoredEntry[]): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(KEY, JSON.stringify(entries));
+    window.dispatchEvent(new CustomEvent(SAME_WINDOW_EVENT));
   } catch {
     /* quota / disabled — non-fatal. */
   }
@@ -81,13 +90,21 @@ export function useOpenTabs(): {
     setStored(readStored());
   }, []);
 
-  // Cross-tab sync (relevant if we ever open multiple webview windows).
+  // Cross-window sync (storage event fires in OTHER windows only).
+  // Same-window sync (CustomEvent dispatched on every writeStored, picked
+  // up by every useOpenTabs consumer in the same window — including the
+  // TabBar mounted in the root layout that doesn't itself call ensureOpen).
   useEffect(() => {
     const onStorage = (e: StorageEvent): void => {
       if (e.key === KEY) setStored(readStored());
     };
+    const onSameWindow = (): void => setStored(readStored());
     window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    window.addEventListener(SAME_WINDOW_EVENT, onSameWindow);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener(SAME_WINDOW_EVENT, onSameWindow);
+    };
   }, []);
 
   // Poll status for the curated set so the build pill pulses in near real
@@ -126,24 +143,30 @@ export function useOpenTabs(): {
     };
   }, [stored]);
 
+  // localStorage is the source of truth; React state mirrors it. We read
+  // the current persisted list synchronously, compute the next snapshot,
+  // then call writeStored (which dispatches the cross-component CustomEvent)
+  // BEFORE setStored. The previous version called writeStored inside the
+  // setState updater function, which ran during render and triggered a
+  // setState on TabBarInner from inside ProjectWorkspace's render — React
+  // 19 errors on that ("Cannot update a component while rendering").
   const ensureOpen = useCallback((entry: StoredEntry): void => {
-    setStored((prev) => {
-      const existing = prev.find((e) => e.id === entry.id);
-      if (existing && existing.name === entry.name) return prev;
-      const next = existing
-        ? prev.map((e) => (e.id === entry.id ? { ...e, name: entry.name } : e))
-        : [...prev, entry];
-      writeStored(next);
-      return next;
-    });
+    const current = readStored();
+    const existing = current.find((e) => e.id === entry.id);
+    if (existing && existing.name === entry.name) return;
+    const next = existing
+      ? current.map((e) => (e.id === entry.id ? { ...e, name: entry.name } : e))
+      : [...current, entry];
+    writeStored(next);
+    setStored(next);
   }, []);
 
   const close = useCallback((id: string): void => {
-    setStored((prev) => {
-      const next = prev.filter((e) => e.id !== id);
-      writeStored(next);
-      return next;
-    });
+    const current = readStored();
+    if (!current.some((e) => e.id === id)) return;
+    const next = current.filter((e) => e.id !== id);
+    writeStored(next);
+    setStored(next);
   }, []);
 
   const tabs: TabSummary[] = stored.map((e) => {

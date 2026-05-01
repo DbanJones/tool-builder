@@ -77,6 +77,9 @@ const full: readonly RebuildAnswer[] = [
   { questionId: "Q30", answerText: "user: email, name, board\nexam: title, board, year\nquestion: prompt, options, correct_index, explanation\nsession: started_at, score, mistakes_count", confidence: "confident", source: "chat" },
   { questionId: "Q31", answerText: "no team accounts in v1, no proctoring/exam mode, no flashcards", confidence: "confident", source: "chat" },
   { questionId: "Q32", answerText: "A new user can sign up, choose their board, upload one PDF that parses cleanly into at least 5 questions, do a 20-question session, and see their score on a dashboard.", confidence: "confident", source: "chat" },
+  { questionId: "Q33", answerText: "A responsive web app the resident opens in a browser; the home screen shows today's question stack and a Start button.", confidence: "confident", source: "chat" },
+  { questionId: "Q34", answerText: "Anki: similar spaced-repetition feel, different content (board exam questions, not user-authored cards)\nUWorld: similar question-bank UX, different pricing (subscription vs one-off)", confidence: "confident", source: "chat" },
+  { questionId: "Q35", answerText: "must run in a browser without install\nmust grade answers immediately with explanations\nmust persist progress across devices", confidence: "confident", source: "chat" },
 ];
 
 describe("rebuildSpec", () => {
@@ -109,9 +112,9 @@ describe("rebuildSpec", () => {
   });
 
   it("interview progress section shows exact answered/remaining counts", () => {
-    expect(rebuildSpec(minimal)).toContain("Fast-path questions answered: **1 / 32**");
-    expect(rebuildSpec(partial)).toContain("Fast-path questions answered: **4 / 32**");
-    expect(rebuildSpec(full)).toContain("Fast-path questions answered: **32 / 32**");
+    expect(rebuildSpec(minimal)).toContain("Fast-path questions answered: **1 / 35**");
+    expect(rebuildSpec(partial)).toContain("Fast-path questions answered: **4 / 35**");
+    expect(rebuildSpec(full)).toContain("Fast-path questions answered: **35 / 35**");
     expect(rebuildSpec(full)).toContain("All fast-path questions answered.");
   });
 

@@ -48,6 +48,7 @@ import {
 } from "./handlers/drift.js";
 import { logEvent, listEvents } from "./handlers/audit.js";
 import { extractText, fetchUrl, parseDataSample, parseSchema, summariseImage } from "./handlers/files.js";
+import { verify as verifyEasterEgg } from "./handlers/easter-egg.js";
 import { guardPii } from "./handlers/pii.js";
 import {
   create as createProject,
@@ -130,6 +131,7 @@ const handlers: Record<string, Handler> = {
   "files.parseDataSample": parseDataSample,
   "files.fetchUrl": fetchUrl,
   "files.guardPii": guardPii,
+  "easterEgg.verify": verifyEasterEgg,
   "actions.append": appendAction,
   "actions.list": listActions,
   "costs.append": appendCost,

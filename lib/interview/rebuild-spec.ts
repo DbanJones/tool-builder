@@ -71,6 +71,24 @@ function renderScopeSection(answers: readonly RebuildAnswer[]): string {
     lines.push("- _(not yet answered)_");
   }
 
+  const references = findAnswer(answers, "Q34");
+  lines.push("", "**Looks and feels like (reference anchors):**");
+  if (references) {
+    const items = references.answerText
+      .split("\n")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (items.length === 0) {
+      lines.push("- _(no reference anchors captured)_");
+    } else {
+      for (const item of items) {
+        lines.push(`- ${item.replace(/^[-*]\s*/, "")}`);
+      }
+    }
+  } else {
+    lines.push("- _(not yet answered)_");
+  }
+
   const outOfScope = findAnswer(answers, "Q31");
   lines.push("", "**Explicitly out of scope for v1:**");
   if (outOfScope) {
@@ -93,8 +111,35 @@ function renderScopeSection(answers: readonly RebuildAnswer[]): string {
 }
 
 function renderFlowsSection(answers: readonly RebuildAnswer[]): string {
-  return [
+  const lines = [
     "## 3. Core flows + definition of done",
+    "",
+    "**Deliverable artifact (what the end user opens):**",
+    "",
+    answerOrPlaceholder(answers, "Q33", "_(not yet captured — the build will not have a concrete output target)_"),
+    "",
+    "**Non-negotiables (must not be missing):**",
+  ];
+
+  const nonNegotiables = findAnswer(answers, "Q35");
+  if (nonNegotiables) {
+    const items = nonNegotiables.answerText
+      .split("\n")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (items.length === 0) {
+      lines.push("", "- _(no non-negotiables captured)_");
+    } else {
+      lines.push("");
+      for (const item of items) {
+        lines.push(`- ${item.replace(/^[-*]\s*/, "")}`);
+      }
+    }
+  } else {
+    lines.push("", "- _(not yet answered)_");
+  }
+
+  lines.push(
     "",
     "**Top flow's acceptance criteria:**",
     "",
@@ -103,7 +148,9 @@ function renderFlowsSection(answers: readonly RebuildAnswer[]): string {
     "**Definition of done (v1):**",
     "",
     answerOrPlaceholder(answers, "Q32", "_(not yet captured)_"),
-  ].join("\n");
+  );
+
+  return lines.join("\n");
 }
 
 function renderDataModelSection(answers: readonly RebuildAnswer[]): string {

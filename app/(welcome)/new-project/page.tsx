@@ -17,7 +17,6 @@ export default function NewProjectPage() {
           title="Open an existing project"
           collapsable
           defaultOpen={false}
-          persistKey="builder.newProject.existingOpen"
         />
       </div>
     </main>

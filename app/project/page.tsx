@@ -2,11 +2,15 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import {
+  ExternalLink,
   GitBranch,
+  Globe,
   Loader2,
+  Pencil,
   Play,
   Rocket,
   Square,
+  X,
 } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -20,6 +24,7 @@ import {
   type ChatStatus,
   type DisplayMessage,
 } from "@/components/features/project-workspace/chat-panel";
+import { AnnotationModal } from "@/components/features/annotation/annotation-modal";
 import { DeployModal } from "@/components/features/project-workspace/deploy-modal";
 import { DriftBanner } from "@/components/features/project-workspace/drift-banner";
 import {
@@ -28,9 +33,11 @@ import {
 } from "@/components/features/project-workspace/permission-prompt-banner";
 import { RightRail, type RightTab } from "@/components/features/project-workspace/right-rail";
 import { StagesBar } from "@/components/features/project-workspace/stages-bar";
+import { bytesToBase64 } from "@/lib/annotation";
 import { ackForIntent, detectIntent } from "@/lib/chat-intent";
 import { chatSend, type ChatChunk, type QueuedQuestion } from "@/lib/chat/client";
 import {
+  extractLatestPlan,
   readHistoryLogTail,
   readReviewMarkdown,
   readTargetState,
@@ -45,6 +52,10 @@ import {
 } from "@/lib/cost-ceiling";
 import { deployToVercel, getVercelToken, isVercelInstalled } from "@/lib/deploy";
 import { listOpenDrifts, type DriftEvent } from "@/lib/drift";
+import {
+  verifyDavidEasterEgg,
+  type EasterEggVerifyResult,
+} from "@/lib/easter-egg";
 import { estimate, formatEta, type EtaResult } from "@/lib/eta";
 import { exportToGithub, isGhInstalled } from "@/lib/export";
 import { ingestFile } from "@/lib/files/ingest";
@@ -59,6 +70,11 @@ import {
   type OrchestratorEvent,
   type TodoItem,
 } from "@/lib/orchestrator";
+import {
+  targetAppLaunch,
+  targetAppStop,
+  targetAppWriteLaunchScripts,
+} from "@/lib/launch";
 import { translate } from "@/lib/orchestrator/translate";
 import type { Project } from "@/lib/project";
 import { sidecarCall } from "@/lib/sidecar/client";
@@ -123,6 +139,15 @@ function appendApprovedSourceMaterials(
   return `${lines.join("\n")}\n${specMarkdown}`;
 }
 
+function formatFailedEasterEggFindings(report: EasterEggVerifyResult): string {
+  const failed = report.findings
+    .filter((finding) => !finding.ok)
+    .map((finding) => finding.message);
+  return failed.length > 0
+    ? failed.join(" ")
+    : "The verifier could not confirm the required source markers.";
+}
+
 export default function ProjectPage() {
   return (
     <Suspense
@@ -163,6 +188,11 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     readonly { id: string; text: string; question: string }[]
   >([]);
   const [isPreparingBank, setIsPreparingBank] = useState(false);
+  const [echoBackPreview, setEchoBackPreview] = useState<{
+    deliverable: string | null;
+    anchors: string | null;
+    nonNegotiables: string | null;
+  }>({ deliverable: null, anchors: null, nonNegotiables: null });
   const interviewSessionRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -194,6 +224,32 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   const turnStartRef = useRef<number | null>(null);
   const buildSessionRef = useRef<string | null>(null);
 
+  // Concurrent build prompt: when starting a build with another project
+  // already mid-build, ask the user whether to run alongside, stop the
+  // others first, or cancel. null = no prompt; non-null = list of conflicts.
+  const [concurrentBuildPrompt, setConcurrentBuildPrompt] = useState<{
+    conflicts: { id: string; name: string }[];
+  } | null>(null);
+
+  // Visual feedback modal (D-026 Slice 1). Opening it pauses the in-flight
+  // build (if any) so the agent doesn't keep generating against state the
+  // novice has just decided is wrong. Closing without sending leaves the
+  // build paused — user resumes via the normal Build button.
+  const [annotationOpen, setAnnotationOpen] = useState(false);
+  const [annotationInitialImage, setAnnotationInitialImage] = useState<Blob | null>(null);
+
+  // Counter the Preview tab uses as part of its iframe key. Bumped when the
+  // agent emits a file-mutating tool_use (Edit/Write/MultiEdit/NotebookEdit)
+  // so the iframe reloads as soon as the dev server picks up the change.
+  // D-028.
+  const [previewRefreshTrigger, setPreviewRefreshTrigger] = useState(0);
+
+  // Maximize-preview: hides the chat column and gives the iframe the full
+  // workspace width. Auto-restores when switching off the preview tab so
+  // a maximized rail can't strand the user without their chat. ESC also
+  // restores. D-028 follow-up.
+  const [previewMaximized, setPreviewMaximized] = useState(false);
+
   // Deploy / GitHub export
   const [deployModalOpen, setDeployModalOpen] = useState(false);
   const [deployStatus, setDeployStatus] = useState<
@@ -208,6 +264,14 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     | { kind: "success"; url: string }
     | { kind: "error"; message: string }
   >({ kind: "idle" });
+  // Local "Launch app" state (CLAUDE.md O33). Independent from build/deploy:
+  // launching just starts the target app's dev server in a child process.
+  const [launchStatus, setLaunchStatus] = useState<
+    | { kind: "idle" }
+    | { kind: "starting" }
+    | { kind: "running"; url: string }
+    | { kind: "error"; message: string }
+  >({ kind: "idle" });
 
   // Tab state — auto-switches as mode changes; user can override.
   const [tab, setTab] = useState<RightTab>("spec");
@@ -217,14 +281,6 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   // shows opened-only projects, not every project in the DB; without this
   // call a project visited via deep link wouldn't get a tab.
   const { ensureOpen: ensureTabOpen } = useOpenTabs();
-
-  // If another open project's build is already running, the orchestrator
-  // singleton can't take a second one. We surface a banner with the
-  // offending project's name + a deep link to switch tabs.
-  const [otherBuildBlock, setOtherBuildBlock] = useState<{
-    projectId: string;
-    name: string;
-  } | null>(null);
 
   // Has the build started? Derived from session id OR prior actions on disk.
   // Once true for a session, doesn't flip back; lets a reload of a paused
@@ -240,6 +296,14 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   const announcedReviewRef = useRef(false);
   const announcedDeployedRef = useRef(false);
   const announcedPushedRef = useRef(false);
+  // Build's `done` event fires every time a turn ends. If Claude finished
+  // the build without writing review.md (forgot, stopped early), prompt
+  // exactly once per session so the novice always gets a coverage report.
+  const autoReviewAttemptedRef = useRef(false);
+  const runFollowUpTurnRef = useRef<((prompt: string) => void) | null>(null);
+  const davidRepairAttemptedRef = useRef(false);
+  const davidVerifiedRef = useRef(false);
+  const davidFailureAnnouncedRef = useRef(false);
 
   // ---- Project load + hydration ------------------------------------------
   useEffect(() => {
@@ -289,7 +353,15 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
       const tailResult = await readHistoryLogTail(projectPath, HISTORY_TAIL_LIMIT);
       if (cancelled) return;
       tailResult.match(
-        (entries) => setActions(entries),
+        (entries) => {
+          setActions(entries);
+          // Hydrate the Plan tab from the last TodoWrite call recorded in
+          // history.log. Without this the plan stays empty after a cold
+          // open / Resume until the agent emits its next TodoWrite, which
+          // can be 30+ seconds and looks broken to the novice.
+          const plan = extractLatestPlan(entries);
+          if (plan.length > 0) setPlan(plan);
+        },
         () => {
           /* non-fatal */
         },
@@ -340,7 +412,29 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         } catch (e) {
           setSpec(`# Spec preview error\n\n${e instanceof Error ? e.message : String(e)}`);
         }
-        setReadiness(checkReadiness(rebuildAnswers, { echoBackConfirmed }));
+        // Auto-confirm the readiness echo-back the moment the fast-path is
+        // complete. The user opted out of the explicit final-check popup; the
+        // spec preview + the post-build "verify against spec" panel cover the
+        // same anti-drift function without an extra interruption.
+        const result = checkReadiness(rebuildAnswers, { echoBackConfirmed: true });
+        if (
+          !echoBackConfirmed &&
+          result.fastPathTotal > 0 &&
+          result.fastPathAnswered >= result.fastPathTotal
+        ) {
+          setEchoBackConfirmed(true);
+        }
+        setReadiness(result);
+        const findAnswerText = (id: "Q33" | "Q34" | "Q35"): string | null => {
+          const match = rebuildAnswers.find((a) => a.questionId === id);
+          const text = match?.answerText.trim();
+          return text && text.length > 0 ? text : null;
+        };
+        setEchoBackPreview({
+          deliverable: findAnswerText("Q33"),
+          anchors: findAnswerText("Q34"),
+          nonNegotiables: findAnswerText("Q35"),
+        });
       },
       () => undefined,
     );
@@ -495,8 +589,23 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
 
   const onTabChange = (t: RightTab): void => {
     tabPinnedRef.current = true;
+    // Auto-restore preview maximize when leaving the preview tab — the
+    // chat column shouldn't stay hidden when the user has switched away
+    // from the thing that hid it.
+    if (t !== "preview" && previewMaximized) setPreviewMaximized(false);
     setTab(t);
   };
+
+  // ESC restores from maximized preview. Only attaches the listener when
+  // maximized to avoid a global listener churn on every render.
+  useEffect(() => {
+    if (!previewMaximized) return;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") setPreviewMaximized(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [previewMaximized]);
 
   // ---- Interview chat (pre-build) ----------------------------------------
   const handleChunk = (chunk: ChatChunk): void => {
@@ -670,6 +779,19 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
           humanLine,
           historyLogPath,
         });
+        // Auto-refresh the live preview when the agent mutates source files
+        // (D-028 C). The dev server's HMR usually picks the change up on its
+        // own, but if HMR isn't fully working in the iframe (cross-origin
+        // websocket quirks happen), re-keying the iframe forces a hard reload
+        // so the novice never has to click Refresh manually.
+        if (
+          event.tool === "Edit" ||
+          event.tool === "Write" ||
+          event.tool === "MultiEdit" ||
+          event.tool === "NotebookEdit"
+        ) {
+          setPreviewRefreshTrigger((n) => n + 1);
+        }
       } else if (event.kind === "done") {
         if (turnStartRef.current !== null) {
           const elapsed = Date.now() - turnStartRef.current;
@@ -692,7 +814,57 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
           const driftRes = await listOpenDrifts(project.id);
           driftRes.match((events) => setOpenDrifts(events), () => undefined);
           const reviewRes = await readReviewMarkdown(project.path);
-          reviewRes.match((md) => setReviewMarkdown(md), () => undefined);
+          const reviewMd = reviewRes.match(
+            (md) => md,
+            () => null,
+          );
+          if (reviewMd !== null) {
+            setReviewMarkdown(reviewMd);
+            if (!davidVerifiedRef.current) {
+              const eggResult = await verifyDavidEasterEgg(project.id);
+              eggResult.match(
+                (report) => {
+                  if (report.ok) {
+                    davidVerifiedRef.current = true;
+                    return;
+                  }
+
+                  const failed = formatFailedEasterEggFindings(report);
+                  if (!davidRepairAttemptedRef.current) {
+                    davidRepairAttemptedRef.current = true;
+                    runFollowUpTurnRef.current?.(
+                      `The Builder's D-EEGG verification failed: ${failed} Add or repair the mandatory hidden D-EEGG now. Implement a DavidEasterEgg client component, mount it from the root layout so it works on every route, trigger it with Alt+Shift+D, show the exact text "made by david", include the non-visible marker "builder:david-easter-egg" in source, use CSS-only animation with prefers-reduced-motion support, close on Escape/outside click/short timeout, run verification, and update .builder/review.md with the D-EEGG item.`,
+                    );
+                    return;
+                  }
+
+                  if (!davidFailureAnnouncedRef.current) {
+                    davidFailureAnnouncedRef.current = true;
+                    appendAssistantMessage(
+                      `D-EEGG still needs attention: ${failed}`,
+                    );
+                  }
+                },
+                (error) => {
+                  if (!davidFailureAnnouncedRef.current) {
+                    davidFailureAnnouncedRef.current = true;
+                    appendAssistantMessage(
+                      `I couldn't verify D-EEGG: ${error.message}`,
+                    );
+                  }
+                },
+              );
+            }
+          } else if (!autoReviewAttemptedRef.current) {
+            // Claude ended the turn without writing .builder/review.md.
+            // Send a follow-up that runs the REVIEW step from the kickoff
+            // prompt — runs in the same SDK session so the agent keeps
+            // its plan and history. Only attempt once per session.
+            autoReviewAttemptedRef.current = true;
+            runFollowUpTurnRef.current?.(
+              "The build turn finished but .builder/review.md is not on disk. Run the REVIEW step from your kickoff prompt now: re-read spec.md, walk every in-scope item / Flow / data-model entity / integration, decide present | partial | missing, and write the result to .builder/review.md in the exact shape the kickoff prompt specified. Then mark a TodoWrite item 'Review complete — see .builder/review.md' as completed and end the turn.",
+            );
+          }
         })();
       } else if (event.kind === "rate_limit") {
         setStatus({ kind: "rate_limited", message: event.message });
@@ -700,32 +872,14 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         setStatus({ kind: "error", message: event.message });
       }
     },
-    [project],
+    [project, appendAssistantMessage],
   );
 
-  const startBuild = useCallback(async (): Promise<void> => {
-    if (!project || status.kind === "running" || status.kind === "streaming") return;
-    if (!hasStarted && !readiness.ready) {
-      appendAssistantMessage(readiness.reason);
-      return;
-    }
-
-    // Refuse to start a second concurrent build. The orchestrator subprocess
-    // is process-global; running two would either error on spawn or compete
-    // for the same claude auth's rate limit. Query DB-persisted status —
-    // anything marked "building" by another project is a live siblings.
-    const listResult = await sidecarCall<Project[]>("projects.list", {});
-    if (listResult.isOk()) {
-      const conflict = listResult.value.find(
-        (p) => p.id !== project.id && p.status === "building",
-      );
-      if (conflict) {
-        setOtherBuildBlock({ projectId: conflict.id, name: conflict.name });
-        return;
-      }
-    }
-    setOtherBuildBlock(null);
-
+  // The "do the actual build" steps, after pre-flight gates and any
+  // concurrent-build resolution have been handled. Pulled out so both the
+  // no-conflict path and the concurrent-build modal callbacks can call it.
+  const performBuild = useCallback(async (): Promise<void> => {
+    if (!project) return;
     setStatus({ kind: "running" });
     try {
       const probe = await invoke<{ ok: boolean; errors: string[]; checkedPath: string }>(
@@ -774,10 +928,19 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
 
     turnStartRef.current = Date.now();
     let terminal: Status = { kind: "idle" };
+    // Resume vs. fresh: if we have a saved sessionId, the SDK loads the
+    // prior conversation thread and the next prompt is appended as a new
+    // user message. The default "begin" prompt would read like "start
+    // over" against an in-flight plan; explicitly tell the agent to pick
+    // up the next pending TodoWrite item instead.
+    const isResume = buildSessionRef.current !== null;
     const r = await orchestratorStart({
       projectId: project.id,
       projectPath: project.path,
       sessionId: buildSessionRef.current,
+      prompt: isResume
+        ? "Continue the build. Look at your TodoWrite plan, find the next pending item, mark it in_progress, and execute it. Keep going through the plan. If the plan is complete, do the REVIEW step (rewrite .builder/review.md against spec.md)."
+        : null,
       onEvent: (event) => {
         buildEventHandler(event);
         if (event.kind === "rate_limit") terminal = { kind: "rate_limited", message: event.message };
@@ -792,33 +955,192 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
       setStatus({ kind: "idle" });
       void sidecarCall("projects.setStatus", { id: project.id, status: "paused" });
     }
+  }, [project, files, approvedFileIds, buildEventHandler]);
+
+  const startBuild = useCallback(async (): Promise<void> => {
+    if (!project || status.kind === "running" || status.kind === "streaming") return;
+    if (!hasStarted && !readiness.ready) {
+      appendAssistantMessage(readiness.reason);
+      return;
+    }
+
+    // Concurrent-build prompt: each project's webview can host its own SDK
+    // session in parallel (per ADR-0005 the orchestrator-driver keys inflight
+    // runs by stream id, not a singleton subprocess). When the novice clicks
+    // Build while another project is mid-build we ask them how to proceed
+    // rather than silently preempting (D-024) or silently parallelising —
+    // either choice has cost (rate-limit budget vs. losing in-flight work).
+    const listResult = await sidecarCall<Project[]>("projects.list", {});
+    const conflicts = listResult.isOk()
+      ? listResult.value
+          .filter((p) => p.id !== project.id && p.status === "building")
+          .map((p) => ({ id: p.id, name: p.name }))
+      : [];
+    if (conflicts.length > 0) {
+      setConcurrentBuildPrompt({ conflicts });
+      return;
+    }
+    await performBuild();
   }, [
     project,
     status.kind,
     hasStarted,
     readiness.ready,
     readiness.reason,
-    files,
-    approvedFileIds,
     appendAssistantMessage,
-    buildEventHandler,
+    performBuild,
   ]);
+
+  const onRunAlongside = useCallback((): void => {
+    setConcurrentBuildPrompt(null);
+    void performBuild();
+  }, [performBuild]);
+
+  const onStopOthersFirst = useCallback(async (): Promise<void> => {
+    const conflicts = concurrentBuildPrompt?.conflicts ?? [];
+    setConcurrentBuildPrompt(null);
+    for (const c of conflicts) {
+      await orchestratorStop({ projectId: c.id });
+      // Preserve the preempted project's currentSessionId so when the user
+      // opens its tab and clicks Resume, the SDK picks up where it left off.
+      await sidecarCall<Project>("projects.setStatus", {
+        id: c.id,
+        status: "paused",
+      });
+    }
+    if (conflicts.length > 0) {
+      appendAssistantMessage(
+        conflicts.length === 1
+          ? `Stopped the in-flight build on ${conflicts[0]?.name ?? ""} so this one can start. Resume that project from its tab when you're ready.`
+          : `Stopped ${String(conflicts.length)} in-flight builds (${conflicts.map((c) => c.name).join(", ")}) so this one can start. Resume each from its tab when you're ready.`,
+      );
+    }
+    await performBuild();
+  }, [concurrentBuildPrompt, performBuild, appendAssistantMessage]);
+
+  const onCancelConcurrentBuild = useCallback((): void => {
+    setConcurrentBuildPrompt(null);
+  }, []);
 
   const stopBuild = useCallback(async (): Promise<void> => {
     if (!project) return;
     await orchestratorStop({ projectId: project.id });
-    buildSessionRef.current = null;
     setStatus({ kind: "idle" });
+    // PRESERVE buildSessionRef.current and the DB's currentSessionId so
+    // Resume can pick up the same Claude SDK session — the SDK persists
+    // session history under ~/.claude/projects/, so resuming with the
+    // saved id keeps the agent's plan and conversational context intact.
+    // Status flips to "paused" (not "ready"); the status footer reads it
+    // as such, and the next click on Build calls startBuild which threads
+    // the saved sessionId into orchestratorStart.
     await sidecarCall("projects.setStatus", {
       id: project.id,
-      status: "ready",
-      currentSessionId: null,
+      status: "paused",
     });
   }, [project]);
 
+  // Open the annotation modal. If a build is mid-stream, pause it first so
+  // the agent isn't generating against state the novice has just decided
+  // is wrong (D-026 AC1). The modal opens empty; the novice drops/pastes
+  // a screenshot inside it.
+  //
+  // Preserves the SDK sessionId so the next sendBuildFeedback turn resumes
+  // the same conversation thread (the agent already has the plan + context
+  // in scrollback; we want it to act on the new visual feedback against
+  // that history, not start fresh).
+  const openAnnotation = useCallback(async (): Promise<void> => {
+    if (!project) return;
+    if (status.kind === "running" || status.kind === "streaming") {
+      await orchestratorStop({ projectId: project.id });
+      setStatus({ kind: "idle" });
+      await sidecarCall("projects.setStatus", {
+        id: project.id,
+        status: "paused",
+      });
+    }
+    setAnnotationInitialImage(null);
+    setAnnotationOpen(true);
+  }, [project, status.kind]);
+
+  // Capture-and-annotate (D-028 B). Spawns macOS's native region picker via
+  // `screencapture -i`, gets the PNG bytes back, and opens the AnnotationModal
+  // with the image already loaded. Three clicks: pick region → mark up → send.
+  // Pauses any in-flight build for the same reason as openAnnotation.
+  const captureRegionAndAnnotate = useCallback(async (): Promise<void> => {
+    if (!project) return;
+    if (status.kind === "running" || status.kind === "streaming") {
+      await orchestratorStop({ projectId: project.id });
+      setStatus({ kind: "idle" });
+      await sidecarCall("projects.setStatus", {
+        id: project.id,
+        status: "paused",
+      });
+    }
+    try {
+      const b64 = await invoke<string>("capture_region_to_png");
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const blob = new Blob([bytes], { type: "image/png" });
+      setAnnotationInitialImage(blob);
+      setAnnotationOpen(true);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // "Capture cancelled." is the user pressing ESC mid-pick — silently
+      // ignore. Anything else is worth surfacing.
+      if (!/cancelled/i.test(msg)) {
+        appendAssistantMessage(`Couldn't capture: ${msg}`);
+      }
+    }
+  }, [project, status.kind, appendAssistantMessage]);
+
+  const sendBuildFeedback = useCallback(
+    async (feedback: string, imageBytes?: Uint8Array): Promise<void> => {
+      const trimmed = feedback.trim();
+      if (!project) return;
+      if (trimmed.length === 0 && !imageBytes) return;
+
+      let imageRelPath: string | null = null;
+      if (imageBytes) {
+        try {
+          imageRelPath = await invoke<string>("feedback_image_save", {
+            projectPath: project.path,
+            contentBase64: bytesToBase64(imageBytes),
+          });
+        } catch (e) {
+          appendAssistantMessage(
+            `Couldn't save your annotated screenshot: ${e instanceof Error ? e.message : String(e)}`,
+          );
+          return;
+        }
+      }
+
+      const userVisible = imageRelPath
+        ? trimmed.length > 0
+          ? `${trimmed}\n[attached: ${imageRelPath}]`
+          : `[attached: ${imageRelPath}]`
+        : trimmed;
+      echoUserMessage(userVisible);
+
+      const framed = [
+        trimmed.length > 0
+          ? `The novice just reviewed the build and reports: ${trimmed}`
+          : "The novice just reviewed the build and sent an annotated screenshot without a written description.",
+        imageRelPath
+          ? `\nThey've attached an annotated screenshot at \`${imageRelPath}\`. Read that file with your Read tool — it returns image content; the red boxes / arrows / freehand marks / text labels indicate exactly what's wrong or where it should be different. Treat the visual annotations as authoritative; they're more precise than any text description.`
+          : "",
+        "",
+        "Compare this against the deliverable artifact (Q33), reference anchors (Q34), and non-negotiables (Q35) in spec.md. Adjust the build to match. When done, re-run the spec coverage check and rewrite .builder/review.md with the updated state.",
+      ].join("\n");
+      void runFollowUpTurnRef.current?.(framed);
+    },
+    [project, appendAssistantMessage],
+  );
+
   const runFollowUpTurn = useCallback(
-    async (prompt: string): Promise<void> => {
-      if (!project || status.kind === "running" || status.kind === "streaming") return;
+    async (prompt: string, options: { force?: boolean } = {}): Promise<void> => {
+      if (!project) return;
+      if (!options.force && (status.kind === "running" || status.kind === "streaming")) return;
       setStatus({ kind: "running" });
       setLatestToolLine(`You said: ${prompt.slice(0, 80)}…`);
       turnStartRef.current = Date.now();
@@ -836,6 +1158,13 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     },
     [project, status.kind, buildEventHandler, expandMentions],
   );
+
+  // The build event handler is defined above runFollowUpTurn (it composes
+  // with buildEventHandler) so we publish the runner through a ref to let
+  // the auto-review trigger reach forward without a circular dep.
+  useEffect(() => {
+    runFollowUpTurnRef.current = (prompt) => void runFollowUpTurn(prompt, { force: true });
+  }, [runFollowUpTurn]);
 
   // ---- Chat input dispatcher --------------------------------------------
   // Shared helper: echo the user's message to the scrollback + persist it,
@@ -864,31 +1193,32 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   const handleSendInput = (): void => {
     const trimmed = input.trim();
     if (trimmed.length === 0 || !project) return;
-    if (status.kind === "streaming" || status.kind === "running") return;
 
-    // Intent matcher first: short imperative messages like "build it",
-    // "deploy", "stop" trigger the corresponding action so the chat is the
-    // primary control surface, not the buttons. Long messages or anything
-    // ambiguous fall through to the regular chat path.
-    const intent = detectIntent(trimmed, {
+    // Detect intent BEFORE any "is the build streaming" early return — the
+    // whole point of a chat-driven action is that the user might not be
+    // able to reach the header buttons (e.g. "stop" mid-stream). Per-intent
+    // context guards in detectIntent prevent action collisions (you can't
+    // "build" while a build is already running, etc.).
+    const ctx = {
       hasStarted,
       isRunning,
       hasReview: reviewMarkdown !== null,
-    });
+      isReadyToBuild: readiness.ready,
+    };
+    const intent = detectIntent(trimmed, ctx);
+
     if (intent !== "none") {
-      if (intent === "build" && !hasStarted && !readiness.ready) {
-        echoUserMessage(trimmed, readiness.reason);
-        setInput("");
-        return;
-      }
-      echoUserMessage(trimmed, ackForIntent(intent));
+      echoUserMessage(trimmed, ackForIntent(intent, ctx));
       setInput("");
       switch (intent) {
+        case "stop":
+          void stopBuild();
+          return;
         case "build":
           void startBuild();
           return;
-        case "stop":
-          void stopBuild();
+        case "launch":
+          void launchApp();
           return;
         case "deploy":
           void deployPreview();
@@ -896,8 +1226,18 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         case "push":
           void exportToGithubFlow();
           return;
+        case "plan":
+          setTab("plan");
+          return;
+        case "annotate":
+          void openAnnotation();
+          return;
       }
     }
+
+    // Freeform chat: block while a turn is streaming so the novice doesn't
+    // accidentally double-fire Claude. Intents are exempt (handled above).
+    if (status.kind === "streaming" || status.kind === "running") return;
 
     if (!hasStarted) {
       // Pre-build: interview chat. If a queued question exists, treat the
@@ -954,6 +1294,34 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     void runDeploy();
   }, [project, runDeploy]);
 
+  // ---- Launch target app (CLAUDE.md O33) -------------------------------
+  const launchApp = useCallback(async (): Promise<void> => {
+    if (!project || launchStatus.kind === "starting" || launchStatus.kind === "running") {
+      // Already running: just re-open the URL in the browser.
+      if (launchStatus.kind === "running") {
+        window.open(launchStatus.url, "_blank", "noopener,noreferrer");
+      }
+      return;
+    }
+    setLaunchStatus({ kind: "starting" });
+    // Best-effort write of the platform launch scripts so the novice can
+    // also launch outside the Builder (O34). Failure here is non-fatal.
+    void targetAppWriteLaunchScripts(project.path);
+    const r = await targetAppLaunch(project.path);
+    r.match(
+      (info) => setLaunchStatus({ kind: "running", url: info.url }),
+      (e) => setLaunchStatus({ kind: "error", message: e.message }),
+    );
+  }, [project, launchStatus]);
+
+  const stopLaunchedApp = useCallback(async (): Promise<void> => {
+    const r = await targetAppStop();
+    r.match(
+      () => setLaunchStatus({ kind: "idle" }),
+      (e) => setLaunchStatus({ kind: "error", message: e.message }),
+    );
+  }, []);
+
   const exportToGithubFlow = useCallback(async (): Promise<void> => {
     if (!project) return;
     const installed = await isGhInstalled();
@@ -983,15 +1351,14 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   }, [project]);
 
   // Stage 2: first-pass build done — review.md just appeared on disk. The
-  // banner stack already shows the live tail; this nudges the novice to
-  // type the next imperative ("deploy", "push") instead of hunting for
-  // buttons.
+  // banner stack already shows the live tail; this points the novice at
+  // the action buttons in the header.
   useEffect(() => {
     if (announcedReviewRef.current) return;
     if (reviewMarkdown === null) return;
     announcedReviewRef.current = true;
     appendAssistantMessage(
-      `${STAGE_SENTINELS.review} — the plan and activity are in the right rail. Say "deploy" for a Vercel preview, "push" to back the code up to GitHub, or keep chatting with me to fill any gaps.`,
+      `${STAGE_SENTINELS.review} — the plan and activity are in the right rail. Click "Launch app" to try it locally, "Deploy" for a Vercel preview, or "Push to GitHub" to back the code up. You can also keep chatting with me to fill any gaps.`,
     );
   }, [reviewMarkdown, appendAssistantMessage, STAGE_SENTINELS.review]);
 
@@ -1001,7 +1368,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     if (deployStatus.kind !== "success") return;
     announcedDeployedRef.current = true;
     appendAssistantMessage(
-      `${STAGE_SENTINELS.deployed} ${deployStatus.url}. Say "push" if you want to back this up to GitHub too.`,
+      `${STAGE_SENTINELS.deployed} ${deployStatus.url}. Click "Push to GitHub" if you want to back this up too.`,
     );
   }, [deployStatus, appendAssistantMessage, STAGE_SENTINELS.deployed]);
 
@@ -1120,11 +1487,6 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   const blockingPiiApproval = pendingFileApprovals.find((f) => f.hasPiiWarning);
   const isBlocked = isRunning || status.kind === "rate_limited" || !project || blockingPiiApproval !== undefined;
   const canStartOrResume = hasStarted || readiness.ready;
-  const finalEchoBackOpen =
-    !hasStarted &&
-    readiness.fastPathTotal > 0 &&
-    readiness.fastPathAnswered >= readiness.fastPathTotal &&
-    !echoBackConfirmed;
   const inProgressIdx = plan.findIndex((t) => t.status === "in_progress");
   const completedSteps = plan.filter((t) => t.status === "completed").length;
   const totalSteps = plan.length;
@@ -1200,6 +1562,17 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
               {readiness.fastPathAnswered} / {readiness.fastPathTotal} answered
             </span>
           )}
+          {hasStarted ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void openAnnotation()}
+              title={isRunning ? "Pause the build and annotate a screenshot" : "Annotate a screenshot of the build"}
+            >
+              <Pencil className="mr-1 h-3 w-3" />
+              {isRunning ? "Pause & annotate" : "Annotate"}
+            </Button>
+          ) : null}
           {isRunning ? (
             <Button size="sm" variant="outline" onClick={() => void stopBuild()} title="Stop the build">
               <Square className="mr-1 h-3 w-3" />
@@ -1216,6 +1589,47 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
               {hasStarted ? "Resume" : "Build it"}
             </Button>
           )}
+          {hasStarted && reviewMarkdown !== null ? (
+            launchStatus.kind === "running" ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    window.open(launchStatus.url, "_blank", "noopener,noreferrer")
+                  }
+                  title={`Open ${launchStatus.url} in your browser`}
+                >
+                  <ExternalLink className="mr-1 h-3 w-3" />
+                  Open app
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void stopLaunchedApp()}
+                  title="Stop the running dev server"
+                >
+                  <Square className="mr-1 h-3 w-3" />
+                  Stop app
+                </Button>
+              </>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void launchApp()}
+                disabled={launchStatus.kind === "starting"}
+                title="Start the dev server and open it in your browser"
+              >
+                {launchStatus.kind === "starting" ? (
+                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                ) : (
+                  <Globe className="mr-1 h-3 w-3" />
+                )}
+                Launch app
+              </Button>
+            )
+          ) : null}
           {hasStarted ? (
             <>
               <Button
@@ -1285,11 +1699,11 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
       <BannerStack
         deployStatus={deployStatus}
         exportStatus={exportStatus}
+        onDismissDeploy={() => setDeployStatus({ kind: "idle" })}
+        onDismissExport={() => setExportStatus({ kind: "idle" })}
         showSentryPrompt={showSentryPrompt}
         onSentryDecided={() => setShowSentryPrompt(false)}
         ceiling={ceiling}
-        finalEchoBackOpen={finalEchoBackOpen}
-        onEchoBackConfirmed={() => setEchoBackConfirmed(true)}
         pendingFileApproval={pendingFileApprovals[0] ?? null}
         pendingFileApprovalCount={pendingFileApprovals.length}
         onApproveFile={approveFileForSpec}
@@ -1304,12 +1718,16 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         onDriftResolved={(resolved) =>
           setOpenDrifts((prev) => prev.filter((d) => d.id !== resolved.id))
         }
-        otherBuildBlock={otherBuildBlock}
-        onDismissOtherBuildBlock={() => setOtherBuildBlock(null)}
       />
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_400px]">
-        <ChatPanel
+      <div
+        className={
+          previewMaximized && tab === "preview"
+            ? "grid min-h-0 flex-1 grid-cols-1"
+            : "grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_400px]"
+        }
+      >
+        {!(previewMaximized && tab === "preview") && <ChatPanel
           messages={messages}
           status={chatStatusFor(status)}
           input={input}
@@ -1335,7 +1753,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
           isPreparingBank={isPreparingBank}
           inputRef={inputRef}
           availableFiles={files}
-        />
+        />}
 
         <RightRail
           tab={tab}
@@ -1354,6 +1772,15 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
               "Look at .builder/review.md. For every item marked partial or missing, build it now. Mark each plan item completed in TodoWrite as you go. When everything is built, re-run the review and rewrite .builder/review.md with the updated coverage.",
             )
           }
+          echoBackPreview={echoBackPreview}
+          onSendBuildFeedback={sendBuildFeedback}
+          launchStatus={launchStatus}
+          onStartPreview={() => void launchApp()}
+          onStopPreview={() => void stopLaunchedApp()}
+          onCaptureAndAnnotate={() => void captureRegionAndAnnotate()}
+          previewRefreshTrigger={previewRefreshTrigger}
+          previewMaximized={previewMaximized}
+          onTogglePreviewMaximize={() => setPreviewMaximized((v) => !v)}
           files={files}
           onFilesDropped={handleFilesDropped}
         />
@@ -1361,6 +1788,10 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
 
       <StatusFooter
         targetState={targetState}
+        projectStatus={project.status}
+        runtimeStatus={status}
+        nowDoing={nowDoingLine}
+        stepCounter={stepCounter}
         costSum={costSum}
         eta={liveEta}
         capUsdCents={costCap}
@@ -1373,6 +1804,26 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         onOpenChange={setDeployModalOpen}
         onTokenSaved={() => void runDeploy()}
       />
+
+      {concurrentBuildPrompt ? (
+        <ConcurrentBuildPromptDialog
+          conflicts={concurrentBuildPrompt.conflicts}
+          onRunAlongside={onRunAlongside}
+          onStopOthersFirst={() => void onStopOthersFirst()}
+          onCancel={onCancelConcurrentBuild}
+        />
+      ) : null}
+
+      {annotationOpen ? (
+        <AnnotationModal
+          initialImage={annotationInitialImage}
+          onSend={async ({ description, imageBytes }) => {
+            setAnnotationOpen(false);
+            await sendBuildFeedback(description, imageBytes);
+          }}
+          onClose={() => setAnnotationOpen(false)}
+        />
+      ) : null}
 
       {isDraggingOverWorkspace ? (
         <div
@@ -1412,11 +1863,11 @@ interface BannerStackProps {
     | { kind: "running" }
     | { kind: "success"; url: string }
     | { kind: "error"; message: string };
+  onDismissDeploy: () => void;
+  onDismissExport: () => void;
   showSentryPrompt: boolean;
   onSentryDecided: () => void;
   ceiling: CostCeilingResult;
-  finalEchoBackOpen: boolean;
-  onEchoBackConfirmed: () => void;
   pendingFileApproval: {
     fileId: string;
     name: string;
@@ -1432,17 +1883,106 @@ interface BannerStackProps {
   openDrifts: readonly DriftEvent[];
   projectPath: string;
   onDriftResolved: (resolved: DriftEvent) => void;
-  otherBuildBlock: { projectId: string; name: string } | null;
-  onDismissOtherBuildBlock: () => void;
+}
+
+function DismissBannerButton({
+  onClick,
+  label,
+  variant = "default",
+}: {
+  onClick: () => void;
+  label: string;
+  variant?: "default" | "destructive";
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      className={
+        "absolute right-1.5 top-1.5 inline-flex h-6 w-6 items-center justify-center rounded-md transition-colors " +
+        (variant === "destructive"
+          ? "text-destructive/70 hover:bg-destructive/10 hover:text-destructive"
+          : "text-muted-foreground hover:bg-muted hover:text-foreground")
+      }
+    >
+      <X className="h-3.5 w-3.5" aria-hidden="true" />
+    </button>
+  );
+}
+
+function ConcurrentBuildPromptDialog({
+  conflicts,
+  onRunAlongside,
+  onStopOthersFirst,
+  onCancel,
+}: {
+  conflicts: { id: string; name: string }[];
+  onRunAlongside: () => void;
+  onStopOthersFirst: () => void;
+  onCancel: () => void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!dialog) return;
+    dialog.showModal();
+    return () => {
+      if (dialog.open) dialog.close();
+    };
+  }, []);
+  const single = conflicts.length === 1;
+  const onlyName = conflicts[0]?.name ?? "";
+  return (
+    <dialog
+      ref={ref}
+      onClose={onCancel}
+      aria-labelledby="concurrent-build-title"
+      className="rounded-lg border bg-background p-0 text-foreground shadow-lg backdrop:bg-foreground/40"
+    >
+      <div className="max-w-md p-6">
+        <h2 id="concurrent-build-title" className="text-base font-semibold">
+          {single
+            ? `${onlyName} is already building`
+            : `${String(conflicts.length)} other projects are already building`}
+        </h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          {single
+            ? `Run this build alongside it, or stop ${onlyName} first?`
+            : "Run this build alongside them, or stop them first?"}
+          {" "}Both can share the same Claude rate-limit budget if you run alongside.
+        </p>
+        {!single ? (
+          <ul className="mt-2 list-disc pl-5 text-sm">
+            {conflicts.map((c) => (
+              <li key={c.id}>{c.name}</li>
+            ))}
+          </ul>
+        ) : null}
+        <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+          <Button variant="outline" size="sm" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button variant="outline" size="sm" onClick={onRunAlongside}>
+            Run alongside
+          </Button>
+          <Button size="sm" onClick={onStopOthersFirst} autoFocus>
+            {single ? `Stop ${onlyName} first` : "Stop them first"}
+          </Button>
+        </div>
+      </div>
+    </dialog>
+  );
 }
 
 function BannerStack(props: BannerStackProps) {
   return (
     <div className="shrink-0">
       {props.deployStatus.kind === "success" ? (
-        <Alert className="mx-4 mt-3 mb-1">
-          <AlertTitle>Preview deployed</AlertTitle>
-          <AlertDescription>
+        <Alert className="relative mx-4 mt-3 mb-1 py-2 pr-9">
+          <AlertTitle className="text-xs">Preview deployed</AlertTitle>
+          <AlertDescription className="text-xs">
             Copied to clipboard:{" "}
             <a
               href={props.deployStatus.url}
@@ -1453,18 +1993,24 @@ function BannerStack(props: BannerStackProps) {
               {props.deployStatus.url}
             </a>
           </AlertDescription>
+          <DismissBannerButton onClick={props.onDismissDeploy} label="Dismiss preview banner" />
         </Alert>
       ) : null}
       {props.deployStatus.kind === "error" ? (
-        <Alert variant="destructive" className="mx-4 mt-3 mb-1">
-          <AlertTitle>Deploy failed</AlertTitle>
-          <AlertDescription>{props.deployStatus.message}</AlertDescription>
+        <Alert variant="destructive" className="relative mx-4 mt-3 mb-1 py-2 pr-9">
+          <AlertTitle className="text-xs">Deploy failed</AlertTitle>
+          <AlertDescription className="text-xs">{props.deployStatus.message}</AlertDescription>
+          <DismissBannerButton
+            onClick={props.onDismissDeploy}
+            label="Dismiss deploy error"
+            variant="destructive"
+          />
         </Alert>
       ) : null}
       {props.exportStatus.kind === "success" ? (
-        <Alert className="mx-4 mt-3 mb-1">
-          <AlertTitle>Pushed to GitHub</AlertTitle>
-          <AlertDescription>
+        <Alert className="relative mx-4 mt-3 mb-1 py-2 pr-9">
+          <AlertTitle className="text-xs">Pushed to GitHub</AlertTitle>
+          <AlertDescription className="text-xs">
             Copied to clipboard:{" "}
             <a
               href={props.exportStatus.url}
@@ -1475,12 +2021,18 @@ function BannerStack(props: BannerStackProps) {
               {props.exportStatus.url}
             </a>
           </AlertDescription>
+          <DismissBannerButton onClick={props.onDismissExport} label="Dismiss push banner" />
         </Alert>
       ) : null}
       {props.exportStatus.kind === "error" ? (
-        <Alert variant="destructive" className="mx-4 mt-3 mb-1">
-          <AlertTitle>GitHub push failed</AlertTitle>
-          <AlertDescription>{props.exportStatus.message}</AlertDescription>
+        <Alert variant="destructive" className="relative mx-4 mt-3 mb-1 py-2 pr-9">
+          <AlertTitle className="text-xs">GitHub push failed</AlertTitle>
+          <AlertDescription className="text-xs">{props.exportStatus.message}</AlertDescription>
+          <DismissBannerButton
+            onClick={props.onDismissExport}
+            label="Dismiss push error"
+            variant="destructive"
+          />
         </Alert>
       ) : null}
       {props.showSentryPrompt ? <SentryPrompt onDecided={props.onSentryDecided} /> : null}
@@ -1493,22 +2045,6 @@ function BannerStack(props: BannerStackProps) {
             {props.ceiling.state === "stop" ? "Spend cap reached" : "Approaching spend cap"}
           </AlertTitle>
           <AlertDescription>{props.ceiling.message}</AlertDescription>
-        </Alert>
-      ) : null}
-      {props.finalEchoBackOpen ? (
-        <Alert className="mx-4 mt-3 mb-1">
-          <AlertTitle>Final check before building</AlertTitle>
-          <AlertDescription>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p>
-                The spec has enough answers to start. Give the Spec tab one last look so
-                the first build matches what you meant.
-              </p>
-              <Button size="sm" onClick={props.onEchoBackConfirmed}>
-                Looks right
-              </Button>
-            </div>
-          </AlertDescription>
         </Alert>
       ) : null}
       {props.pendingFileApproval ? (
@@ -1546,22 +2082,6 @@ function BannerStack(props: BannerStackProps) {
           </AlertDescription>
         </Alert>
       ) : null}
-      {props.otherBuildBlock ? (
-        <Alert className="mx-4 mt-3 mb-1">
-          <AlertTitle>Another build is running</AlertTitle>
-          <AlertDescription>
-            <span className="font-medium">{props.otherBuildBlock.name}</span> is currently
-            building. Switch to its tab and Stop or wait for it to finish, then come back.{" "}
-            <Link
-              href={`/project?id=${encodeURIComponent(props.otherBuildBlock.projectId)}`}
-              className="underline"
-              onClick={props.onDismissOtherBuildBlock}
-            >
-              Open {props.otherBuildBlock.name}
-            </Link>
-          </AlertDescription>
-        </Alert>
-      ) : null}
       {props.recoveredFromCrash ? (
         <Alert className="mx-4 mt-3 mb-1">
           <AlertTitle>Recovered from crash</AlertTitle>
@@ -1592,6 +2112,10 @@ function BannerStack(props: BannerStackProps) {
 
 function StatusFooter({
   targetState,
+  projectStatus,
+  runtimeStatus,
+  nowDoing,
+  stepCounter,
   costSum,
   eta,
   capUsdCents,
@@ -1599,6 +2123,10 @@ function StatusFooter({
   showDetails,
 }: {
   targetState: TargetState | null;
+  projectStatus: Project["status"];
+  runtimeStatus: Status;
+  nowDoing: string | null;
+  stepCounter: string | null;
   costSum: CostSum | null;
   eta: EtaResult;
   capUsdCents: number | null;
@@ -1607,20 +2135,84 @@ function StatusFooter({
 }) {
   const dollars = costSum ? (costSum.usdCents / 100).toFixed(2) : "0.00";
   const capDollars = capUsdCents !== null ? (capUsdCents / 100).toFixed(2) : "";
+
+  // Compose a human-readable status from three sources, in priority order:
+  //   1. The runtime Status state (idle/running/streaming/error/rate_limited)
+  //      — most live; flips the moment the user clicks Build / Stop.
+  //   2. The project's DB row status — survives reloads, always populated.
+  //   3. targetState.status — only set if the orchestrator wrote state.json
+  //      (most builds don't), so it's the last-resort fallback.
+  let statusLabel: string;
+  let statusTone: "live" | "warn" | "error" | "muted" = "muted";
+  if (runtimeStatus.kind === "running" || runtimeStatus.kind === "streaming") {
+    statusLabel = stepCounter ? `Building (${stepCounter})` : "Building";
+    statusTone = "live";
+  } else if (runtimeStatus.kind === "rate_limited") {
+    statusLabel = "Paused — rate limit";
+    statusTone = "warn";
+  } else if (runtimeStatus.kind === "error") {
+    statusLabel = "Error";
+    statusTone = "error";
+  } else {
+    // idle — fall back to DB-row status
+    switch (projectStatus) {
+      case "interviewing":
+        statusLabel = "Interviewing";
+        break;
+      case "ready":
+        statusLabel = "Ready to build";
+        break;
+      case "building":
+        // DB says building but runtime is idle — typically a stale crash flag.
+        statusLabel = "Was building (paused)";
+        statusTone = "warn";
+        break;
+      case "paused":
+        statusLabel = "Paused";
+        break;
+      case "done":
+        statusLabel = "Done";
+        break;
+      default:
+        statusLabel = targetState?.status ?? "unknown";
+    }
+  }
+  const toneClass =
+    statusTone === "live"
+      ? "text-primary font-medium"
+      : statusTone === "warn"
+        ? "text-yellow-600"
+        : statusTone === "error"
+          ? "text-destructive"
+          : "text-foreground";
+
   return (
     <footer className="flex items-center justify-between gap-4 border-t px-6 py-2 text-xs text-muted-foreground">
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-6 gap-y-1">
+        <span className="flex items-center gap-1">
+          {statusTone === "live" ? (
+            <span aria-hidden="true" className="relative inline-flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/60 motion-reduce:hidden" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
+            </span>
+          ) : null}
+          Status: <span className={toneClass}>{statusLabel}</span>
+        </span>
+        {nowDoing ? (
+          <span className="min-w-0 max-w-md truncate" title={nowDoing}>
+            <span className="text-foreground">{nowDoing}</span>
+          </span>
+        ) : null}
         <span>
           Cost: <span className="text-foreground">${dollars}</span>
         </span>
         {showDetails ? (
           <>
-            <span>
-              Status: <span className="text-foreground">{targetState?.status ?? "unknown"}</span>
-            </span>
-            <span>
-              Phase: <span className="text-foreground">{targetState?.phase ?? "(none)"}</span>
-            </span>
+            {targetState?.phase ? (
+              <span>
+                Phase: <span className="text-foreground">{targetState.phase}</span>
+              </span>
+            ) : null}
             {costSum ? (
               <span>
                 {costSum.turns} turn{costSum.turns === 1 ? "" : "s"} · in {costSum.inputTokens} / out{" "}
@@ -1658,7 +2250,7 @@ function StatusFooter({
           </>
         ) : null}
       </div>
-      <Link href="/" className="underline">
+      <Link href="/" className="shrink-0 underline">
         Home
       </Link>
     </footer>

@@ -48,10 +48,10 @@ function TabBarInner() {
   };
 
   const onStopAll = async (): Promise<void> => {
-    // Singleton orchestrator: one stop kills the running subprocess. We
-    // also persist each building project as paused so the next click in
-    // its workspace is a deliberate Resume rather than an accidental new
-    // turn.
+    // Each project's build is its own SDK query() in the sidecar, keyed by
+    // stream id (orchestrator-driver inflight map). Calling orchestratorStop
+    // with no args aborts every in-flight run; we then persist each project
+    // as paused so its next workspace click is a deliberate Resume.
     await orchestratorStop();
     await Promise.all(
       buildingTabs.map((t) =>
@@ -86,15 +86,19 @@ function TabBarInner() {
           onClose={(e) => onClose(t.id, e)}
         />
       ))}
-      {onNewProjectRoute ? <NewProjectTab /> : null}
-      <Link
-        href="/new-project"
-        aria-label="Open another project"
-        title="Open a new project tab"
-        className="flex h-9 items-center px-2 text-muted-foreground hover:text-foreground"
-      >
-        <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-      </Link>
+      {onNewProjectRoute ? (
+        <NewProjectTab />
+      ) : (
+        <Link
+          href="/new-project"
+          aria-label="Start a new project"
+          title="Start a new project"
+          className="flex h-9 shrink-0 items-center gap-1.5 border-r px-3 text-xs font-medium text-muted-foreground hover:bg-background/60 hover:text-foreground"
+        >
+          <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+          New project
+        </Link>
+      )}
       {buildingTabs.length > 0 ? (
         <button
           type="button"

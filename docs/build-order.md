@@ -7,7 +7,7 @@ This file decomposes the spec.md section 7 phased plan into agent-executable tas
 The base Phase A-E plan has shipped. The Phase F hardening pass supersedes several earlier transport and novice-safety details:
 - Interview chat and build orchestration both use the Claude Agent SDK in the Node sidecar; the `claude` CLI remains the auth prerequisite only.
 - Runtime interview answers live in the SQLite `answers` table. `.builder/answers.json` is a legacy seed/reference file.
-- Readiness requires all 32 fast-path questions plus final echo-back confirmation.
+- Readiness requires all 35 fast-path questions plus final echo-back confirmation. (Q33-Q35 added in D-023 to anchor the build to a concrete deliverable artifact, named reference tools, and explicit non-negotiables.)
 - File ingestion requires novice approval, blocks on PII review, and injects approved summaries into `spec.md` section 0 as source material.
 - Stop/cancel targets the active stream/project, with an all-streams fallback.
 - Commands should use `corepack pnpm ...` so nested scripts work in Corepack-only shells.
@@ -124,7 +124,7 @@ A4 is split across three sub-tasks because the Node-sidecar architecture chosen 
 
 ### B2: The `record_answer` tool via sidecar SDK tools (per ADR-0005)
 - Define the tool per kit section 14.3.1.
-- Host the tool in the Node sidecar's chat driver, validating `question_id` against Q1-Q32.
+- Host the tool in the Node sidecar's chat driver, validating `question_id` against Q1-Q35.
 - On tool call, the handler appends to the `answers` table; `.builder/answers.json` is not a runtime mirror.
 - AC: when Claude calls `record_answer` mid-conversation, the DB updates and the chat continues without the novice seeing the tool call.
 - Integration: assert tool call is delivered through the sidecar SDK driver, parsed, validated, and persisted.
@@ -145,7 +145,7 @@ A4 is split across three sub-tasks because the Node-sidecar architecture chosen 
 - Eval: a Promptfoo suite with 12 fixture conversations asserts on follow-up presence and "you choose" handling.
 
 ### B6: Ready-to-build gating
-- Implement the kit section 14.3.5 readiness check: 32 fast-path questions answered, all activated high-stakes questions answered, final echo-back confirmed.
+- Implement the kit section 14.3.5 readiness check: 35 fast-path questions answered, all activated high-stakes questions answered, final echo-back confirmed.
 - The Start build button is disabled until ready; tooltip explains what is needed.
 - AC: button is correctly enabled and disabled across the test cases in `tests/integration/readiness.test.ts`.
 
@@ -283,7 +283,7 @@ Phase F is the post-review hardening pass for the eight recommendations surfaced
 - AC: direct Start build and chat-intent build requests both respect the readiness result.
 
 ### F4: Validate interview question ids
-- Define the allowed Q1-Q32 id set in one sidecar module.
+- Define the allowed Q1-Q35 id set in one sidecar module.
 - Validate `record_answer.question_id` and `queue_questions.items[].id` against that set.
 - AC: invalid ids are rejected before they can pollute the answers table.
 

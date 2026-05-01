@@ -1,10 +1,10 @@
 // Ready-to-build gating per build-order.md B6 (kit section 14.3.5).
 //
 // A project is ready to start its build when:
-//   1. Every fast-path question (Q1-Q28) has at least one recorded answer.
+//   1. Every fast-path question (Q1-Q35) has at least one recorded answer.
 //   2. Every high-stakes follow-up that was activated has an answer.
 //      (Activation is a future concept; for the placeholder library, the
-//      28 fast-path set is the universe. A `library` override lets us pass
+//      35 fast-path set is the universe. A `library` override lets us pass
 //      the activated set from elsewhere when that lands.)
 //   3. The novice has clicked through the final echo-back gate ("Here is
 //      what I will build, anything wrong?"). Tracked in the UI; passed in

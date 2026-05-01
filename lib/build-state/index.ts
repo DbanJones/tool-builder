@@ -23,6 +23,52 @@ const HistoryActionEntrySchema = z.object({
 
 export type HistoryActionEntry = z.infer<typeof HistoryActionEntrySchema>;
 
+const TodoItemSchema = z.object({
+  content: z.string(),
+  status: z.enum(["pending", "in_progress", "completed"]),
+  activeForm: z.string(),
+});
+
+export type TodoItem = z.infer<typeof TodoItemSchema>;
+
+/**
+ * Find the most recent TodoWrite call in a history-log tail and return its
+ * `todos` array. Used by the project workspace to hydrate the Plan tab on
+ * cold open — without this the plan stays empty until the resumed agent
+ * emits its next TodoWrite, which can be 30+ seconds.
+ *
+ * Returns an empty array when no TodoWrite has been seen, when the latest
+ * TodoWrite's rawInput fails to parse, or when its `todos` array is empty.
+ * Never throws — bad data should silently degrade to "no plan yet" rather
+ * than block the whole hydration pass.
+ */
+export function extractLatestPlan(
+  actions: readonly HistoryActionEntry[],
+): TodoItem[] {
+  // Walk backwards so the first match is the most recent TodoWrite call;
+  // ts ordering is asc out of read_history_log_tail (it preserves file order).
+  for (let i = actions.length - 1; i >= 0; i--) {
+    const a = actions[i]!;
+    if (a.tool !== "TodoWrite") continue;
+    try {
+      const parsed: unknown = JSON.parse(a.rawInput);
+      if (typeof parsed !== "object" || parsed === null) continue;
+      const todosRaw = (parsed as { todos?: unknown }).todos;
+      if (!Array.isArray(todosRaw)) continue;
+      const todos: TodoItem[] = [];
+      for (const item of todosRaw) {
+        const r = TodoItemSchema.safeParse(item);
+        if (r.success) todos.push(r.data);
+      }
+      return todos;
+    } catch {
+      // Malformed JSON in rawInput — try the next-older TodoWrite.
+      continue;
+    }
+  }
+  return [];
+}
+
 // Forward-compatible: any field the dashboard does not render is accepted as
 // `unknown` rather than rejected, so a richer state.json (e.g. produced by
 // the orchestrator at a later phase) never breaks the reader.

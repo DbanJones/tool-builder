@@ -2,7 +2,12 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 import { invoke } from "@tauri-apps/api/core";
 
-import { readHistoryLogTail, readTargetState } from "./index";
+import {
+  extractLatestPlan,
+  readHistoryLogTail,
+  readTargetState,
+  type HistoryActionEntry,
+} from "./index";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -184,5 +189,95 @@ describe("readHistoryLogTail", () => {
     const r = await readHistoryLogTail("/tmp/x", 50);
     expect(r.isOk()).toBe(true);
     if (r.isOk()) expect(r.value).toEqual([]);
+  });
+});
+
+describe("extractLatestPlan", () => {
+  const mkAction = (
+    over: Partial<HistoryActionEntry> & { ts: number; tool: string; rawInput: string },
+  ): HistoryActionEntry => ({
+    id: `a-${over.ts}`,
+    humanLine: null,
+    phase: null,
+    taskId: null,
+    ...over,
+  });
+
+  it("returns [] when no actions are provided", () => {
+    expect(extractLatestPlan([])).toEqual([]);
+  });
+
+  it("returns [] when no TodoWrite calls exist in the tail", () => {
+    const actions = [
+      mkAction({ ts: 1, tool: "Read", rawInput: '{"file_path":"/x"}' }),
+      mkAction({ ts: 2, tool: "Bash", rawInput: '{"command":"ls"}' }),
+    ];
+    expect(extractLatestPlan(actions)).toEqual([]);
+  });
+
+  it("returns the todos array from the only TodoWrite present", () => {
+    const todos = [
+      { content: "Set up the database", status: "completed", activeForm: "Setting up the database" },
+      { content: "Wire the homepage", status: "in_progress", activeForm: "Wiring the homepage" },
+    ];
+    const actions = [
+      mkAction({ ts: 1, tool: "TodoWrite", rawInput: JSON.stringify({ todos }) }),
+    ];
+    expect(extractLatestPlan(actions)).toEqual(todos);
+  });
+
+  it("returns the LATEST TodoWrite when several appear (older ones discarded)", () => {
+    const earlier = [
+      { content: "Plan v1", status: "pending" as const, activeForm: "Planning v1" },
+    ];
+    const latest = [
+      { content: "Plan v2 step 1", status: "completed" as const, activeForm: "Doing step 1" },
+      { content: "Plan v2 step 2", status: "in_progress" as const, activeForm: "Doing step 2" },
+      { content: "Plan v2 step 3", status: "pending" as const, activeForm: "Doing step 3" },
+    ];
+    const actions = [
+      mkAction({ ts: 1, tool: "TodoWrite", rawInput: JSON.stringify({ todos: earlier }) }),
+      mkAction({ ts: 2, tool: "Bash", rawInput: '{"command":"ls"}' }),
+      mkAction({ ts: 3, tool: "TodoWrite", rawInput: JSON.stringify({ todos: latest }) }),
+      mkAction({ ts: 4, tool: "Read", rawInput: '{"file_path":"/x"}' }),
+    ];
+    expect(extractLatestPlan(actions)).toEqual(latest);
+  });
+
+  it("falls back to the next-older TodoWrite when the latest has malformed JSON in rawInput", () => {
+    const usable = [
+      { content: "First plan", status: "pending" as const, activeForm: "Working on first" },
+    ];
+    const actions = [
+      mkAction({ ts: 1, tool: "TodoWrite", rawInput: JSON.stringify({ todos: usable }) }),
+      mkAction({ ts: 2, tool: "TodoWrite", rawInput: "{not valid json" }),
+    ];
+    expect(extractLatestPlan(actions)).toEqual(usable);
+  });
+
+  it("drops individual todos that fail schema validation but keeps the well-formed ones", () => {
+    const good = { content: "good", status: "pending" as const, activeForm: "Working on good" };
+    const actions = [
+      mkAction({
+        ts: 1,
+        tool: "TodoWrite",
+        rawInput: JSON.stringify({
+          todos: [
+            good,
+            { content: "missing status field" },
+            { status: "in_progress", activeForm: "missing content" },
+            "not even an object",
+          ],
+        }),
+      }),
+    ];
+    expect(extractLatestPlan(actions)).toEqual([good]);
+  });
+
+  it("returns [] when the latest TodoWrite has todos: null / wrong type", () => {
+    const actions = [
+      mkAction({ ts: 1, tool: "TodoWrite", rawInput: JSON.stringify({ todos: null }) }),
+    ];
+    expect(extractLatestPlan(actions)).toEqual([]);
   });
 });

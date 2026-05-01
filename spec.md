@@ -60,7 +60,7 @@ Explicit non-goals:
 - **Then**:
   - **Flow C AC1**: The Builder calls Claude with the interview system prompt and the running answers.
   - **Flow C AC2**: Claude responds with either a follow-up question or a `record_answer` tool call.
-  - **Flow C AC3**: On `record_answer`, the sidecar validates the question id against Q1-Q32, writes the answer to the SQLite `answers` table, and rebuilds `spec.md` from the kit's decision table.
+  - **Flow C AC3**: On `record_answer`, the sidecar validates the question id against Q1-Q35, writes the answer to the SQLite `answers` table, and rebuilds `spec.md` from the kit's decision table.
   - **Flow C AC4**: The spec preview panel updates within 500ms.
   - **Flow C AC5**: The topic counter increments.
   - **Flow C AC6**: The audit log records `answer_recorded` with the question id.
@@ -77,13 +77,14 @@ Explicit non-goals:
   - **Flow D AC6**: The file is copied to `{project}/inputs/` and listed in `spec.md` section 0.
 
 ### Flow E: Ready to build
-- **Given** all 32 fast-path questions and all activated high-stakes questions have answers,
-- **When** the novice confirms the final echo-back and clicks Start build,
+- **Given** all 35 fast-path questions (including Q33 deliverable artifact, Q34 reference anchors, Q35 non-negotiables) and all activated high-stakes questions have answers,
+- **When** the novice clicks Start build,
 - **Then**:
-  - **Flow E AC1**: The Builder shows a final echo-back ("Here is what I'll build, three things ranked. Anything wrong?") and requires an explicit "Looks right" confirmation.
-  - **Flow E AC2**: On confirmation, the unified project workspace enables Start build and switches into the build dashboard state.
-  - **Flow E AC3**: The sidecar starts a Claude Agent SDK session in the project folder with `CLAUDE.md` and `rules/` already present, using the `claude` CLI only as the auth backend.
-  - **Flow E AC4**: The dashboard begins streaming.
+  - **Flow E AC1**: Readiness auto-confirms once the fast-path is complete (no separate "Looks right" popup). The deliverable artifact, reference anchors, and non-negotiables remain visible in the Spec tab and re-surface in the post-build "verify against your spec" panel; per D-024 the explicit echo-back popup was removed because it added a friction step the novice repeatedly skipped past without reading.
+  - **Flow E AC2**: With readiness satisfied, the unified project workspace enables Start build and switches into the build dashboard state.
+  - **Flow E AC3**: If at least one other project is currently `building`, the Builder shows a modal listing those projects with three actions: **Run alongside** (start this build in parallel — both share the Claude account's rate-limit budget), **Stop them first** (cancel each in-flight build via per-project orchestrator stop, mark each `paused`, then start this one), **Cancel** (close modal, do nothing). Concurrent builds are supported because each project's SDK session lives behind its own stream id in the sidecar's `inflight` map. Per D-025 (supersedes D-024 silent preempt).
+  - **Flow E AC4**: The sidecar starts a Claude Agent SDK session in the project folder with `CLAUDE.md` and `rules/` already present, using the `claude` CLI only as the auth backend.
+  - **Flow E AC5**: The dashboard begins streaming.
 
 ### Flow F: Build phase execution
 - **Given** a build phase has started,
@@ -152,6 +153,23 @@ Explicit non-goals:
   - **Flow J AC2**: If a newer version is available, the Builder prompts the novice to install.
   - **Flow J AC3**: On confirmation, the Builder downloads, verifies signature, and restarts.
 
+### Flow K: Visual feedback (annotated screenshots)
+- **Given** a build has started (mid-stream or finished) and the novice notices something visually wrong with the built app,
+- **When** the novice clicks **Pause & annotate** (mid-stream) or **Annotate** (between turns) in the workspace toolbar,
+- **Then**:
+  - **Flow K AC1**: If a build is mid-stream, the orchestrator stops via per-project `orchestratorStop` and the project flips to `paused`. The annotation modal opens in empty-placeholder mode.
+  - **Flow K AC2**: The novice supplies the source image by drag-drop or clipboard paste (Cmd/Ctrl+V) into the modal. Images >10 MB are rejected with an inline error.
+  - **Flow K AC3**: The modal exposes four tools — box, arrow, free-draw, text label — plus undo and clear. Annotations render in red (single-color for slice 1).
+  - **Flow K AC4**: On Send, the canvas (image + overlay) is flattened to a PNG, saved via the path-sandboxed `feedback_image_save` Tauri command into `{project}/.builder/feedback/fb-<unix-secs>-<nanos>.png`, and the chat receives a user message containing the novice's text description plus the relative path.
+  - **Flow K AC5**: `runFollowUpTurn` resumes the build session. The orchestrator's system prompt instructs it to Read any referenced `.builder/feedback/*.png` (Read returns image content), interpret the annotations, act on them, then rewrite `.builder/review.md`.
+  - **Flow K AC6**: On Cancel or ESC, no file is written and no chat message is sent. The build remains paused (the novice can resume via the normal Build button).
+  - **Flow K AC7** (Slice 2 / D-027): The right rail exposes a **Preview** tab visible whenever a build has started. When the target app is not running, the panel shows a "Start preview" button that calls `target_app_launch`. While the dev server is starting it shows a spinner; on error it shows the error + a Try again button.
+  - **Flow K AC8**: Once the dev server is running, the Preview panel renders an `<iframe>` of the captured URL (`http://localhost:{port}`). CSP allows `frame-src 'self' http://localhost:* http://127.0.0.1:*`. The iframe sandbox attribute permits scripts, same-origin, forms, popups, and modals so the target app functions normally inside it.
+  - **Flow K AC9**: The Preview toolbar includes Refresh (re-keys the iframe), Open externally (default browser), Stop preview (calls `target_app_stop`), and Capture & annotate.
+  - **Flow K AC10** (D-028): The iframe sandbox grants `allow-pointer-lock`, `allow-downloads`, `allow-orientation-lock`, `allow-presentation` in addition to the basic SPA tokens, and the `allow` attribute permits `fullscreen; pointer-lock; autoplay; gamepad; clipboard-read; clipboard-write` so canvas/WebGL games (FPS-style mouse capture, fullscreen) function inside the preview.
+  - **Flow K AC11** (D-028): On macOS, **Capture & annotate** spawns the native `screencapture -i` region picker via the new `capture_region_to_png` Tauri command; the captured PNG bytes are returned base64-encoded, decoded into a Blob, and the AnnotationModal opens with the image already loaded — three clicks end-to-end (pick → mark up → send). On Linux/Windows the button still opens the empty modal; the cross-platform path is a Slice 2.6 follow-up.
+  - **Flow K AC12** (D-028): When the orchestrator emits a file-mutating `tool_use` event (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`), the workspace bumps a counter that's incorporated into the iframe's `key`, forcing a hard reload so the novice sees the agent's edits land in real time without clicking Refresh.
+
 ## 4. Data model (high level)
 - `projects` table: id (ULID), name, path, created_at, last_opened_at, current_phase, status (interviewing | ready | building | paused | done)
 - `answers` table: id, project_id, question_id, answer_text, confidence (confident | tentative | default-applied), source (chat | file | default), rationale, created_at
@@ -197,7 +215,7 @@ Phase D: Build dashboard, live tail, ETA, approval gates, drift surfacing. Demo:
 
 Phase E: Deploy to Vercel, export to GitHub, crash recovery, polish, signed installers, auto-update. Beta to real novices.
 
-Phase F: Hardening for novice success: SDK-sidecar chat/build, cancel/stop, echo-back gating, Q1-Q32 validation, file approval with PII review, approved source-material injection, concrete target-app rules, Corepack scripts, and documentation/ADR alignment.
+Phase F: Hardening for novice success: SDK-sidecar chat/build, cancel/stop, echo-back gating, Q1-Q35 validation (Q33-Q35 added in D-023 to anchor the build to a concrete artifact, named reference tools, and explicit non-negotiables), file approval with PII review, approved source-material injection, concrete target-app rules, Corepack scripts, and documentation/ADR alignment.
 
 Each phase ends with: passing `corepack pnpm verify`, one Playwright E2E for the new core flow where available, signed installers for all three platforms when signing artefacts exist, and a deployed preview URL of the Builder's marketing site (a separate one-page Next.js app, not in scope here).
 

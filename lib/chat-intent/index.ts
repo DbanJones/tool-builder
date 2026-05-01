@@ -1,14 +1,27 @@
-// Pure intent matcher for the workspace chat input. The novice should be
-// able to drive the whole flow from chat — "build it", "deploy", "stop",
-// "push to github" — without hunting for buttons. We classify the message
-// here; the workspace decides which side-effect to fire.
+// Pure intent matcher for the workspace chat input.
 //
-// Design principle: high precision, low recall. False positives are
-// expensive (firing a build because the user said "I think we should build
-// a CRM" would be terrible), so we only match short imperative messages
-// against a tight whitelist. Longer messages always fall through to chat.
+// Originally chat was reserved for actual conversation about the spec and
+// only "stop" fired actions (the safety hotkey while a build was running).
+// D-027 broadens this: the chat is now the primary control surface, and
+// short imperative phrases trigger the same actions as the workspace
+// header buttons (Build / Resume / Pause-and-annotate / Launch / Deploy /
+// Push) plus tab-switch shortcuts (Plan).
+//
+// Design principle: high precision, low recall. Phrases are matched
+// against tight whitelists keyed to the current context (you can't fire
+// "build" while running, can't "stop" while idle), and any message over
+// MAX_INTENT_CHARS falls through to chat regardless. The novice can still
+// type long sentences without accidentally triggering an action.
 
-export type ChatIntent = "build" | "stop" | "deploy" | "push" | "none";
+export type ChatIntent =
+  | "stop"
+  | "build"
+  | "launch"
+  | "deploy"
+  | "push"
+  | "plan"
+  | "annotate"
+  | "none";
 
 export interface IntentContext {
   /** Has the orchestrator session been kicked off at least once? */
@@ -17,32 +30,12 @@ export interface IntentContext {
   isRunning: boolean;
   /** Has the agent written .builder/review.md (build is past first pass)? */
   hasReview: boolean;
+  /** Is the interview readiness gate satisfied (35/35)? */
+  isReadyToBuild: boolean;
 }
 
 /** Messages over this length are always chat content, never intents. */
 const MAX_INTENT_CHARS = 32;
-
-const BUILD_PHRASES = new Set([
-  "build",
-  "build it",
-  "build now",
-  "build please",
-  "build the app",
-  "go",
-  "go ahead",
-  "lets build",
-  "let's build",
-  "let's build it",
-  "lets build it",
-  "ok build",
-  "ok build it",
-  "ok go",
-  "yes build",
-  "yes build it",
-  "start",
-  "start build",
-  "start the build",
-]);
 
 const STOP_PHRASES = new Set([
   "stop",
@@ -55,36 +48,78 @@ const STOP_PHRASES = new Set([
   "abort",
 ]);
 
+const BUILD_PHRASES = new Set([
+  "build",
+  "build it",
+  "start",
+  "start build",
+  "start the build",
+  "begin",
+  "go",
+  "ship it",
+  "make it",
+]);
+
+const RESUME_PHRASES = new Set([
+  "resume",
+  "continue",
+  "carry on",
+  "keep going",
+  "go again",
+]);
+
+const LAUNCH_PHRASES = new Set([
+  "launch",
+  "launch it",
+  "launch the app",
+  "open",
+  "open it",
+  "open the app",
+  "preview",
+  "run it",
+  "show me",
+]);
+
 const DEPLOY_PHRASES = new Set([
   "deploy",
   "deploy it",
-  "deploy now",
-  "deploy please",
-  "deploy preview",
   "publish",
   "publish it",
-  "push live",
-  "ship it",
+  "release",
 ]);
 
 const PUSH_PHRASES = new Set([
   "push",
   "push it",
   "push to github",
-  "push to gh",
-  "save to github",
-  "save it to github",
   "github",
-  "back up to github",
+  "export",
+  "export to github",
+]);
+
+const PLAN_PHRASES = new Set([
+  "plan",
+  "show plan",
+  "show the plan",
+  "open plan",
+  "what's the plan",
+  "whats the plan",
+]);
+
+const ANNOTATE_PHRASES = new Set([
+  "annotate",
+  "feedback",
+  "screenshot",
+  "draw",
+  "mark up",
+  "markup",
 ]);
 
 function normalise(message: string): string {
   return message
     .trim()
     .toLowerCase()
-    // strip surrounding punctuation but keep apostrophes inside words
     .replace(/^[!.?,\s]+|[!.?,\s]+$/g, "")
-    // collapse runs of whitespace
     .replace(/\s+/g, " ");
 }
 
@@ -92,12 +127,33 @@ export function detectIntent(message: string, ctx: IntentContext): ChatIntent {
   const m = normalise(message);
   if (m.length === 0 || m.length > MAX_INTENT_CHARS) return "none";
 
-  if (!ctx.hasStarted && !ctx.isRunning && BUILD_PHRASES.has(m)) return "build";
+  // Stop is the priority match — even ambiguous phrases like "pause"
+  // should kill the build first if one's running.
   if (ctx.isRunning && STOP_PHRASES.has(m)) return "stop";
-  if (ctx.hasStarted && !ctx.isRunning && ctx.hasReview && DEPLOY_PHRASES.has(m)) {
-    return "deploy";
+
+  // Build / Resume share an action (startBuild) but the user-facing acks
+  // differ; both surface as the "build" intent and the caller decides
+  // whether the result is a fresh build or a resume by inspecting hasStarted.
+  if (!ctx.isRunning && (BUILD_PHRASES.has(m) || RESUME_PHRASES.has(m))) {
+    if (!ctx.hasStarted && !ctx.isReadyToBuild) return "none";
+    return "build";
   }
-  if (ctx.hasStarted && !ctx.isRunning && PUSH_PHRASES.has(m)) return "push";
+
+  // Annotate works any time the build has started (button is gated the
+  // same way). It auto-pauses if the build is mid-stream.
+  if (ctx.hasStarted && ANNOTATE_PHRASES.has(m)) return "annotate";
+
+  // Launch / Deploy / Push only make sense once review.md has been written
+  // (the build has produced an artefact worth running, deploying, pushing).
+  if (ctx.hasReview && !ctx.isRunning) {
+    if (LAUNCH_PHRASES.has(m)) return "launch";
+    if (DEPLOY_PHRASES.has(m)) return "deploy";
+    if (PUSH_PHRASES.has(m)) return "push";
+  }
+
+  // Plan is a tab-switch — always allowed, no state gate.
+  if (PLAN_PHRASES.has(m)) return "plan";
+
   return "none";
 }
 
@@ -106,16 +162,24 @@ export function detectIntent(message: string, ctx: IntentContext): ChatIntent {
  * intent fires. Shown as an assistant-style bubble so the novice sees that
  * their words triggered something.
  */
-export function ackForIntent(intent: ChatIntent): string {
+export function ackForIntent(intent: ChatIntent, ctx?: IntentContext): string {
   switch (intent) {
-    case "build":
-      return "Got it — kicking off the build now. The right rail will switch to the live plan.";
     case "stop":
       return "Stopping the current turn. You can resume any time.";
+    case "build":
+      return ctx?.hasStarted
+        ? "Resuming the build."
+        : "Kicking off the build. The dashboard will show progress.";
+    case "launch":
+      return "Launching the app. Your default browser will open.";
     case "deploy":
-      return "Deploying a preview to Vercel. I'll drop the URL here when it's up.";
+      return "Opening the deploy dialog.";
     case "push":
-      return "Pushing the project folder to a private GitHub repo.";
+      return "Starting the GitHub push.";
+    case "plan":
+      return "Switching to the Plan & status tab.";
+    case "annotate":
+      return "Pausing the build (if running) and opening the annotate window.";
     case "none":
       return "";
   }

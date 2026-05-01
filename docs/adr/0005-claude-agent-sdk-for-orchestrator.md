@@ -29,7 +29,7 @@ Use `@anthropic-ai/claude-agent-sdk` (v0.2.x) inside the Node sidecar to drive b
 - **`canUseTool` wiring**: the callback inserts a row into `permission_requests` (already exists per Commit B), polls until the dashboard `PermissionPromptBanner` resolves it (already exists), returns `{behavior: "allow"|"deny"}` to the SDK. The dead code from Commit B becomes live.
 - **Streaming wire**: extend the sidecar's JSON-RPC protocol with notification messages (`{notification: {channel, payload}}` — no `id`, no response). Tauri's `sidecar.rs` parses notifications and forwards to per-stream Tauri `Channel<T>` instances the webview registered when calling `orchestrator_start`.
 - **Tauri Rust commands**: `orchestrator_start` and `orchestrator_stop` keep the same TS-side signatures but their bodies become thin pass-throughs.
-- **Interview chat**: `chat_send` and `chat_stop` now use the same streaming sidecar bridge (`chat.start` / `chat.stop`). The sidecar hosts SDK MCP tools for `record_answer` and `queue_questions`, and validates question ids against the known Q1-Q32 set.
+- **Interview chat**: `chat_send` and `chat_stop` now use the same streaming sidecar bridge (`chat.start` / `chat.stop`). The sidecar hosts SDK MCP tools for `record_answer` and `queue_questions`, and validates question ids against the known Q1-Q35 set (originally Q1-Q32; extended per D-023).
 
 ### Out of scope for this ADR
 

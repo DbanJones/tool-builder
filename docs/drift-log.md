@@ -2,6 +2,137 @@
 
 Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction or accepted drift is logged here with date, AC id or scope item, drift type, resolution, and commit hash. This is the audit trail.
 
+## 2026-05-01
+
+### D-029 — Process drift: D-023..D-028 bundled into one commit, violating binding rule 9
+- **Drift type**: process drift (against CLAUDE.md binding rule 9 — "PRs/commits stay under 400 changed lines").
+- **Discovered at**: pre-push reviewer agent run flagged the diff at 2028 insertions / 493 deletions across 33 files (≈5× the 400-line cap).
+- **Cause**: the work was *logically* sliced — six discrete drift entries (D-023..D-028) each independently designed via Echo-back, executed, and gated through `corepack pnpm verify` — but the slices were never committed individually as we went. By the time the user asked for a push, `app/project/page.tsx` (854-line diff) had interleaved hunks for D-024 through D-028 that would have been genuinely error-prone to split via `git add -p` after the fact.
+- **Resolution**: drift accepted with explicit acknowledgement. Bundled commit lands with a detailed message breaking down each D-NNN; the audit trail in this drift-log already documents per-slice rationale, files, and risks. Future similar work commits at each D-NNN boundary as it's completed.
+- **Commit**: TBD (this commit).
+- **Follow-up**:
+  1. **Process change**: at the end of every slice (after `corepack pnpm verify` passes and a drift-log entry is written), commit immediately rather than continuing to the next slice. This is what binding rule 9 actually wants.
+  2. The deferred reviewer suggestion (regression test for `currentSessionId` preservation in stopBuild / openAnnotation / onStopOthersFirst — exactly the silent-revert risk that bites you in three months) is worth a short follow-up commit once this lands. T24 territory.
+
+### D-028 — Preview tab UX hardening: working sandbox, one-click capture, auto-refresh
+- **Drift type**: implementation correction (D-027 shipped a preview tab that was technically correct but practically unusable for the stated goal — non-coders testing their built apps).
+- **Discovered at**: novice walkthrough on the psychedelic-shooter target app — "It opens the game in my browser. I see a small fragment of the loading screen in the preview pane but it doesn't do anything! I also tried the cmd shift 4 and it creates a screenshot but i cant do anything with it to ingest it back into the tool".
+- **Cause**: three independent gaps all biting the same scenario.
+  1. **Sandbox too narrow.** D-027's iframe sandbox was `allow-scripts allow-same-origin allow-forms allow-popups allow-modals` — missing `allow-pointer-lock` and the `allow` attribute (Permissions Policy). A shooter that calls `requestPointerLock()` on first click loaded but never initialized; it appeared as a frozen loading screen.
+  2. **Capture flow had no obvious next step.** Clicking **Capture & annotate** opened an empty modal expecting drag-drop or paste. Cmd-Shift-4 (the natural OS gesture novices reach for) writes a PNG file to Desktop — there was no path from "screenshot file on Desktop" to "image in modal" without manual file-drag or a copy-as-image trick novices wouldn't know.
+  3. **Stale preview.** The agent edits source files but the iframe doesn't reload — relies on the dev server's HMR which can flake inside cross-origin iframes. Novice clicks Refresh manually after every edit, or sees stale state and assumes the agent did nothing.
+- **Resolution**:
+  - **A. Sandbox + permissions** (`right-rail.tsx` `PreviewPanel` iframe): added `allow-pointer-lock allow-downloads allow-orientation-lock allow-presentation` to the sandbox token list, plus the `allow` attribute with `fullscreen; pointer-lock; autoplay; gamepad; clipboard-read; clipboard-write`. Canvas/WebGL games and media-playback apps now function inside the preview.
+  - **B. One-click capture** (`src-tauri/src/lib.rs` new `capture_region_to_png` command + `app/project/page.tsx` new `captureRegionAndAnnotate` callback): wires `screencapture -i -t png <tempfile>` on macOS, reads the PNG bytes, returns base64 to the webview, decodes into a Blob, opens the AnnotationModal with the image already loaded as `initialImage`. ESC-cancellation is silent (no error toast); other failures surface in chat. macOS-only for slice 2.5; cross-platform via `xcap` is a follow-up.
+  - **C. Auto-refresh on agent edit** (`app/project/page.tsx` buildEventHandler + new `previewRefreshTrigger` state): on every `tool_use` for `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, increment a counter passed into the iframe's `key`. The iframe re-mounts on each agent file mutation; the user watches changes appear without touching the Refresh button.
+  - The Capture button now also pauses any in-flight build (same logic as `openAnnotation` from D-026), so the agent isn't generating against state the novice has just decided is wrong.
+- **Files changed**: `src-tauri/src/lib.rs` (+1 command, registered), `app/project/page.tsx` (new `captureRegionAndAnnotate` + `previewRefreshTrigger`, buildEventHandler refresh-trigger branch), `components/features/project-workspace/right-rail.tsx` (sandbox + allow + `externalRefreshTrigger` prop), `spec.md` (Flow K AC10-AC12).
+- **Commit**: TBD.
+- **Risks acknowledged**:
+  1. **macOS-only capture**: Linux/Windows users still get the empty modal flow. They can paste from clipboard or drag a file, but it's not the one-click experience macOS gets. Tracked as Slice 2.6.
+  2. **CSP `clipboard-read` / `clipboard-write` permissions** in the iframe `allow` attribute: gives the framed app clipboard access. Acceptable for a single-user desktop app where the novice trusts the apps they're building; not acceptable for a hosted multi-tenant tool.
+  3. **Auto-refresh thrash**: an agent that emits 50 Edit calls in a burst will re-key the iframe 50 times. No debounce. If this turns out to be jittery, add a 500ms debounce — for now, the natural pace of Claude's tool calls makes this a non-issue.
+  4. **Sandbox `allow-downloads` + `allow-presentation`**: minor expansion of attack surface. Same trust model as #2.
+- **Resolved in same slice (post-AC12)**: **Maximize preview** toggle. New button in the PreviewPanel toolbar (`Maximize2` / `Minimize2` Lucide icons) flips the workspace layout from `lg:grid-cols-[minmax(0,1fr)_400px]` (chat 1fr + 400px rail) to `grid-cols-1` (rail full-width, chat hidden). Auto-restores when the user switches off the preview tab (in `onTabChange`) and on ESC (window keydown listener attached only while maximized). Picked over a drag-resize handle because the use case is binary — "I'm testing, get out of the way" vs. "I'm chatting, give me the chat" — and a discrete toggle reads more clearly to a non-coder than a fiddly drag handle.
+
+### D-027 — In-Builder live preview (D-026 Slice 2: iframe of running target app)
+- **Drift type**: scope addition (the Slice 2 follow-up of D-026, deferred at the time and shipped now per user direction "can you continue building the in builder slice 2").
+- **Discovered at**: post-D-026 review — the user was looking at the Psychedelic Shooter target app and asked how to use the live preview feature, learning Slice 2 wasn't built yet. Spec.md Flow K only covered annotation on dropped/pasted images.
+- **Cause**: D-026 Slice 1 left the user still having to OS-screenshot the running app from outside the Builder (Launch app button → external browser → Cmd-Shift-4) and then paste back into the annotation modal. The "preview inside the Builder" half of the original feature design — embedded iframe of `http://localhost:{port}` reusing the existing `lib/launch/` infrastructure — was deferred for CSP + dev-server-lifecycle wrinkles. None of those wrinkles were as bad as feared once tackled.
+- **Resolution**:
+  - **CSP**: extended `app.security.csp` in `src-tauri/tauri.conf.json` with `frame-src 'self' http://localhost:* http://127.0.0.1:*`. Scoped to localhost ports the user spawned (not `*`), so the attack surface widens minimally — only locally-bound dev servers can render in-frame.
+  - **PreviewPanel**: new component in `components/features/project-workspace/right-rail.tsx`. Reads the existing `launchStatus` state machine (idle / starting / running / error). Renders an `<iframe>` with `sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"` when running. Refresh works by re-keying the iframe (cheapest forced reload inside Tauri's webview). Toolbar buttons: Refresh, Open externally, Stop preview, Capture & annotate.
+  - **RightRail**: added `"preview"` to the `RightTab` union; Preview tab is visible whenever `hasStarted`. Receives `launchStatus`, `onStartPreview` (= existing `launchApp` in page.tsx), `onStopPreview` (= `stopLaunchedApp`), `onCaptureAndAnnotate` (= `openAnnotation` from D-026).
+  - No new Rust commands or deps. Reuses `target_app_launch` / `target_app_stop` from `src-tauri/src/launch.rs` (which were already shipped for the header Launch app button per binding rule 13 + O33-O37).
+  - `spec.md` Flow K extended with AC7-AC9; original AC1-AC6 unchanged.
+- **Files changed**: `src-tauri/tauri.conf.json`, `components/features/project-workspace/right-rail.tsx`, `app/project/page.tsx`, `spec.md`.
+- **Commit**: TBD.
+- **Risks acknowledged**:
+  1. **X-Frame-Options DENY**: target apps that explicitly set `X-Frame-Options: DENY` (or strict CSP `frame-ancestors`) refuse to render inside the iframe. Most dev defaults (Next.js, Vite) don't set these; if a target ever does, the user falls back to the **Open externally** button and the existing OS-screenshot flow. Symptoms: blank iframe + console error. Could detect server-side response headers in a future iteration.
+  2. **Auto-capture deferred (Slice 2.5)**: the "Capture & annotate" button just opens the empty AnnotationModal — the user still does Cmd-Shift-4 → Cmd-V. Delivering true one-click capture from the iframe rect needs either Tauri webview screenshot (`WebviewWindow::screenshot()` if it exists in Tauri 2 stable) or a Rust crate like `xcap`. Worth a separate slice; the iframe-in-Builder is the bigger ergonomic win on its own.
+  3. **CSP relaxation**: `http://localhost:* http://127.0.0.1:*` widens `frame-src` from `'self'` only. Threat model: a malicious local process bound to a localhost port could render in the Builder if the user navigates to it. Acceptable for a single-user desktop app; not acceptable for a hosted multi-user web app.
+- **Follow-up**:
+  1. **Slice 2.5**: auto-capture from the iframe via Tauri screenshot, cropping to the iframe's `getBoundingClientRect()` (devicePixelRatio-aware). Skips the Cmd-Shift-4 step entirely.
+  2. **HMR awareness**: detect when the dev server reloads (via the iframe's load event or the dev-server stdout) and surface a small "reloaded" toast so the novice knows the agent's edit landed.
+  3. **Per-port allowlist**: instead of `http://localhost:*`, narrow CSP `frame-src` to the exact port `target_app_launch` reports back. Requires CSP to be settable at runtime (Tauri 2 supports this via `tauri::WebviewWindow::set_csp` or similar) — not free, but tightens the threat model.
+
+## 2026-04-29
+
+### D-026 — Visual-feedback annotation tool (Slice 1: drop/paste image, draw, send)
+- **Drift type**: scope addition (new in-scope flow per user direction; spec.md gains Flow K).
+- **Discovered at**: post-D-025 walkthrough — user asked "you need to build in a tool that allows me to preview what has been built" and then refined: "I can pause the tool and feed back into the tool builder the screen and location of where any errors are. For example if a menu bar is missing, I should be able to circle it in the tool and feed that straight back into the builder".
+- **Cause**: existing feedback channel was text-only via the BuildPreviewVerifier (D-023). Text loses spatial information — "the menu bar is missing" doesn't tell the agent *where* the menu bar should be. Visual annotations carry that information natively, and Claude has vision so it can act on them directly.
+- **Resolution (Slice 1 of two)**:
+  - **Slice 1 (this entry)**: annotation tool over a drag-dropped or clipboard-pasted screenshot. The novice OS-screenshots first (e.g. macOS Cmd+Shift+5), drops/pastes into the Builder's annotation modal, marks up with box/arrow/free-draw/text label, types a description, sends.
+  - **Slice 2 (deferred)**: in-Builder live preview of the running target app (iframe or Tauri child webview) plus an in-place capture button that feeds the iframe screenshot directly into Slice 1's annotation modal. Defers because of CSP relaxations (`frame-src http://localhost:*`), dev-server lifecycle management (port detection, spawn/stop), and webview-screenshot dependency choice (`tauri-plugin-screenshots` vs. `xcap` crate).
+- **Files added/changed for Slice 1**:
+  - `src-tauri/src/lib.rs`: `feedback_image_save(project_path, content_base64)` Tauri command. Path-sandboxed to `{project}/.builder/feedback/`, 10 MB cap, PNG magic-bytes check, double canonicalisation guard against symlink escapes. Filename `fb-<unix-secs>-<nanos>.png` for sortable uniqueness.
+  - `lib/annotation/index.ts`: pure shape/draw/flatten primitives — `Shape` discriminated union (box | arrow | freedraw | text), `startShape` / `extendShape` / `isShapeCommittable` helpers, `drawShape(ctx, shape)` canvas renderer, `flattenAnnotations(image, shapes)` returning PNG `Uint8Array`, `bytesToBase64` for IPC encoding.
+  - `lib/annotation/index.test.ts`: 14 Vitest cases covering shape construction, in-progress extension, the >=4px / >=6px / >=2-points minimums for committable shapes, and immutability of the freedraw point list.
+  - `components/features/annotation/annotation-modal.tsx`: native `<dialog>`-based modal (no new dep). Toolbar with the four tools + undo + clear, single-canvas rendering with pointer capture, drag-drop + clipboard-paste source loading, inline error states for >10 MB images and decode failures, description textarea, Send/Cancel.
+  - `app/project/page.tsx`: `openAnnotation` callback (per-project orchestrator stop + status `paused` if mid-stream, then `setAnnotationOpen(true)`); **Pause & annotate** button in the workspace header (visible whenever `hasStarted`); `sendBuildFeedback` extended to accept `imageBytes?: Uint8Array` (writes via `feedback_image_save`, prepends path to the chat-visible message, embeds the path in the framed prompt for the agent).
+  - `sidecar/src/orchestrator-driver.ts`: one paragraph added to `ORCHESTRATOR_KICKOFF_PROMPT` instructing the agent to Read any `.builder/feedback/*.png` referenced in a turn and treat the annotations as authoritative.
+  - `spec.md`: new Flow K with six ACs.
+- **Commit**: TBD.
+- **Risks acknowledged**:
+  1. The agent may fail to look at the referenced PNG even with the system-prompt nudge. Worth a smoke test with a real annotated image before adding more polish; if it ignores the file, escalate the prompt language or include `"Read .builder/feedback/<file>"` as the literal first sentence.
+  2. `.builder/feedback/` accumulates PNGs; no auto-clean. The novice can wipe by deleting the folder. Add to project `.gitignore` template if not already in a follow-up.
+  3. Workspace-level drag-drop of images currently routes to the file-ingest pipeline (existing behaviour). Slice 1's expectation is the user opens the modal first; smarter routing (drag image → open annotation modal) is a UX-polish follow-up.
+  4. Canvas drawing isn't keyboard-accessible (per F12 we'd want shape selection by Tab + arrow-key drawing). Documented gap; not blocking.
+- **Follow-up**:
+  1. **Slice 2** (in-Builder live preview + in-place capture).
+  2. Auto-route workspace image drag-drop → annotation modal when a build has started.
+  3. Multi-color palette + line-width control if novices ask for them.
+  4. Periodic prune of `.builder/feedback/` (keep last N or last 30 days).
+  5. Smoke test the agent's response to a real annotated PNG; iterate the system-prompt paragraph if needed.
+
+### D-025 — Concurrent builds across projects allowed; preempt becomes opt-in via modal
+- **Drift type**: spec amendment (with user approval); supersedes D-024's silent-preempt behaviour.
+- **Discovered at**: post-D-024 walkthrough — user asked "why can't the tool have two separate builds going at once?" and then "I want it to allow for multiple builds! but ask before launching a new build if there is one already going".
+- **Cause**: D-024 silently stopped the in-flight build on Project A when the user clicked Build on Project B. That preserved a process-global single-build invariant that the SDK refactor (ADR-0005) had already obsolesced — the sidecar's orchestrator-driver keys `inflight` runs by stream id, supports per-project / per-stream / cancel-all stop modes, and the Tauri shell mints a fresh UUID per `orchestrator_start` (no shared subprocess state). Treating concurrent builds as forbidden was a stale assumption; treating preempt as automatic discarded in-flight work the user might have wanted to keep.
+- **Resolution**:
+  - `app/project/page.tsx`: split `startBuild` into a pre-check phase and `performBuild`. When `projects.list` shows ≥1 other project with `status === "building"`, set `concurrentBuildPrompt` state and render `ConcurrentBuildPromptDialog` (a native `<dialog>`-element modal — no new dep, browser-built focus trap + ESC + backdrop). Three actions: **Run alongside** → `setConcurrentBuildPrompt(null)` + `performBuild()`; **Stop them first** → for each conflict await `orchestratorStop({ projectId })` + `projects.setStatus → paused`, then `performBuild()`; **Cancel** → close modal. Default-focused button is **Stop them first** (safer for novices who tab past).
+  - `components/features/tab-bar/tab-bar.tsx`: stale "Singleton orchestrator" comment replaced with an accurate description of the per-stream-id inflight model. The "Stop all" button is unchanged in behaviour — `orchestratorStop()` with no args already calls `cancelAllOrchestrators()` on the sidecar (verified at `sidecar/src/index.ts:191`).
+  - `spec.md` Flow E: AC3 added describing the modal; old AC3 + AC4 renumbered to AC4 + AC5.
+  - The orchestrator path required no refactoring — it was N-safe end-to-end already (sidecar `inflight: Map<streamId, InflightRun>`, `OrchestratorState` Rust marker is empty, fresh UUID per `orchestrator_start`).
+- **Files changed**: `app/project/page.tsx`, `components/features/tab-bar/tab-bar.tsx`, `spec.md`.
+- **Commit**: TBD.
+- **Follow-up** (deferred from this slice; design noted these as polish):
+  1. **Aggregate spend badge** in TabBar when ≥2 builds running — sum of per-project `costUsd` so the novice sees doubled burn rate at a glance.
+  2. **Rate-limit broadcast**: when one project's build hits a `rate_limit` event, post a one-line note into other in-progress builds' chat scrollback ("Claude rate limit hit — both this and your other build will pause and resume together").
+  3. **Race check**: per-project stop-then-start happens in close succession; verify the SDK's session teardown completes before the new `query()` spawns. If a flake appears, await `projects.list` flipping the conflict's status off `"building"` before calling `performBuild`.
+
+### D-024 — Final-check echo-back popup removed; concurrent builds preempt instead of block
+- **Drift type**: spec amendment (with user approval).
+- **Discovered at**: post-D-023 walkthrough — the user said "I don't need the final check popup, just go through to build" and "if we build a project, it needs to stop the builds on the other projects".
+- **Cause**: Flow E AC1 mandated a "Looks right" confirmation popup before any build could start. In practice the novice answered 35 questions, saw a banner that asked them to confirm a thing they'd just spent ~30 minutes constructing, and clicked through without reading. The friction step bought no anti-drift signal that wasn't already covered by the always-visible Spec tab and the post-build "verify against your spec" panel added in D-023. Separately, the cross-project block on concurrent builds forced the novice to navigate back to the other project's tab, find Stop, wait, then re-navigate — when the natural mental model is "I clicked Build on this one, run it now."
+- **Resolution**:
+  - Echo-back popup deleted from `app/project/page.tsx` (`finalEchoBackOpen` derivation, the alert block, and the dead `EchoBackPreviewBlock` component all removed). `echoBackConfirmed` now auto-flips to `true` inside `refreshSpec` the moment fast-path coverage is complete; readiness UX otherwise unchanged.
+  - `startBuild` no longer early-returns on a cross-project conflict. It calls `orchestratorStop({ projectId: conflict.id })`, marks the other project paused, posts an assistant message ("Stopped the in-flight build on X so this one can start. Resume that project from its tab when you're ready."), and proceeds. The dead `otherBuildBlock` state and its banner UI were removed.
+  - `skipEchoBackGate` parameter on `startBuild` removed — the merged "Build now" callsite was the only consumer.
+  - TabBar's bare `+` icon for new project replaced with a labelled `+ New project` tab item so the navigation is discoverable.
+- **Files changed**: `app/project/page.tsx`, `components/features/tab-bar/tab-bar.tsx`, `spec.md` (Flow E AC1 + AC2 reworded).
+- **Commit**: TBD.
+- **Follow-up**:
+  1. Persist `echoBackConfirmed` writes to localStorage are now redundant (always derived) — could remove the localStorage roundtrip in a later cleanup.
+  2. The "stopped build on X" notification is text-only via `appendAssistantMessage`. Consider promoting to a transient toast if novices miss it in the chat scrollback.
+  3. Per-project stop uses the per-project signal but the orchestrator subprocess is process-global; verify that quick succession (stop → start) doesn't race the SDK session teardown. If it does, add a small await loop on the projects.list status flipping away from "building".
+
+### D-023 — Interview extended to Q1-Q35 to anchor builds to a concrete artifact
+- **Drift type**: spec amendment (with user approval). spec.md Flow C AC3 + Flow E "Given" both said Q1-Q32 / 32 fast-path; library and runtime now ship 35.
+- **Discovered at**: novice reported the generated tool wasn't matching their request (e.g., a "financial model builder" that didn't produce an Excel file). Root cause: the interview captured features and flows but never pinned down the concrete deliverable (Excel? web view? PDF?), the prior art it should resemble, or the features whose absence would mean reject-the-build.
+- **Cause**: Q15 (flows), Q16 (top-flow AC), and Q32 (definition of done) were all action- or feature-shaped, leaving the agent free to pick the *form* of the output. Without a deliverable artifact answer, "financial model builder" was as likely to come back as a web dashboard as an .xlsx.
+- **Resolution**: added three fast-path questions:
+  - **Q33 (deliverable artifact)**: the concrete thing the end user opens (e.g., ".xlsx with assumptions/P&L/sensitivity tabs"). Renders at the top of spec.md §3.
+  - **Q34 (reference anchors)**: 1-3 named existing tools the build should resemble, with similarities and differences. Renders in spec.md §2 between flows and out-of-scope.
+  - **Q35 (non-negotiables)**: features whose absence makes the novice reject the build outright (user-supplied idea). Renders in spec.md §3 between deliverable and AC.
+- **Files changed**: `lib/interview/library.ts`, `sidecar/src/interview-question-ids.ts`, `lib/interview/rebuild-spec.ts`, `lib/interview/readiness.ts` (comment), `sidecar/src/chat-driver.ts` (system prompt now flags Q33-Q35 as load-bearing). Tests and snapshot updated. Doc updates in spec.md, build-order.md, spec-trace.md, ADR-0005 to match.
+- **Commit**: TBD.
+- **Follow-up**:
+  1. Surface Q33/Q34/Q35 explicitly in the final echo-back UI so the novice signs off on the concrete artifact and non-negotiables, not just an undifferentiated spec scroll.
+  2. Add a mid-build preview: at end-of-build, compare what was built against Q33/Q35 and require the novice to confirm "this matches what I pictured" before declaring done. Capture freeform feedback on no.
+  3. Eventually feed Q35 (non-negotiables) into the orchestrator's review.md as explicit "must check" items rather than relying on free-form coverage.
+
 ## 2026-04-28
 
 ### D-022 — Phase F novice-readiness hardening closes several accepted gaps
