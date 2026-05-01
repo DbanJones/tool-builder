@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { BAND_RANGES, bandOf, CLASS_META } from "./taxonomy";
+import { BAND_RANGES, bandOf, CLASS_META } from "./taxonomy.js";
 
 describe("bandOf", () => {
   it("returns 'critical' for score >= 20", () => {

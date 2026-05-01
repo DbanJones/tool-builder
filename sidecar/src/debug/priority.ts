@@ -13,7 +13,7 @@
 //
 // Pure: no time, no I/O. The caller passes every component explicitly.
 
-import { type Band, bandOf, type DefectClass } from "./taxonomy";
+import { type Band, bandOf, type DefectClass } from "./taxonomy.js";
 
 export type UserMode = "founder" | "team";
 

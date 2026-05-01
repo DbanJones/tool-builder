@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { priority } from "./priority";
+import { priority } from "./priority.js";
 
 describe("priority", () => {
   it("matches the source spec's worked example for the Lovable RLS bug (founder mode)", () => {

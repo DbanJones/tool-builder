@@ -1,16 +1,15 @@
-// Shared types for Layer 1 detectors. A detector is a pure-ish function
-// from a `ScanContext` (the target-app folder + a logger) to a list of
-// `RawFinding` objects. The sidecar's `debug.scan` handler converts each
-// `RawFinding` into a fully-priced `Finding` by composing PRIORITY inputs
-// (defects/priority.ts) and inserts the result into the `defects` table.
+// Shared types for Layer 1 detectors. A detector is an async function from
+// a `ScanContext` (the target-app folder + a scan id + a wall-clock) to a
+// list of `RawFinding` objects. The sidecar's `debug.scan` handler converts
+// each `RawFinding` into a fully-priced row via the PRIORITY components in
+// priority.ts and inserts it into the `defects` table.
 //
-// Detectors live in `detectors/layer1/`. Layer 2 (LLM validator) and
-// Layer 3 (sandbox) reuse the `RawFinding` shape so the validator stage
-// can up- or down-grade confidence without owning the schema.
+// Sidecar convention is throw-on-error (matching files.ts and friends);
+// the JSON-RPC layer translates thrown errors into `{ ok: false, error }`
+// responses. Detectors should let unexpected exceptions propagate; the
+// scan handler decides whether to surface them or silently degrade.
 
-import type { ResultAsync } from "neverthrow";
-
-import type { DefectClass } from "../taxonomy";
+import type { DefectClass } from "../taxonomy.js";
 
 export interface ScanContext {
   /** Absolute path to the target-app folder (already path-sandboxed). */
@@ -34,7 +33,7 @@ export interface RawFinding {
   confidence: number;
   /** Difficulty 1..3 — codemod=1, refactor=1.5, cross-file=2, arch=3. */
   difficulty: number;
-  /** Workspace-relative file path. */
+  /** Workspace-relative file path with POSIX separators. */
   file: string;
   lineStart: number;
   lineEnd: number;
@@ -44,15 +43,9 @@ export interface RawFinding {
   codeEvidence: string;
 }
 
-export interface DetectorError {
-  kind: "detector_error";
-  detectorId: string;
-  message: string;
-}
-
 export interface Detector {
   /** Stable identifier — referenced in tests, traces, and `defects.rule_id`. */
   id: string;
-  /** Run the detector against the target folder. */
-  run(ctx: ScanContext): ResultAsync<readonly RawFinding[], DetectorError>;
+  /** Run the detector against the target folder. Throws on unexpected I/O. */
+  run(ctx: ScanContext): Promise<readonly RawFinding[]>;
 }
