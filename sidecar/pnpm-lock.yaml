@@ -38,6 +38,9 @@ importers:
       node-sql-parser:
         specifier: 5.4.0
         version: 5.4.0
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
       ulid:
         specifier: 3.0.2
         version: 3.0.2
@@ -63,9 +66,6 @@ importers:
       tsx:
         specifier: 4.20.6
         version: 4.20.6
-      typescript:
-        specifier: 5.9.3
-        version: 5.9.3
 
 packages:
 
