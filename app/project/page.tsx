@@ -192,6 +192,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   const [project, setProject] = useState<Project | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [recoveredFromCrash, setRecoveredFromCrash] = useState(false);
+  const [recoveredBannerDismissed, setRecoveredBannerDismissed] = useState(false);
 
   // Chat scrollback (unified; interview turns + build turns share the column).
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
@@ -961,6 +962,11 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
           event.tool === "MultiEdit" ||
           event.tool === "NotebookEdit"
         ) {
+          // The novice should see *what* is being changed the moment code
+          // starts mutating, not after the fact. Flip to the Plan & status
+          // tab on the first file-mutating tool call so the live tail is
+          // visible by default.
+          setTab((current) => (current === "plan" ? current : "plan"));
           setPreviewRefreshTrigger((n) => n + 1);
           // Auto-snapshot the iframe's current state (PR-4 of D-031). We let
           // the iframe re-render first (small delay) so the snapshot reflects
@@ -1557,8 +1563,11 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
       return;
     }
 
-    // Build mode: send as a follow-up turn to the running session.
-    echoUserMessage(trimmed);
+    // Build mode: send as a follow-up turn to the running session. Echo
+    // an immediate "On it" so the novice never silently drops into build
+    // mode without acknowledgement (per UX feedback — they'd type a
+    // comment and the build would resume but the chat would stay quiet).
+    echoUserMessage(trimmed, "On it — picking that up now.");
     setInput("");
     void runFollowUpTurn(trimmed);
   };
@@ -2060,7 +2069,8 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         pendingFileApprovalCount={pendingFileApprovals.length}
         onApproveFile={approveFileForSpec}
         onSkipFile={skipFileForSpec}
-        recoveredFromCrash={recoveredFromCrash}
+        recoveredFromCrash={recoveredFromCrash && !recoveredBannerDismissed}
+        onDismissRecoveredBanner={() => setRecoveredBannerDismissed(true)}
         openPermissions={openPermissions}
         onPermissionResolved={(id) =>
           setOpenPermissions((prev) => prev.filter((p) => p.id !== id))
@@ -2133,6 +2143,13 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
           previewRefreshTrigger={previewRefreshTrigger}
           previewMaximized={previewMaximized}
           onTogglePreviewMaximize={() => setPreviewMaximized((v) => !v)}
+          onReportPreviewBroken={(summary) => {
+            // Echo "On it — looking at that now." so the novice gets an
+            // immediate ack, then resume the build session with the captured
+            // console/network output as a follow-up turn.
+            echoUserMessage(summary, "On it — looking at that now.");
+            void runFollowUpTurn(summary);
+          }}
           defects={defects}
           isDebugScanning={isDebugScanning}
           fixingDefectIds={fixingDefectIds}
@@ -2267,6 +2284,7 @@ interface BannerStackProps {
   onApproveFile: (fileId: string) => void;
   onSkipFile: (fileId: string) => void;
   recoveredFromCrash: boolean;
+  onDismissRecoveredBanner: () => void;
   openPermissions: readonly OpenPermissionRequest[];
   onPermissionResolved: (id: string) => void;
   openDrifts: readonly DriftEvent[];
@@ -2472,12 +2490,21 @@ function BannerStack(props: BannerStackProps) {
         </Alert>
       ) : null}
       {props.recoveredFromCrash ? (
-        <Alert className="mx-4 mt-3 mb-1">
+        <Alert className="relative mx-4 mt-3 mb-1 pr-9">
           <AlertTitle>Recovered from crash</AlertTitle>
           <AlertDescription>
             The previous session ended unexpectedly. Click Resume to continue from where it left
             off, or Stop to drop the session and start fresh.
           </AlertDescription>
+          <button
+            type="button"
+            onClick={props.onDismissRecoveredBanner}
+            aria-label="Dismiss"
+            title="Dismiss"
+            className="absolute right-2 top-2 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <X className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
         </Alert>
       ) : null}
       {props.openPermissions.length > 0 && props.openPermissions[0] ? (

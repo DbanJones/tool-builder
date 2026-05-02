@@ -2,6 +2,7 @@
 
 import {
   AlertTriangle,
+  Bug,
   ExternalLink,
   Loader2,
   Maximize2,
@@ -77,6 +78,10 @@ interface RightRailProps {
    *  the full window width — controlled by the parent. */
   previewMaximized: boolean;
   onTogglePreviewMaximize: () => void;
+  /** Called when the novice clicks "App not working" inside the preview.
+   *  The handler should drop the rendered summary into chat and kick off a
+   *  fix turn. */
+  onReportPreviewBroken: (summary: string) => void;
   // Review
   reviewMarkdown: string | null;
   reviewIsRunning: boolean;
@@ -116,8 +121,22 @@ export function RightRail(props: RightRailProps) {
     { id: "files", label: "Files", visible: true },
   ];
 
+  // True fullscreen mode: when the preview is maximized AND the preview tab
+  // is active, lift the rail out of the layout entirely with fixed
+  // positioning so it covers the header, banners, footer, and chat column.
+  // The preview's own toolbar remains visible (it's inside PreviewPanel) so
+  // the novice can still hit Stop, Capture, or restore.
+  const previewFullscreen = props.previewMaximized && tab === "preview";
+
   return (
-    <aside className="hidden min-h-0 flex-col border-l lg:flex">
+    <aside
+      className={
+        previewFullscreen
+          ? "fixed inset-0 z-50 flex min-h-0 flex-col bg-background"
+          : "hidden min-h-0 flex-col border-l lg:flex"
+      }
+    >
+      {previewFullscreen ? null : (
       <div className="flex shrink-0 items-stretch border-b" role="tablist" aria-label="Workspace panels">
         {tabs.filter((t) => t.visible).map((t) => {
           const active = t.id === tab;
@@ -140,6 +159,7 @@ export function RightRail(props: RightRailProps) {
           );
         })}
       </div>
+      )}
 
       <RailBody>
         {tab === "spec" && <SpecPanel spec={props.spec} />}
@@ -161,6 +181,7 @@ export function RightRail(props: RightRailProps) {
             externalRefreshTrigger={props.previewRefreshTrigger}
             isMaximized={props.previewMaximized}
             onToggleMaximize={props.onTogglePreviewMaximize}
+            onReportBroken={props.onReportPreviewBroken}
           />
         )}
         {tab === "review" && props.reviewMarkdown !== null && (
@@ -293,7 +314,16 @@ function PlanAndStatusPanel({
   // available elsewhere if anyone needs more.
   const merged = [...rowsFromActions(actions, showTechnicalDetail), ...rowsFromBridgeEvents(bridge.events)];
   merged.sort((a, b) => a.ts - b.ts);
-  const recentActions = merged.slice(-30).reverse();
+  // Newest at the bottom, auto-scrolled into view (per UX feedback). Showing
+  // newest-at-top forces the novice to glance up every time something
+  // happens; bottom-anchored matches what people expect from a log/console.
+  const recentActions = merged.slice(-30);
+  const liveTailRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = liveTailRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [recentActions.length]);
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="shrink-0 border-b px-4 py-3">
@@ -347,7 +377,7 @@ function PlanAndStatusPanel({
             </span>
           ) : null}
         </div>
-        <div className="flex-1 overflow-auto px-4 py-2 text-xs" aria-live="polite">
+        <div ref={liveTailRef} className="flex-1 overflow-auto px-4 py-2 text-xs" aria-live="polite">
           {recentActions.length === 0 ? (
             <p className="text-muted-foreground">
               {isRunning
@@ -423,6 +453,7 @@ function PreviewPanel({
   externalRefreshTrigger,
   isMaximized,
   onToggleMaximize,
+  onReportBroken,
 }: {
   launchStatus: LaunchStatus;
   onStart: () => void;
@@ -431,6 +462,7 @@ function PreviewPanel({
   externalRefreshTrigger: number;
   isMaximized: boolean;
   onToggleMaximize: () => void;
+  onReportBroken: (summary: string) => void;
 }) {
   // Bumping the key remounts the iframe — cheapest way to force a reload
   // (history-preserving src=src reassignment is finicky inside Tauri's
@@ -451,6 +483,19 @@ function PreviewPanel({
     listener.reset();
     return listener.subscribe(setBridge);
   }, [refreshKey, externalRefreshTrigger, launchStatus.kind]);
+
+  // Build a "this isn't working, please fix" message from the current bridge
+  // events and hand it to the parent. We pull from the listener directly
+  // (not stale `bridge` state) so a fast click captures the latest events.
+  const reportBroken = (): void => {
+    const events = getBridgeListener().snapshot().events;
+    const lines = events
+      .map((e) => formatBridgeEventForLiveTail(e))
+      .filter((s): s is string => s !== null)
+      .slice(-30);
+    const body = lines.length === 0 ? "(no console errors captured yet)" : lines.join("\n");
+    onReportBroken(`This isn't working, please fix.\n\nConsole / network from the preview:\n${body}`);
+  };
 
   if (launchStatus.kind === "running") {
     return (
@@ -512,6 +557,15 @@ function PreviewPanel({
                 <Maximize2 className="h-3.5 w-3.5" aria-hidden="true" />
               )}
             </button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={reportBroken}
+              title="Send the captured console + network errors to chat with a fix request"
+            >
+              <Bug className="mr-1 h-3 w-3" />
+              App not working
+            </Button>
             <Button size="sm" variant="outline" onClick={onCaptureAndAnnotate}>
               <Pencil className="mr-1 h-3 w-3" />
               Capture & annotate
