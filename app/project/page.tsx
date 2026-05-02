@@ -37,6 +37,7 @@ import {
   type OpenPermissionRequest,
 } from "@/components/features/project-workspace/permission-prompt-banner";
 import { RightRail, type RightTab } from "@/components/features/project-workspace/right-rail";
+import { ResizableSplit } from "@/components/ui/resizable-split";
 import { StagesBar } from "@/components/features/project-workspace/stages-bar";
 import { bytesToBase64, type Shape } from "@/lib/annotation";
 import {
@@ -320,6 +321,31 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   // a maximized rail can't strand the user without their chat. ESC also
   // restores. D-028 follow-up.
   const [previewMaximized, setPreviewMaximized] = useState(false);
+
+  // Right-rail width (resizable splitter between chat and rail). Single
+  // value across projects — matches the cost-cap pattern. Read once on
+  // mount so SSR doesn't see a different value than the client.
+  const RIGHT_RAIL_WIDTH_KEY = "dave-builder.right-rail.width";
+  const RIGHT_RAIL_WIDTH_DEFAULT = 400;
+  const [rightRailWidth, setRightRailWidth] = useState<number>(RIGHT_RAIL_WIDTH_DEFAULT);
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(RIGHT_RAIL_WIDTH_KEY);
+      const parsed = raw === null ? null : Number.parseInt(raw, 10);
+      if (parsed !== null && Number.isFinite(parsed) && parsed >= 280 && parsed <= 800) {
+        setRightRailWidth(parsed);
+      }
+    } catch {
+      /* localStorage unavailable — use default */
+    }
+  }, []);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(RIGHT_RAIL_WIDTH_KEY, String(rightRailWidth));
+    } catch {
+      /* ignore */
+    }
+  }, [rightRailWidth]);
 
   // Debug module (Phase G G6 — Flow L AC2-AC6). On-demand scan only at
   // v1; no polling loop. The handler runs every Layer 1 detector and
@@ -2392,42 +2418,43 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         }
       />
 
-      <div
-        className={
-          previewMaximized && tab === "preview"
-            ? "grid min-h-0 flex-1 grid-cols-1"
-            : "grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_400px]"
+      <ResizableSplit
+        rightWidth={rightRailWidth}
+        onRightWidthChange={setRightRailWidth}
+        hideHandle={previewMaximized && tab === "preview"}
+        left={
+          previewMaximized && tab === "preview" ? null : (
+            <ChatPanel
+              messages={messages}
+              status={chatStatusFor(status)}
+              input={input}
+              onInputChange={setInput}
+              onSend={handleSendInput}
+              disabled={isBlocked}
+              disabledReason={
+                !project
+                  ? "Loading project..."
+                  : status.kind === "rate_limited"
+                    ? "Rate-limited; please wait."
+                    : blockingPiiApproval
+                      ? `Review ${blockingPiiApproval.name} before sending more.`
+                      : isRunning
+                        ? "Wait for the current turn to finish"
+                        : null
+              }
+              questionQueue={hasStarted ? [] : questionQueue}
+              bufferedAnswerCount={hasStarted ? 0 : bufferedAnswers.length}
+              onOptionPick={submitAnswerForHead}
+              onManualFlush={() => void flushBuffer(bufferedAnswers)}
+              onEnterMyOwn={() => requestAnimationFrame(() => inputRef.current?.focus())}
+              isPreparingBank={isPreparingBank}
+              inputRef={inputRef}
+              availableFiles={files}
+            />
+          )
         }
-      >
-        {!(previewMaximized && tab === "preview") && <ChatPanel
-          messages={messages}
-          status={chatStatusFor(status)}
-          input={input}
-          onInputChange={setInput}
-          onSend={handleSendInput}
-          disabled={isBlocked}
-          disabledReason={
-            !project
-              ? "Loading project..."
-              : status.kind === "rate_limited"
-                ? "Rate-limited; please wait."
-                : blockingPiiApproval
-                  ? `Review ${blockingPiiApproval.name} before sending more.`
-                : isRunning
-                  ? "Wait for the current turn to finish"
-                  : null
-          }
-          questionQueue={hasStarted ? [] : questionQueue}
-          bufferedAnswerCount={hasStarted ? 0 : bufferedAnswers.length}
-          onOptionPick={submitAnswerForHead}
-          onManualFlush={() => void flushBuffer(bufferedAnswers)}
-          onEnterMyOwn={() => requestAnimationFrame(() => inputRef.current?.focus())}
-          isPreparingBank={isPreparingBank}
-          inputRef={inputRef}
-          availableFiles={files}
-        />}
-
-        <RightRail
+        right={
+          <RightRail
           tab={tab}
           onTabChange={onTabChange}
           hasStarted={hasStarted}
@@ -2480,8 +2507,9 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
           lastDebugScannedAt={lastDebugScannedAt}
           files={files}
           onFilesDropped={handleFilesDropped}
-        />
-      </div>
+          />
+        }
+      />
 
       <StatusFooter
         targetState={targetState}
