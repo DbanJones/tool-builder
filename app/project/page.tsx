@@ -29,6 +29,7 @@ import { AnnotationModal } from "@/components/features/annotation/annotation-mod
 import { DeployGateModal, selectUnresolvedCritical } from "@/components/features/project-workspace/deploy-gate-modal";
 import { DeployModal } from "@/components/features/project-workspace/deploy-modal";
 import { PlanAckModal } from "@/components/features/project-workspace/plan-ack-modal";
+import { ResearchDiffModal } from "@/components/features/project-workspace/research-diff-modal";
 import { DriftBanner } from "@/components/features/project-workspace/drift-banner";
 import {
   PermissionPromptBanner,
@@ -95,6 +96,13 @@ import {
   targetAppWriteLaunchScripts,
 } from "@/lib/launch";
 import { translate } from "@/lib/orchestrator/translate";
+import {
+  buildAnswersDigest,
+  buildFilesDigest,
+  researchStart,
+  researchStop,
+  type ResearchEvent,
+} from "@/lib/research";
 import type { Project } from "@/lib/project";
 import { sidecarCall } from "@/lib/sidecar/client";
 import { hasMadeSentryDecision } from "@/lib/telemetry";
@@ -267,6 +275,24 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   // Pre-build plan ack modal (PR-5 of D-031). Only fires for the first build
   // of a session; correction-mode rebuilds skip the gate to avoid friction.
   const [planAckOpen, setPlanAckOpen] = useState(false);
+
+  // Flow M (deep-research). Three discriminator states track the modal flow:
+  // - "idle"      : nothing in progress
+  // - "running"   : sidecar SDK session is open; banner shows in live tail
+  // - "review"    : proposal arrived; diff modal is open
+  type ResearchUiState =
+    | { kind: "idle" }
+    | { kind: "running"; streamId: string | null; findingsCount: number }
+    | {
+        kind: "review";
+        originalSpec: string;
+        proposedMarkdown: string;
+        summaryOfChanges: string;
+        partial: boolean;
+        costUsdCents: number;
+      };
+  const [researchUi, setResearchUi] = useState<ResearchUiState>({ kind: "idle" });
+  const researchStreamIdRef = useRef<string | null>(null);
 
   // Counter the Preview tab uses as part of its iframe key. Bumped when the
   // agent emits a file-mutating tool_use (Edit/Write/MultiEdit/NotebookEdit)
@@ -1078,6 +1104,193 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     },
     [project, appendAssistantMessage],
   );
+
+  // Flow M / ADR-0017. Optional deep-research session that runs after the
+  // interview reaches readiness and before the build kicks off. Streams
+  // findings into the live tail, opens the diff modal on proposal, and
+  // never writes spec.md itself — adoption goes through the modal.
+  const runDeepResearch = useCallback(async (): Promise<void> => {
+    if (!project) return;
+    if (researchUi.kind !== "idle") return;
+
+    // Rebuild the current spec.md the same way performBuild would, then
+    // freeze it as the diff baseline. We don't write it to disk yet —
+    // the proposal will be diffed against this string in memory.
+    const answersResult = await sidecarCall<AnswerRow[]>("answers.list", {
+      projectId: project.id,
+    });
+    const recordedAnswers = answersResult.isOk() ? answersResult.value : [];
+    const baselineSpec = appendApprovedSourceMaterials(
+      rebuildSpec(recordedAnswers.map(rowToRebuildAnswer)),
+      files,
+      approvedFileIds,
+    );
+    const answersDigest = buildAnswersDigest(
+      recordedAnswers.map((r) => ({
+        questionId: r.questionId,
+        answerText: r.answerText,
+        confidence: r.confidence,
+      })),
+    );
+    const filesDigest = buildFilesDigest(
+      files
+        .filter((f) => approvedFileIds.has(f.id))
+        .map((f) => ({ name: f.name, summary: f.summary })),
+    );
+
+    setResearchUi({ kind: "running", streamId: null, findingsCount: 0 });
+    appendAssistantMessage("Researching… typically 2-5 min. You can hit Stop in the live tail.");
+
+    // Switch the rail to the live tail so the novice sees progress.
+    setTab("plan");
+
+    // Wrap mutable state in an object so closure assignments inside
+    // `onEvent` survive TypeScript's let-narrowing across the await
+    // boundary (assigning a literal to a `let` and reading it after an
+    // await collapses the type to that literal).
+    const collected: {
+      proposal: { markdown: string; summaryOfChanges: string } | null;
+      costUsdCents: number;
+      inputTokens: number;
+      outputTokens: number;
+      cancellationReason: "none" | "user" | "wall_clock" | "step_cap";
+    } = {
+      proposal: null,
+      costUsdCents: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cancellationReason: "none",
+    };
+
+    const onEvent = (event: ResearchEvent): void => {
+      if (event.kind === "session") {
+        researchStreamIdRef.current = event.id;
+        setResearchUi((prev) =>
+          prev.kind === "running" ? { ...prev, streamId: event.id } : prev,
+        );
+        return;
+      }
+      if (event.kind === "finding") {
+        setResearchUi((prev) =>
+          prev.kind === "running" ? { ...prev, findingsCount: prev.findingsCount + 1 } : prev,
+        );
+        // Push the finding into the live tail via the bridge listener so
+        // it lands next to orchestrator events. One row per finding.
+        getBridgeListener().pushServerEvent({
+          kind: "server",
+          source: "stdout",
+          severity: "info",
+          message: `[research] ${event.topic} — ${event.body}`.slice(0, 400),
+          ts: Date.now(),
+        });
+        return;
+      }
+      if (event.kind === "proposal") {
+        collected.proposal = {
+          markdown: event.markdown,
+          summaryOfChanges: event.summaryOfChanges,
+        };
+        return;
+      }
+      if (event.kind === "done") {
+        collected.cancellationReason = event.cancellation_reason;
+        collected.costUsdCents = Math.round((event.cost_usd ?? 0) * 100);
+        collected.inputTokens = event.input_tokens ?? 0;
+        collected.outputTokens = event.output_tokens ?? 0;
+        return;
+      }
+      if (event.kind === "rate_limit") {
+        appendAssistantMessage(`Rate-limited during research: ${event.message}`);
+        return;
+      }
+      if (event.kind === "error") {
+        appendAssistantMessage(`Research run failed: ${event.message}`);
+        return;
+      }
+    };
+
+    const r = await researchStart({
+      projectId: project.id,
+      projectPath: project.path,
+      specMarkdown: baselineSpec,
+      answersDigest,
+      filesDigest,
+      onEvent,
+    });
+
+    // The promise resolves with the streamId (or an error) once the SDK
+    // stream ends — successfully, via cancel, or via cap.
+    if (r.isErr()) {
+      appendAssistantMessage(`Couldn't start research: ${r.error.message}`);
+      setResearchUi({ kind: "idle" });
+      return;
+    }
+
+    // Cost is non-zero on every successful or partial run. Always log it.
+    if (collected.costUsdCents > 0) {
+      void sidecarCall("costs.append", {
+        projectId: project.id,
+        model: "sonnet",
+        inputTokens: collected.inputTokens,
+        outputTokens: collected.outputTokens,
+        costUsd: collected.costUsdCents / 100,
+      });
+    }
+
+    if (collected.cancellationReason === "user") {
+      appendAssistantMessage("Research stopped. Your spec is unchanged.");
+      setResearchUi({ kind: "idle" });
+      return;
+    }
+
+    if (collected.proposal === null) {
+      appendAssistantMessage(
+        collected.cancellationReason === "wall_clock"
+          ? "Research hit the 5-minute cap before it finished. Your spec is unchanged."
+          : "Research finished without producing a proposal. Your spec is unchanged.",
+      );
+      setResearchUi({ kind: "idle" });
+      return;
+    }
+
+    setResearchUi({
+      kind: "review",
+      originalSpec: baselineSpec,
+      proposedMarkdown: collected.proposal.markdown,
+      summaryOfChanges: collected.proposal.summaryOfChanges,
+      partial:
+        collected.cancellationReason === "step_cap" ||
+        collected.cancellationReason === "wall_clock",
+      costUsdCents: collected.costUsdCents,
+    });
+  }, [project, researchUi.kind, files, approvedFileIds, appendAssistantMessage]);
+
+  const adoptResearchProposal = useCallback(async (): Promise<void> => {
+    if (researchUi.kind !== "review" || !project) return;
+    try {
+      await invoke("backup_target_spec", { projectPath: project.path });
+      await invoke("write_target_spec", {
+        projectPath: project.path,
+        specText: researchUi.proposedMarkdown,
+      });
+      appendAssistantMessage(
+        "Adopted the new spec. Original saved to .builder/spec.pre-research.md.",
+      );
+    } catch (e) {
+      appendAssistantMessage(
+        `Couldn't write the new spec: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      return;
+    } finally {
+      setResearchUi({ kind: "idle" });
+    }
+  }, [researchUi, project, appendAssistantMessage]);
+
+  const cancelResearchRun = useCallback((): void => {
+    const sid = researchStreamIdRef.current;
+    if (sid) void researchStop(sid);
+    researchStreamIdRef.current = null;
+  }, []);
 
   // The "do the actual build" steps, after pre-flight gates and any
   // concurrent-build resolution have been handled. Pulled out so both the
@@ -2228,7 +2441,57 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
           void performBuild();
         }}
         onCancel={() => setPlanAckOpen(false)}
+        onResearchFirst={() => {
+          setPlanAckOpen(false);
+          void runDeepResearch();
+        }}
+        researchDisabled={
+          ceiling.state === "stop" || researchUi.kind !== "idle"
+        }
+        researchDisabledReason={
+          ceiling.state === "stop"
+            ? "(at cost cap)"
+            : researchUi.kind === "running"
+              ? "(running)"
+              : null
+        }
       />
+
+      {researchUi.kind === "review" ? (
+        <ResearchDiffModal
+          open
+          originalMarkdown={researchUi.originalSpec}
+          proposedMarkdown={researchUi.proposedMarkdown}
+          summaryOfChanges={researchUi.summaryOfChanges}
+          partial={researchUi.partial}
+          onAdopt={() => void adoptResearchProposal()}
+          onKeepOriginal={() => setResearchUi({ kind: "idle" })}
+          onDiscard={() => setResearchUi({ kind: "idle" })}
+        />
+      ) : null}
+
+      {researchUi.kind === "running" ? (
+        <Alert className="mx-4 mt-3 mb-1 pr-9">
+          <AlertTitle className="flex items-center gap-2">
+            <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+            Researching… ({researchUi.findingsCount} finding
+            {researchUi.findingsCount === 1 ? "" : "s"} so far)
+          </AlertTitle>
+          <AlertDescription>
+            Dave is exploring competitors, edge cases, and data-model gaps. Typically 2-5 minutes.
+            Hit Stop to abandon — your spec stays unchanged.
+          </AlertDescription>
+          <button
+            type="button"
+            onClick={cancelResearchRun}
+            aria-label="Stop research"
+            title="Stop research"
+            className="absolute right-2 top-2 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <Square className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        </Alert>
+      ) : null}
 
 
       {isDraggingOverWorkspace ? (
