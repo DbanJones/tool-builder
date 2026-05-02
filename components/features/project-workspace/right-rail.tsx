@@ -3,6 +3,8 @@
 import {
   AlertTriangle,
   Bug,
+  ChevronDown,
+  ChevronRight,
   ExternalLink,
   Loader2,
   Maximize2,
@@ -10,6 +12,7 @@ import {
   Pencil,
   Play,
   RotateCw,
+  Sparkles,
   Square,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -248,63 +251,136 @@ function SpecPanel({
       <div className="border-b px-4 py-3">
         <h2 className="text-sm font-semibold">Spec preview</h2>
         <p className="text-xs text-muted-foreground">
-          Rebuilt after each answer. Becomes read-only once the build starts.
+          Rebuilt after each answer. Becomes read-only once the build starts. Lines marked
+          <span className="mx-1 inline-flex items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+            <Sparkles className="h-2.5 w-2.5" aria-hidden="true" />
+            new
+          </span>
+          were added by deep research.
         </p>
       </div>
       {research !== null ? <ResearchProgressBlock research={research} /> : null}
-      <pre className="flex-1 overflow-auto whitespace-pre-wrap break-words bg-muted/40 p-4 text-xs leading-relaxed">
-        {spec || "_(no answers recorded yet)_"}
-      </pre>
+      <SpecBody spec={spec} />
     </>
   );
 }
 
 function ResearchProgressBlock({ research }: { research: ResearchProgressView }) {
+  const [collapsed, setCollapsed] = useState(false);
   const minutes = Math.floor(research.elapsedMs / 60000);
   const seconds = Math.floor((research.elapsedMs % 60000) / 1000);
   const elapsed = `${minutes}:${seconds.toString().padStart(2, "0")}`;
   return (
-    <div className="shrink-0 border-b bg-primary/5 px-4 py-3" aria-live="polite">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Loader2
-            className="h-4 w-4 animate-spin text-primary motion-reduce:animate-none"
-            aria-hidden="true"
-          />
-          <h3 className="text-xs font-semibold text-primary">
-            Deep research in progress
-          </h3>
-        </div>
+    <div className="shrink-0 border-b bg-primary/5" aria-live="polite">
+      <button
+        type="button"
+        onClick={() => setCollapsed((c) => !c)}
+        aria-expanded={!collapsed}
+        aria-controls="research-progress-detail"
+        className="flex w-full items-center gap-2 px-4 py-3 text-left hover:bg-primary/10"
+      >
+        {collapsed ? (
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />
+        ) : (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />
+        )}
+        <Loader2
+          className="h-4 w-4 shrink-0 animate-spin text-primary motion-reduce:animate-none"
+          aria-hidden="true"
+        />
+        <h3 className="flex-1 text-xs font-semibold text-primary">
+          Deep research in progress
+        </h3>
         <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
           {elapsed} · {research.findingsCount} finding
           {research.findingsCount === 1 ? "" : "s"}
         </span>
-      </div>
-      {research.recentFindings.length === 0 ? (
-        <p className="mt-2 text-[11px] text-muted-foreground">
-          Dave is reading your spec, answers, and approved files. Findings will appear here as
-          they land. The proposed spec opens in a side-by-side diff when finished.
-        </p>
-      ) : (
-        <ol className="mt-2 space-y-1.5">
-          {research.recentFindings.map((f, i) => (
-            <li key={i} className="text-[11px] leading-relaxed">
-              <span className="font-semibold text-foreground">{f.topic}</span>
-              <span className="text-muted-foreground"> — {f.body}</span>
-            </li>
-          ))}
-        </ol>
+      </button>
+      {collapsed ? null : (
+        <div id="research-progress-detail" className="px-4 pb-3">
+          {research.recentFindings.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground">
+              Dave is reading your spec, answers, and approved files. Findings will appear here
+              as they land. The proposed spec opens in a side-by-side diff when finished.
+            </p>
+          ) : (
+            <ol className="space-y-1.5">
+              {research.recentFindings.map((f, i) => (
+                <li key={i} className="text-[11px] leading-relaxed">
+                  <span className="font-semibold text-foreground">{f.topic}</span>
+                  <span className="text-muted-foreground"> — {f.body}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+          {research.onStop ? (
+            <button
+              type="button"
+              onClick={research.onStop}
+              className="mt-2 inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <Square className="h-3 w-3" aria-hidden="true" />
+              Stop research
+            </button>
+          ) : null}
+        </div>
       )}
-      {research.onStop ? (
-        <button
-          type="button"
-          onClick={research.onStop}
-          className="mt-2 inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
-        >
-          <Square className="h-3 w-3" aria-hidden="true" />
-          Stop research
-        </button>
-      ) : null}
+    </div>
+  );
+}
+
+// Marker convention emitted by the deep-research v2 prompt. Lines that
+// contain INLINE_MARKER (anywhere on the line) are highlighted as
+// research-added. Lines bracketed by `<!-- via deep research vN -->` and
+// the next sibling `<!-- /via deep research -->` (or end of section) are
+// also highlighted, but for v2 we keep it simple and only key on the
+// inline marker — the model is told to put the inline marker on every
+// new AC / bullet, so this is enough coverage.
+const RESEARCH_INLINE_MARKER = "(via deep research)";
+const RESEARCH_SECTION_MARKER_PREFIX = "<!-- via deep research";
+
+/**
+ * Renders the spec markdown line-by-line, applying a highlight class to
+ * any line containing the research marker. Output is a single block of
+ * pre-formatted text — visually identical to the previous `<pre>` view,
+ * just with per-line styling and an inline "new" chip on highlighted
+ * lines.
+ */
+function SpecBody({ spec }: { spec: string }) {
+  if (spec.trim().length === 0) {
+    return (
+      <pre className="flex-1 overflow-auto whitespace-pre-wrap break-words bg-muted/40 p-4 text-xs leading-relaxed">
+        _(no answers recorded yet)_
+      </pre>
+    );
+  }
+  const lines = spec.split("\n");
+  return (
+    <div className="flex-1 overflow-auto bg-muted/40 p-4 font-mono text-xs leading-relaxed">
+      {lines.map((line, i) => {
+        const isResearchAdded =
+          line.includes(RESEARCH_INLINE_MARKER) ||
+          line.trim().startsWith(RESEARCH_SECTION_MARKER_PREFIX);
+        if (isResearchAdded) {
+          return (
+            <div
+              key={i}
+              className="-mx-2 my-px rounded-sm bg-primary/10 px-2 py-0.5 text-foreground"
+            >
+              <Sparkles
+                className="mr-1 inline-block h-2.5 w-2.5 text-primary"
+                aria-hidden="true"
+              />
+              <span className="whitespace-pre-wrap break-words">{line}</span>
+            </div>
+          );
+        }
+        return (
+          <div key={i} className="whitespace-pre-wrap break-words">
+            {line.length === 0 ? " " : line}
+          </div>
+        );
+      })}
     </div>
   );
 }
