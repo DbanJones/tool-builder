@@ -122,7 +122,69 @@ export function DebugCard({ defect, hasCodemod, isFixing, onFix }: DebugCardProp
           </Row>
         </dl>
       )}
+
+      <SuggestionPanel suggestion={defect.suggestion} />
     </article>
+  );
+}
+
+interface ParsedSuggestion {
+  explanation: string;
+  edits: Array<{ file: string; oldText: string; newText: string }>;
+  errors: string;
+}
+
+function parseSuggestion(raw: string | null): ParsedSuggestion | null {
+  if (raw === null) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<ParsedSuggestion>;
+    if (typeof parsed.explanation !== "string") return null;
+    if (!Array.isArray(parsed.edits)) return null;
+    return {
+      explanation: parsed.explanation,
+      edits: parsed.edits as ParsedSuggestion["edits"],
+      errors: typeof parsed.errors === "string" ? parsed.errors : "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+function SuggestionPanel({ suggestion }: { suggestion: string | null }) {
+  const parsed = parseSuggestion(suggestion);
+  if (!parsed) return null;
+  return (
+    <aside
+      className="mt-3 rounded border border-amber-300/60 bg-amber-50/40 p-3 text-xs dark:border-amber-700/40 dark:bg-amber-950/20"
+      data-testid="debug-card-suggestion"
+    >
+      <p className="font-medium text-amber-900 dark:text-amber-200">
+        Suggested manual fix
+      </p>
+      <p className="mt-1 text-foreground">{parsed.explanation}</p>
+      {parsed.edits.length > 0 && (
+        <ul className="mt-2 space-y-2">
+          {parsed.edits.map((edit, i) => (
+            <li key={i} className="rounded bg-background/80 p-2">
+              <p className="font-mono text-[11px] text-muted-foreground">
+                {edit.file}
+              </p>
+              <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-[11px] text-destructive">
+                - {edit.oldText}
+              </pre>
+              <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-[11px] text-emerald-700 dark:text-emerald-300">
+                + {edit.newText}
+              </pre>
+            </li>
+          ))}
+        </ul>
+      )}
+      {parsed.errors.length > 0 && (
+        <p className="mt-2 text-[11px] text-muted-foreground">
+          Verification errors: {parsed.errors}
+        </p>
+      )}
+    </aside>
   );
 }
 

@@ -71,6 +71,13 @@ export const defects = sqliteTable("defects", {
   }),
   validatorNotes: text("validator_notes"),
   validatedAt: integer("validated_at"),
+  // Tier 3 suggested fix (Phase G G7). Populated when Tier 2 fails to
+  // apply a clean patch — we keep the model's last attempted edits and
+  // explanation so the dashboard can surface "here's what we suggest
+  // you try" rather than silently aborting. JSON-encoded shape:
+  //   { explanation: string, edits: PatchEdit[], errors: string }
+  // Null when no Tier 3 suggestion exists for this row.
+  suggestion: text("suggestion"),
 });
 
 export type Defect = typeof defects.$inferSelect;

@@ -47,6 +47,13 @@ export interface Defect {
   /** JSON-encoded {exploitPath, fixStrategy}; null when no validator. */
   validatorNotes: string | null;
   validatedAt: number | null;
+  /**
+   * JSON-encoded {explanation, edits: PatchEdit[], errors: string}.
+   * Populated by the repair handler when Tier 2 fails — the dashboard
+   * can render this as a "Suggested manual fix" panel even though no
+   * file changes were applied. Null when no Tier 3 suggestion exists.
+   */
+  suggestion: string | null;
 }
 
 export type DebugError = { kind: "Sidecar"; message: string };

@@ -264,6 +264,43 @@ describe("debug.applyFix handler", () => {
     expect(result.outcome).toBe("tier2_verify_failed");
     const row = getDb().select().from(defects).all()[0]!;
     expect(row.status).toBe("open");
+
+    // G7a Tier 3 hand-off: verify_failed populates the suggestion column
+    // so the dashboard can surface the model's last attempt.
+    expect(row.suggestion).not.toBeNull();
+    const parsed = JSON.parse(row.suggestion!);
+    expect(parsed.explanation).toContain("Tier 2");
+    expect(parsed.edits).toHaveLength(1);
+    expect(parsed.edits[0].file).toBe("app/admin/page.tsx");
+    expect(parsed.errors).toContain("old_text_not_found");
+  });
+
+  it("Tier 2 no_patch populates the defect's suggestion column for Tier 3 review", async () => {
+    const projectId = await newProjectAt(projectPath);
+    const defectId = await insertDefect(projectId, {
+      ruleId: "client-side-auth/no-server-hint",
+      file: "app/admin/page.tsx",
+      codeEvidence: "user.role === 'admin'",
+    });
+    const transport = stubPatchTransport({
+      "client-side-auth/no-server-hint": JSON.stringify({
+        explanation: "Slice does not show enough context to fix safely",
+        edits: [],
+      }),
+    });
+    const git = new GitStub().enqueue(
+      ok("true\n"), ok(""), ok("main\n"), ok(""), ok(""),
+      ok(""), ok("")
+    );
+
+    const result = await applyFix({ defectId }, git.asRunGit(), transport);
+
+    expect(result.outcome).toBe("tier2_no_patch");
+    const row = getDb().select().from(defects).all()[0]!;
+    expect(row.suggestion).not.toBeNull();
+    const parsed = JSON.parse(row.suggestion!);
+    expect(parsed.explanation).toContain("Slice does not show enough context");
+    expect(parsed.edits).toEqual([]);
   });
 
   it("aborts and flags syntax_check_failed when the codemod produces broken syntax", async () => {

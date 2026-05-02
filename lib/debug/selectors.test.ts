@@ -30,6 +30,7 @@ const defect = (overrides: Partial<Defect> = {}): Defect => ({
   validatorVerdict: null,
   validatorNotes: null,
   validatedAt: null,
+  suggestion: null,
   ...overrides,
 });
 

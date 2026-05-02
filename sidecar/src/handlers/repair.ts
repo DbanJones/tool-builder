@@ -235,6 +235,19 @@ async function runTier2OnBranch(args: Tier2RunArgs): Promise<ApplyFixResult> {
 
   if (tier2.kind === "no_patch") {
     await abortBranch(session, runGit);
+    // Tier 3 hand-off: stash the model's explanation so the dashboard
+    // can show "here's why we couldn't auto-fix" instead of leaving the
+    // user staring at an unhelpful "no patch" message.
+    db.update(defects)
+      .set({
+        suggestion: JSON.stringify({
+          explanation: tier2.reason,
+          edits: [],
+          errors: "(model declined to attempt a fix)",
+        }),
+      })
+      .where(eq(defects.id, defect.id))
+      .run();
     return failWithAudit(
       db,
       defect.id,
@@ -245,6 +258,20 @@ async function runTier2OnBranch(args: Tier2RunArgs): Promise<ApplyFixResult> {
   }
   if (tier2.kind === "verify_failed") {
     await abortBranch(session, runGit);
+    // Tier 3 hand-off: keep the last attempted edits + the verification
+    // errors so the user can review and apply manually. v1 surfaces
+    // these in the Debug card's advanced toggle; G7-follow-up may add
+    // a one-click "open in editor" affordance.
+    db.update(defects)
+      .set({
+        suggestion: JSON.stringify({
+          explanation: "Tier 2 could not produce a fix that passes syntax verification. The model's last attempt is below — review and apply manually if it looks right.",
+          edits: tier2.lastEdits,
+          errors: tier2.lastErrors,
+        }),
+      })
+      .where(eq(defects.id, defect.id))
+      .run();
     return failWithAudit(
       db,
       defect.id,

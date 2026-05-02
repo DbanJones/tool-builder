@@ -66,6 +66,7 @@ interface Defect {
   validatorNotes: string | null;
   validatedAt: number | null;
   fixTier: number | null;
+  suggestion: string | null;
 }
 
 interface AuditEntry {
