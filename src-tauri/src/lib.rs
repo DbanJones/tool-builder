@@ -133,6 +133,45 @@ fn write_target_spec(project_path: String, spec_text: String) -> Result<String, 
     .map_err(|e| format!("canonicalise: {e}"))
 }
 
+// Back up the current `spec.md` to `.builder/spec.pre-research.md` before
+// the deep-research step (Flow M AC5) overwrites it. Idempotent: if the
+// backup already exists we leave it alone, so a second research run can't
+// clobber the very first original. Path-sandboxed to the project root.
+#[tauri::command]
+fn backup_target_spec(project_path: String) -> Result<String, String> {
+  let project_root = expand_tilde(&project_path);
+  if !project_root.exists() {
+    return Err(format!(
+      "backup_target_spec: project folder not found: {}",
+      project_root.display()
+    ));
+  }
+  let canon_root = project_root
+    .canonicalize()
+    .map_err(|e| format!("backup_target_spec: canonicalise project root: {e}"))?;
+
+  let spec_path = canon_root.join("spec.md");
+  if !spec_path.exists() {
+    return Err(format!(
+      "backup_target_spec: spec.md not found at {}",
+      spec_path.display()
+    ));
+  }
+  let builder_dir = canon_root.join(".builder");
+  fs::create_dir_all(&builder_dir)
+    .map_err(|e| format!("backup_target_spec: create .builder/: {e}"))?;
+
+  let backup_path = builder_dir.join("spec.pre-research.md");
+  if backup_path.exists() {
+    // Idempotent: do not overwrite an existing backup. The whole point is
+    // to preserve the *first* original across multiple research runs.
+    return Ok(backup_path.display().to_string());
+  }
+  fs::copy(&spec_path, &backup_path)
+    .map_err(|e| format!("backup_target_spec: copy: {e}"))?;
+  Ok(backup_path.display().to_string())
+}
+
 // Build dashboard readers (D3). Both commands read files from inside the
 // novice's project folder (binding rule 5: untrusted from the Builder's
 // perspective). They sanitise the requested path by joining `project_path` +
@@ -1027,6 +1066,7 @@ pub fn run() {
       read_review_md,
       read_history_log_tail,
       write_target_spec,
+      backup_target_spec,
       append_drift_log_line,
       build_capability_check,
       chat_send,

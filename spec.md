@@ -15,6 +15,7 @@ In scope:
 - Tauri 2 desktop app, signed installers for macOS (Apple silicon and Intel), Windows x64, Linux x64.
 - First-run flow: welcome, Claude Code CLI detection/auth check, project creation.
 - Recursive chat interview that populates `spec.md` via the kit's question library and decision table.
+- Optional deep-research expansion of the scoping document after the interview reaches readiness and before the build begins (Flow M; opt-in only, behind the Plan-ack modal).
 - File ingestion pipeline for: text docs (PDF, DOCX, MD, TXT), images (PNG, JPG, PDF-as-image), schemas (SQL, JSON, YAML, OpenAPI), data samples (CSV, JSON, SQL dump), reference URLs.
 - Build dashboard with phase bar, task lanes, live tail, ETA, cost meter, drift status.
 - Approval gates for phase transitions and drift events.
@@ -170,6 +171,18 @@ Explicit non-goals:
   - **Flow K AC10** (D-028): The iframe sandbox grants `allow-pointer-lock`, `allow-downloads`, `allow-orientation-lock`, `allow-presentation` in addition to the basic SPA tokens, and the `allow` attribute permits `fullscreen; pointer-lock; autoplay; gamepad; clipboard-read; clipboard-write` so canvas/WebGL games (FPS-style mouse capture, fullscreen) function inside the preview.
   - **Flow K AC11** (D-028): On macOS, **Capture & annotate** spawns the native `screencapture -i` region picker via the new `capture_region_to_png` Tauri command; the captured PNG bytes are returned base64-encoded, decoded into a Blob, and the AnnotationModal opens with the image already loaded — three clicks end-to-end (pick → mark up → send). On Linux/Windows the button still opens the empty modal; the cross-platform path is a Slice 2.6 follow-up.
   - **Flow K AC12** (D-028): When the orchestrator emits a file-mutating `tool_use` event (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`), the workspace bumps a counter that's incorporated into the iframe's `key`, forcing a hard reload so the novice sees the agent's edits land in real time without clicking Refresh.
+
+### Flow M: Optional deep research before build
+- **Given** the interview has reached readiness (all fast-path questions answered, echo-back confirmed) and the cost ceiling is not in the "stop" state,
+- **When** the novice opens the Plan-ack modal and clicks **Research first** (an opt-in tertiary action alongside Refine spec / Go),
+- **Then**:
+  - **Flow M AC1**: The modal explains the trade-off in plain English ("Spend 2-5 min and roughly $1-3 letting Dave think harder about market, competitors, data model, and edge cases before any code is written. Optional — your existing spec is already enough.") and offers Cancel / Run.
+  - **Flow M AC2**: On Run, the modal closes, the right-rail switches to Plan & status, and a research banner shows "Researching… (typically 2-5 min)" with a Stop button. The build is NOT started yet.
+  - **Flow M AC3**: The sidecar opens a Claude Agent SDK session distinct from the orchestrator session (its own stream id in the `inflight` map), feeds it the current `spec.md`, the recorded answers, and the approved file summaries, and instructs it to expand and clarify but never contradict explicit answers. The session is capped at 5 minutes wall-clock and `maxSteps: 8`.
+  - **Flow M AC4**: Findings stream into the live tail via a `record_finding` MCP tool. On completion the agent calls `propose_spec_revision({ markdown, summaryOfChanges })`; the proposed text is held in sidecar memory and surfaced to the webview, not yet written to disk.
+  - **Flow M AC5**: The webview opens a side-by-side diff modal (rendered original on the left, rendered proposal on the right; "Show raw diff" toggles to a unified diff) with three actions: **Use new spec**, **Keep original**, **Discard**. On "Use new spec" the original is backed up to `{project}/.builder/spec.pre-research.md` (idempotent — only written if absent) before `spec.md` is overwritten with the proposal.
+  - **Flow M AC6**: On Stop, cap-hit, or cost-ceiling trip mid-run, the SDK session is aborted via AbortController, no spec changes are written, the live tail records the cancellation, and the modal returns to its prior state. The novice can re-open the Plan-ack modal and choose Go (skip research) or Research first again.
+  - **Flow M AC7**: A successful run appends a `costs` row with `category: "research"`, and writes `deep_research_completed_at` + `deep_research_token_cost_usd` to the target app's `.builder/state.json`. The audit log records `deep_research_started` at start and `deep_research_completed` (or `_cancelled`) at end.
 
 ### Flow L: Debug and repair (target-app defect detection)
 - **Given** a build phase has reached its boundary (or the novice clicks **Debug now**),
