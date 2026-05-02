@@ -48,8 +48,17 @@ export const BAND_TREATMENT: Readonly<Record<Band, BandTreatment>> = {
 
 export {
   listDefects,
+  runDebugGraph,
   runDebugScan,
+  type AuthCheck,
   type Defect,
   type DebugError,
   type DebugScanResult,
+  type HttpMethod,
+  type RouteAuthInfo,
+  type RouteInfo,
+  type SchemaColumn,
+  type SchemaPolicy,
+  type SchemaTable,
+  type SoftwareGraph,
 } from "./sidecar";

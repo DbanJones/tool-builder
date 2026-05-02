@@ -70,3 +70,78 @@ export function listDefects(params: {
 }): ResultAsync<Defect[], DebugError> {
   return sidecarCall<Defect[]>("debug.list", params).mapErr(fromSidecarError);
 }
+
+// Software graph wire shapes. Mirrors sidecar/src/debug/graph/.
+// Promote here only what the webview UI cares about; G4's validator
+// runs in the sidecar and consumes the full structure directly.
+
+export type HttpMethod =
+  | "GET"
+  | "POST"
+  | "PUT"
+  | "PATCH"
+  | "DELETE"
+  | "HEAD"
+  | "OPTIONS";
+
+export interface RouteInfo {
+  framework: "next-app";
+  kind: "page" | "route" | "layout";
+  pathPattern: string;
+  methods: HttpMethod[];
+  filePath: string;
+  isDynamic: boolean;
+  hasMiddleware: boolean;
+}
+
+export interface SchemaColumn {
+  name: string;
+  type: string;
+  nullable: boolean;
+  primaryKey: boolean;
+  foreignKey: { table: string; column: string } | null;
+}
+
+export interface SchemaPolicy {
+  name: string;
+  for: "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "ALL";
+}
+
+export interface SchemaTable {
+  name: string;
+  columns: SchemaColumn[];
+  rlsEnabled: boolean;
+  policies: SchemaPolicy[];
+  source: { file: string; line: number };
+}
+
+export interface AuthCheck {
+  kind: "authentication" | "authorization";
+  identifier: string;
+  file: string;
+  line: number;
+}
+
+export interface RouteAuthInfo {
+  route: RouteInfo;
+  authentication: AuthCheck | null;
+  authorizations: AuthCheck[];
+}
+
+export interface SoftwareGraph {
+  routes: RouteInfo[];
+  schema: SchemaTable[];
+  auth: RouteAuthInfo[];
+  warnings: { area: "routes" | "schema" | "auth"; message: string }[];
+}
+
+/**
+ * Fetch the software graph for a project (routes + schema + auth +
+ * warnings). The sidecar handler walks the target folder synchronously
+ * on each call; G7 may add an mtime cache.
+ */
+export function runDebugGraph(params: {
+  projectId: string;
+}): ResultAsync<SoftwareGraph, DebugError> {
+  return sidecarCall<SoftwareGraph>("debug.graph", params).mapErr(fromSidecarError);
+}

@@ -8,7 +8,7 @@ import { create as createProject } from "./projects.js";
 import { listEvents } from "./audit.js";
 import { defects } from "../schema/defects.js";
 import type { Detector, RawFinding } from "../debug/detectors/types.js";
-import { scan, list } from "./debug.js";
+import { graph, scan, list } from "./debug.js";
 
 let tmpDir: string;
 let dbPath: string;
@@ -163,6 +163,61 @@ describe("debug.scan handler", () => {
     expect(list({ projectId })).toHaveLength(2);
     expect(list({ projectId, scanId: r1.scanId })).toHaveLength(1);
     expect(list({ projectId, scanId: r1.scanId })[0]!.ruleId).toBe("a/1");
+  });
+});
+
+describe("debug.graph handler", () => {
+  it("returns an empty graph for a freshly-created project with no files", async () => {
+    const projectId = await newProject();
+    const g = await graph({ projectId });
+    expect(g.routes).toEqual([]);
+    expect(g.schema).toEqual([]);
+    expect(g.auth).toEqual([]);
+    expect(g.warnings).toEqual([]);
+  });
+
+  it("rejects an unknown projectId", async () => {
+    await expect(graph({ projectId: "does-not-exist" })).rejects.toThrow(
+      /project not found/i
+    );
+  });
+
+  it("composes routes + schema + auth when files exist on disk", async () => {
+    const projectPath = path.join(tmpDir, "graph-project");
+    await fs.mkdir(projectPath, { recursive: true });
+    await fs.mkdir(path.join(projectPath, "app", "api", "users"), { recursive: true });
+    await fs.writeFile(
+      path.join(projectPath, "app", "page.tsx"),
+      `export default function Home() { return null; }`
+    );
+    await fs.writeFile(
+      path.join(projectPath, "app", "api", "users", "route.ts"),
+      `import { getServerSession } from "next-auth";
+       export async function GET() {
+         await getServerSession();
+         return new Response();
+       }`
+    );
+    await fs.mkdir(path.join(projectPath, "supabase", "migrations"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(projectPath, "supabase", "migrations", "0001.sql"),
+      `CREATE TABLE users (id uuid PRIMARY KEY, email text NOT NULL);
+       ALTER TABLE users ENABLE ROW LEVEL SECURITY;`
+    );
+    const project = createProject({ name: "graph-test", path: projectPath });
+
+    const g = await graph({ projectId: project.id });
+
+    expect(g.routes.map((r) => r.pathPattern).sort()).toEqual([
+      "/",
+      "/api/users",
+    ]);
+    expect(g.schema).toHaveLength(1);
+    expect(g.schema[0]!.rlsEnabled).toBe(true);
+    const apiAuth = g.auth.find((a) => a.route.pathPattern === "/api/users");
+    expect(apiAuth?.authentication?.identifier).toBe("getServerSession");
   });
 });
 

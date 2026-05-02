@@ -23,6 +23,7 @@ import { rlsMissingDetector } from "../debug/detectors/layer1/rls-missing.js";
 import { clientSideAuthDetector } from "../debug/detectors/layer1/client-side-auth.js";
 import { envLeakDetector } from "../debug/detectors/layer1/env-leak.js";
 import type { Detector } from "../debug/detectors/types.js";
+import { buildGraph, type SoftwareGraph } from "../debug/graph/index.js";
 import { runScan, type ScoredFinding } from "../debug/scan.js";
 
 // All Layer 1 detectors at v1. G3 will add software-graph-aware detectors;
@@ -171,4 +172,27 @@ export function list(rawParams: unknown): Defect[] {
     .all();
   if (params.scanId === undefined) return rows;
   return rows.filter((r) => r.scanId === params.scanId);
+}
+
+const GraphParamsSchema = z.object({ projectId: z.string().min(1) });
+
+/**
+ * `debug.graph({ projectId })` — return the software graph for the
+ * project's target folder: routes, schema, auth model, plus warnings
+ * for any per-area parse failures. Used by G4's validator for subgraph
+ * slices and (eventually) the G6 dashboard's "what does this route
+ * touch?" sidebar.
+ */
+export async function graph(rawParams: unknown): Promise<SoftwareGraph> {
+  const params = GraphParamsSchema.parse(rawParams);
+  const db = getDb();
+  const [project] = db
+    .select()
+    .from(projects)
+    .where(eq(projects.id, params.projectId))
+    .all();
+  if (!project) {
+    throw new Error(`debug.graph: project not found '${params.projectId}'`);
+  }
+  return buildGraph(project.path);
 }

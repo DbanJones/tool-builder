@@ -3,7 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { sidecarCall } from "@/lib/sidecar/client";
 
-import { listDefects, runDebugScan, type Defect, type DebugScanResult } from "./sidecar";
+import {
+  listDefects,
+  runDebugGraph,
+  runDebugScan,
+  type Defect,
+  type DebugScanResult,
+  type SoftwareGraph,
+} from "./sidecar";
 
 vi.mock("@/lib/sidecar/client", () => ({ sidecarCall: vi.fn() }));
 
@@ -82,6 +89,41 @@ describe("runDebugScan", () => {
       kind: "Sidecar",
       message: "ipc dead",
     });
+  });
+});
+
+describe("runDebugGraph", () => {
+  it("forwards { projectId } to debug.graph and returns the graph", async () => {
+    const expected: SoftwareGraph = {
+      routes: [
+        {
+          framework: "next-app",
+          kind: "route",
+          pathPattern: "/api/users/[id]",
+          methods: ["GET"],
+          filePath: "app/api/users/[id]/route.ts",
+          isDynamic: true,
+          hasMiddleware: false,
+        },
+      ],
+      schema: [],
+      auth: [],
+      warnings: [],
+    };
+    mockSidecar.mockReturnValueOnce(okAsync(expected));
+    const result = await runDebugGraph({ projectId: "01PROJ" });
+    expect(mockSidecar).toHaveBeenCalledWith("debug.graph", { projectId: "01PROJ" });
+    expect(result.isOk()).toBe(true);
+    expect(result._unsafeUnwrap()).toEqual(expected);
+  });
+
+  it("translates errors", async () => {
+    mockSidecar.mockReturnValueOnce(
+      errAsync({ kind: "Sidecar", code: "HANDLER_ERROR", message: "boom" })
+    );
+    const result = await runDebugGraph({ projectId: "01PROJ" });
+    expect(result.isErr()).toBe(true);
+    expect(result._unsafeUnwrapErr().message).toContain("HANDLER_ERROR");
   });
 });
 

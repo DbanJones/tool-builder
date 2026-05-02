@@ -72,6 +72,37 @@ interface AuditEntry {
   createdAt: number;
 }
 
+interface RouteInfo {
+  framework: "next-app";
+  kind: "page" | "route" | "layout";
+  pathPattern: string;
+  methods: string[];
+  filePath: string;
+  isDynamic: boolean;
+  hasMiddleware: boolean;
+}
+
+interface SchemaTable {
+  name: string;
+  columns: { name: string; type: string }[];
+  rlsEnabled: boolean;
+  policies: { name: string; for: string }[];
+  source: { file: string; line: number };
+}
+
+interface RouteAuthInfo {
+  route: RouteInfo;
+  authentication: { kind: "authentication"; identifier: string } | null;
+  authorizations: { kind: "authorization"; identifier: string }[];
+}
+
+interface SoftwareGraph {
+  routes: RouteInfo[];
+  schema: SchemaTable[];
+  auth: RouteAuthInfo[];
+  warnings: { area: string; message: string }[];
+}
+
 class SidecarHarness {
   private child!: ChildProcessWithoutNullStreams;
   private buffer = "";
@@ -301,5 +332,68 @@ describe("sidecar debug.scan (integration) — Flow L AC1-AC3 end-to-end", () =>
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.result.durationMs).toBeLessThan(10000);
+  });
+
+  it("debug.graph returns the route inventory + schema + auth model for the lovable fixture", async () => {
+    const r = await harness.call<SoftwareGraph>("debug.graph", {
+      projectId: lovableProjectId,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+
+    const paths = r.result.routes.map((rt) => rt.pathPattern).sort();
+    expect(paths).toEqual(["/", "/api/users/[id]"]);
+    expect(r.result.routes.every((rt) => rt.hasMiddleware)).toBe(true);
+
+    const apiRoute = r.result.routes.find(
+      (rt) => rt.pathPattern === "/api/users/[id]"
+    );
+    expect(apiRoute?.methods.sort()).toEqual(["DELETE", "GET"]);
+    expect(apiRoute?.isDynamic).toBe(true);
+
+    expect(r.result.schema).toHaveLength(1);
+    expect(r.result.schema[0]!.name).toBe("users");
+    expect(r.result.schema[0]!.rlsEnabled).toBe(false);
+
+    const apiAuth = r.result.auth.find(
+      (a) => a.route.pathPattern === "/api/users/[id]"
+    );
+    expect(apiAuth?.authentication).toBeNull();
+
+    expect(r.result.warnings).toEqual([]);
+  });
+
+  it("debug.graph for the clean fixture shows getServerSession on the api route + RLS enabled", async () => {
+    const r = await harness.call<SoftwareGraph>("debug.graph", {
+      projectId: cleanProjectId,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+
+    const apiRoute = r.result.routes.find(
+      (rt) => rt.pathPattern === "/api/users/[id]"
+    );
+    expect(apiRoute?.methods).toEqual(["GET"]);
+
+    const apiAuth = r.result.auth.find(
+      (a) => a.route.pathPattern === "/api/users/[id]"
+    );
+    expect(apiAuth?.authentication?.identifier).toBe("getServerSession");
+
+    expect(r.result.schema).toHaveLength(1);
+    expect(r.result.schema[0]!.rlsEnabled).toBe(true);
+    expect(r.result.schema[0]!.policies).toEqual([
+      { name: "users_own_rows", for: "SELECT" },
+    ]);
+  });
+
+  it("debug.graph rejects an unknown projectId", async () => {
+    const r = await harness.call<SoftwareGraph>("debug.graph", {
+      projectId: "01ZZZZZZZZZZZZZZZZZZZZZZZZ",
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.code).toBe("HANDLER_ERROR");
+    expect(r.error.message).toMatch(/project not found/i);
   });
 });
