@@ -1350,23 +1350,41 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     setRecoveredFromCrash(false);
     void sidecarCall("projects.setStatus", { id: project.id, status: "building" });
 
-    // Write the rebuilt spec.md so claude reads real interview answers.
-    const answersResult = await sidecarCall<AnswerRow[]>("answers.list", {
-      projectId: project.id,
-    });
-    if (answersResult.isOk() && answersResult.value.length > 0) {
-      try {
-        const specMarkdown = appendApprovedSourceMaterials(
-          rebuildSpec(answersResult.value.map(rowToRebuildAnswer)),
-          files,
-          approvedFileIds,
-        );
-        await invoke("write_target_spec", {
-          projectPath: project.path,
-          specText: specMarkdown,
-        });
-      } catch (e) {
-        console.warn("Failed to write rebuilt spec.md:", e);
+    // Refresh spec.md on disk so claude builds against the latest answers
+    // — UNLESS the novice has adopted a deep-research-revised spec, in
+    // which case the on-disk file contains content the deterministic
+    // rebuild would silently throw away. Detect adoption by scanning
+    // for the v2 prompt's required marker `(via deep research)`; if
+    // present, skip the rebuild and trust what's on disk.
+    let researchAdopted = false;
+    try {
+      const existingSpec = await invoke<string | null>("read_target_spec", {
+        projectPath: project.path,
+      });
+      if (existingSpec !== null && existingSpec.includes("(via deep research)")) {
+        researchAdopted = true;
+      }
+    } catch (e) {
+      console.warn("Couldn't read existing spec.md:", e);
+    }
+    if (!researchAdopted) {
+      const answersResult = await sidecarCall<AnswerRow[]>("answers.list", {
+        projectId: project.id,
+      });
+      if (answersResult.isOk() && answersResult.value.length > 0) {
+        try {
+          const specMarkdown = appendApprovedSourceMaterials(
+            rebuildSpec(answersResult.value.map(rowToRebuildAnswer)),
+            files,
+            approvedFileIds,
+          );
+          await invoke("write_target_spec", {
+            projectPath: project.path,
+            specText: specMarkdown,
+          });
+        } catch (e) {
+          console.warn("Failed to write rebuilt spec.md:", e);
+        }
       }
     }
 

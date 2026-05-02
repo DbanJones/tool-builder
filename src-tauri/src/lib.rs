@@ -216,6 +216,39 @@ fn read_target_state(project_path: String) -> Result<Option<String>, String> {
 // "review will appear here" placeholder for that case.
 const REVIEW_MD_MAX_BYTES: u64 = 1 * 1024 * 1024;
 
+// Read the project's spec.md back. Used by performBuild() to detect a
+// research-adopted spec (line containing the v2 marker `(via deep
+// research)`) so the deterministic interview-rebuild doesn't clobber
+// the novice's adopted research changes. Path-sandboxed to
+// `{project}/spec.md`. Returns Ok(None) when the file doesn't exist.
+const SPEC_MD_MAX_BYTES: u64 = 1 * 1024 * 1024; // 1 MB hard cap; specs are tiny
+
+#[tauri::command]
+fn read_target_spec(project_path: String) -> Result<Option<String>, String> {
+  let project_root = expand_tilde(&project_path);
+  if !project_root.exists() {
+    return Err(format!(
+      "read_target_spec: project folder not found: {}",
+      project_root.display()
+    ));
+  }
+  let spec_path = project_root.join("spec.md");
+  if !spec_path.exists() {
+    return Ok(None);
+  }
+  let metadata = fs::metadata(&spec_path).map_err(|e| format!("stat spec.md: {e}"))?;
+  if metadata.len() > SPEC_MD_MAX_BYTES {
+    return Err(format!(
+      "read_target_spec: spec.md exceeds {} byte cap (got {})",
+      SPEC_MD_MAX_BYTES,
+      metadata.len()
+    ));
+  }
+  fs::read_to_string(&spec_path)
+    .map(Some)
+    .map_err(|e| format!("read_target_spec: {e}"))
+}
+
 #[tauri::command]
 fn read_review_md(project_path: String) -> Result<Option<String>, String> {
   let project_root = expand_tilde(&project_path);
@@ -1065,6 +1098,7 @@ pub fn run() {
       target_snapshot_save,
       capture_region_to_png,
       read_target_state,
+      read_target_spec,
       read_review_md,
       read_history_log_tail,
       write_target_spec,
