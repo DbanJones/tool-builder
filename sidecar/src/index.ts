@@ -238,6 +238,7 @@ const OrchStartParams = z.object({
   projectPath: z.string().min(1),
   prompt: z.string().nullable().optional(),
   sessionId: z.string().nullable().optional(),
+  model: z.string().min(1).optional(),
 });
 async function orchStart(rawParams: unknown): Promise<{ ok: true }> {
   const params = OrchStartParams.parse(rawParams);
@@ -248,6 +249,7 @@ async function orchStart(rawParams: unknown): Promise<{ ok: true }> {
       projectPath: params.projectPath,
       prompt: params.prompt ?? null,
       sessionId: params.sessionId ?? null,
+      ...(params.model !== undefined ? { model: params.model } : {}),
     },
     (event) => writeNotification(params.streamId, event),
   );
@@ -280,6 +282,7 @@ const ChatStartParams = z.object({
   projectPath: z.string().min(1),
   prompt: z.string().min(1),
   sessionId: z.string().nullable().optional(),
+  model: z.string().min(1).optional(),
 });
 async function chatStart(rawParams: unknown): Promise<{ ok: true }> {
   const params = ChatStartParams.parse(rawParams);
@@ -290,6 +293,7 @@ async function chatStart(rawParams: unknown): Promise<{ ok: true }> {
       projectPath: params.projectPath,
       prompt: params.prompt,
       sessionId: params.sessionId ?? null,
+      ...(params.model !== undefined ? { model: params.model } : {}),
     },
     (event) => writeNotification(params.streamId, event),
   );
@@ -316,6 +320,7 @@ const ResearchStartParams = z.object({
   // Optional so the integration test can fall back to the file path.
   systemPrompt: z.string().min(1).optional(),
   builderRepoPath: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
 });
 async function researchStart(rawParams: unknown): Promise<{ ok: true }> {
   const params = ResearchStartParams.parse(rawParams);
@@ -333,6 +338,7 @@ async function researchStart(rawParams: unknown): Promise<{ ok: true }> {
       ...(params.builderRepoPath !== undefined
         ? { builderRepoPath: params.builderRepoPath }
         : {}),
+      ...(params.model !== undefined ? { model: params.model } : {}),
     },
     (event) => writeNotification(params.streamId, event),
     researchTransportOverride,

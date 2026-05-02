@@ -32,10 +32,11 @@ pub async fn research_start(
   spec_markdown: String,
   answers_digest: String,
   files_digest: String,
+  model: Option<String>,
   on_event: Channel<Value>,
 ) -> Result<String, String> {
   let stream_id = Uuid::new_v4().to_string();
-  let params = serde_json::json!({
+  let mut params = serde_json::json!({
     "streamId": stream_id,
     "projectId": project_id,
     "projectPath": project_path,
@@ -44,6 +45,9 @@ pub async fn research_start(
     "filesDigest": files_digest,
     "systemPrompt": DEEP_RESEARCH_SYSTEM_PROMPT,
   });
+  if let Some(m) = model {
+    params["model"] = serde_json::Value::String(m);
+  }
   sidecar_rpc_stream(state, "research.start".to_string(), params, stream_id.clone(), on_event)
     .map(|_| stream_id)
 }

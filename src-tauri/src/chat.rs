@@ -24,6 +24,7 @@ pub async fn chat_send(
   session_id: Option<String>,
   project_id: Option<String>,
   project_path: Option<String>,
+  model: Option<String>,
   on_chunk: Channel<Value>,
 ) -> Result<(), String> {
   // Project id + path are required for the SDK driver to thread them
@@ -35,13 +36,16 @@ pub async fn chat_send(
     project_path.ok_or_else(|| "chat_send: project_path is required".to_string())?;
 
   let stream_id = Uuid::new_v4().to_string();
-  let params = serde_json::json!({
+  let mut params = serde_json::json!({
     "streamId": stream_id,
     "projectId": project_id,
     "projectPath": project_path,
     "prompt": prompt,
     "sessionId": session_id,
   });
+  if let Some(m) = model {
+    params["model"] = serde_json::Value::String(m);
+  }
   sidecar_rpc_stream(state, "chat.start".to_string(), params, stream_id, on_chunk).map(|_| ())
 }
 

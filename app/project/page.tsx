@@ -107,6 +107,7 @@ import {
   type ResearchEvent,
 } from "@/lib/research";
 import type { Project } from "@/lib/project";
+import { resolveModel } from "@/lib/settings";
 import { sidecarCall } from "@/lib/sidecar/client";
 import { hasMadeSentryDecision } from "@/lib/telemetry";
 
@@ -985,6 +986,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
       sessionId: interviewSessionRef.current,
       projectId: project.id,
       projectPath: project.path,
+      model: resolveModel(isFirstTurn ? "interview_first_turn" : "interview_resume"),
       onChunk: handleChunk,
     });
     r.match(
@@ -1347,6 +1349,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
       specMarkdown: baselineSpec,
       answersDigest,
       filesDigest,
+      model: resolveModel("research"),
       onEvent,
     });
 
@@ -1508,6 +1511,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
       prompt: isResume
         ? "Continue the build. Look at your TodoWrite plan, find the next pending item, mark it in_progress, and execute it. Keep going through the plan. If the plan is complete, do the REVIEW step (rewrite .builder/review.md against spec.md)."
         : null,
+      model: resolveModel("build"),
       onEvent: (event) => {
         buildEventHandler(event);
         if (event.kind === "rate_limit") terminal = { kind: "rate_limited", message: event.message };
@@ -1822,6 +1826,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         projectPath: project.path,
         sessionId: buildSessionRef.current,
         prompt: expandMentions(prompt),
+        model: resolveModel("build"),
         onEvent: buildEventHandler,
       });
       r.match(

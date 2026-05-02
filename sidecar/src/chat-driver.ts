@@ -60,6 +60,9 @@ export interface ChatOptions {
   projectPath: string;
   prompt: string;
   sessionId?: string | null;
+  /** Model override from settings. When omitted, the driver picks
+   *  Opus for first turn / Sonnet for subsequent turns. */
+  model?: string;
 }
 
 export interface QueuedQuestion {
@@ -202,8 +205,9 @@ export async function runChat(
       additionalDirectories: [opts.projectPath],
       // First turn → Opus for first-impression quality. Subsequent turns
       // (sessionId set) → Sonnet for speed/cost. Same heuristic as the
-      // old chat.rs.
-      model: opts.sessionId ? "claude-sonnet-4-5" : "claude-opus-4-5",
+      // old chat.rs. Settings can override either branch by passing
+      // `model`; without an override the heuristic stands.
+      model: opts.model ?? (opts.sessionId ? "claude-sonnet-4-5" : "claude-opus-4-5"),
       permissionMode: "default",
       // Chat path doesn't need to write files in the novice's project,
       // and we want NO permission UI for it. Allow only our own MCP tools.

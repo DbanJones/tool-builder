@@ -56,6 +56,9 @@ export interface ResearchOptions {
   /** Test-only fallback: path to the repo root for the file-based load
    *  branch (`lib/llm/prompts/...`). Production passes `systemPrompt`. */
   builderRepoPath?: string;
+  /** Model id from settings — when omitted, the driver uses its
+   *  built-in default (claude-opus-4-5). */
+  model?: string;
 }
 
 export type ResearchEvent =
@@ -88,6 +91,9 @@ export interface ResearchSdkRunOptions {
   /** Scan id (driver streamId) — groups every record_finding from this run
    *  in the research_findings table. */
   scanId: string;
+  /** Model id — passed through to the Claude Agent SDK. Optional;
+   *  drivers fall back to their hardcoded default when undefined. */
+  model?: string;
   abortController: AbortController;
   onFinding: (args: {
     topic: string;
@@ -183,7 +189,9 @@ export const sdkTransport: ResearchTransport = {
       additionalDirectories: [opts.cwd],
       // Opus for the depth + cross-doc reasoning the prompt demands.
       // Cost roughly 5× sonnet but gated to one run per project, opt-in.
-      model: "claude-opus-4-5",
+      // Model can be overridden per-stage via the settings page; falls
+      // back to the hardcoded default when the caller doesn't pass one.
+      model: opts.model ?? "claude-opus-4-5",
       permissionMode: "default",
       allowedTools: [
         // Research tools — the whole point of v2: real web research,
@@ -335,6 +343,7 @@ export async function runResearch(
       cwd: opts.projectPath,
       projectId: opts.projectId,
       scanId: streamId,
+      ...(opts.model !== undefined ? { model: opts.model } : {}),
       abortController: ac,
       onFinding: ({ topic, body, axis, sources }) => {
         // Best-effort DB persist for the audit trail. Stays in-tick

@@ -38,6 +38,8 @@ export interface ResearchStartOptions {
   answersDigest: string;
   /** Approved-file summary block, one section per file. May be empty. */
   filesDigest: string;
+  /** Optional model id from settings; sidecar falls back to default. */
+  model?: string;
   onEvent: (event: ResearchEvent) => void;
 }
 
@@ -64,6 +66,7 @@ export function researchStart(
       specMarkdown: options.specMarkdown,
       answersDigest: options.answersDigest,
       filesDigest: options.filesDigest,
+      model: options.model ?? null,
       onEvent: channel,
     }),
     fromInvokeError,

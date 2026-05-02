@@ -42,6 +42,8 @@ export interface OrchestratorStartOptions {
   prompt?: string | null;
   /** Optional `claude` session id from a prior turn (used by D5/D6 resume). */
   sessionId?: string | null;
+  /** Optional model id from settings; sidecar falls back to default. */
+  model?: string;
   onEvent: (event: OrchestratorEvent) => void;
 }
 
@@ -68,6 +70,7 @@ export function orchestratorStart(
       projectPath: options.projectPath,
       prompt: options.prompt ?? null,
       sessionId: options.sessionId ?? null,
+      model: options.model ?? null,
       onEvent: channel,
     }),
     fromInvokeError,

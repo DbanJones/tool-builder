@@ -1,6 +1,6 @@
 "use client";
 
-import { FilePlus, Plus, ShieldCheck, Square, X } from "lucide-react";
+import { FilePlus, Plus, Settings, ShieldCheck, Square, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
@@ -133,6 +133,17 @@ function TabBarInner() {
             Stop {buildingTabs.length === 1 ? "build" : `all ${buildingTabs.length}`}
           </button>
         ) : null}
+        <Link
+          href="/settings"
+          aria-label="Open settings"
+          title="Settings · per-stage model selection"
+          className={
+            "flex h-9 w-9 items-center justify-center border-l text-muted-foreground hover:bg-background/60 hover:text-foreground " +
+            (pathname === "/settings" ? "border-b-2 border-primary text-foreground" : "")
+          }
+        >
+          <Settings className="h-3.5 w-3.5" aria-hidden="true" />
+        </Link>
         {DEMO_MODE ? (
           <Link
             href="/admin"

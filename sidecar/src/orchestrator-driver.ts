@@ -79,6 +79,8 @@ export interface OrchestratorOptions {
   projectPath: string;
   prompt?: string | null;
   sessionId?: string | null;
+  /** Model id from settings — falls back to claude-sonnet-4-5 when omitted. */
+  model?: string;
 }
 
 export interface TodoItem {
@@ -135,7 +137,9 @@ export async function runOrchestrator(
     const sdkOptions: Options = {
       cwd: opts.projectPath,
       additionalDirectories: [opts.projectPath],
-      model: "claude-sonnet-4-5",
+      // Settings-overridable; falls back to sonnet for the long build
+      // session where cost compounds across hundreds of tool calls.
+      model: opts.model ?? "claude-sonnet-4-5",
       permissionMode: "default",
       canUseTool: makeCanUseTool(opts.projectId, ac.signal),
       abortController: ac,
