@@ -2199,7 +2199,9 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     }));
     handleFilesDropped(added, rawFiles);
     tabPinnedRef.current = true;
-    setTab("files");
+    // Files now live as a section inside the Spec tab — route there
+    // so the novice sees the file panel light up.
+    setTab("spec");
   };
 
   const approveFileForSpec = (fileId: string): void => {

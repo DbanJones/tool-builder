@@ -51,7 +51,11 @@ export type LaunchStatus =
 // "plan" tab is now Plan + live Status (the activity tail) on one tab so
 // the user never has to switch to see what's happening. "activity" was
 // dropped as a standalone — its content lives at the bottom of "plan".
-export type RightTab = "spec" | "plan" | "preview" | "review" | "debug" | "files";
+// Four tabs total: Spec absorbs Files, Review absorbs Debug. The
+// previous six-tab strip was crowded enough that several novices
+// were missing surfaces; condensing into four with sub-sections is
+// cheaper to scan.
+export type RightTab = "spec" | "plan" | "preview" | "review";
 
 interface RightRailProps {
   tab: RightTab;
@@ -113,19 +117,16 @@ export function RightRail(props: RightRailProps) {
   const { tab, onTabChange, hasStarted } = props;
 
   const tabs: { id: RightTab; label: string; visible: boolean }[] = [
-    { id: "spec", label: "Spec", visible: true },
+    // Spec absorbs Files (collapsable section above the spec preview).
+    { id: "spec", label: "Spec & files", visible: true },
     { id: "plan", label: "Plan & status", visible: hasStarted },
     // Preview is always available — the panel itself handles the
-    // not-yet-launched state with a Start preview button. Gating on
-    // hasStarted hid the tab on projects that had source code on disk
-    // (e.g. recovered or re-created builds) but no session id yet.
+    // not-yet-launched state with a Start preview button.
     { id: "preview", label: "Preview", visible: true },
-    { id: "review", label: "Review", visible: hasStarted && props.reviewMarkdown !== null },
-    // Debug tab is visible once a build has started — defects are
-    // produced by the orchestrator's target-app code, so the tab has
-    // nothing to surface before that.
-    { id: "debug", label: "Debug", visible: hasStarted },
-    { id: "files", label: "Files", visible: true },
+    // Review absorbs Debug as a sub-tab (Coverage / Defects). Visible
+    // once a build has started — both the review.md and the defects
+    // table are populated post-build only.
+    { id: "review", label: "Review & defects", visible: hasStarted },
   ];
 
   // True fullscreen mode: when the preview is maximized AND the preview tab
@@ -170,7 +171,12 @@ export function RightRail(props: RightRailProps) {
 
       <RailBody>
         {tab === "spec" && (
-          <SpecPanel spec={props.spec} research={props.researchProgress} />
+          <SpecPanel
+            spec={props.spec}
+            research={props.researchProgress}
+            files={props.files}
+            onFilesDropped={props.onFilesDropped}
+          />
         )}
         {tab === "plan" && (
           <PlanAndStatusPanel
@@ -193,34 +199,109 @@ export function RightRail(props: RightRailProps) {
             onReportBroken={props.onReportPreviewBroken}
           />
         )}
-        {tab === "review" && props.reviewMarkdown !== null && (
-          <ReviewPanel
+        {tab === "review" && (
+          <ReviewAndDebugPanel
             markdown={props.reviewMarkdown}
             isRunning={props.reviewIsRunning}
             onBuildMissing={props.onBuildMissingPieces}
             echoBackPreview={props.echoBackPreview}
             onSendBuildFeedback={props.onSendBuildFeedback}
-          />
-        )}
-        {tab === "debug" && (
-          <DebugPanel
             defects={props.defects}
-            isScanning={props.isDebugScanning}
+            isDebugScanning={props.isDebugScanning}
             fixingDefectIds={props.fixingDefectIds}
             rollingBackDefectIds={props.rollingBackDefectIds}
-            onScanNow={props.onDebugScanNow}
-            onFix={props.onDebugFix}
-            onRollback={props.onDebugRollback}
-            lastScannedAt={props.lastDebugScannedAt}
+            onDebugScanNow={props.onDebugScanNow}
+            onDebugFix={props.onDebugFix}
+            onDebugRollback={props.onDebugRollback}
+            lastDebugScannedAt={props.lastDebugScannedAt}
           />
-        )}
-        {tab === "files" && (
-          <div className="flex min-h-0 flex-1 flex-col">
-            <FilePanel files={props.files} onDrop={props.onFilesDropped} />
-          </div>
         )}
       </RailBody>
     </aside>
+  );
+}
+
+// Combined Review + Debug panel. Sub-tabs at the top: "Coverage" shows
+// the build review.md content; "Defects" shows the debug defect list.
+// Defaults to Coverage when review.md exists, otherwise Defects (since
+// a hasStarted project with no review.md is mid-build — Defects is
+// what the novice can act on right now).
+function ReviewAndDebugPanel(props: {
+  markdown: string | null;
+  isRunning: boolean;
+  onBuildMissing: () => void;
+  echoBackPreview: EchoBackPreview;
+  onSendBuildFeedback: (feedback: string) => void;
+  defects: readonly Defect[];
+  isDebugScanning: boolean;
+  fixingDefectIds: ReadonlySet<string>;
+  rollingBackDefectIds: ReadonlySet<string>;
+  onDebugScanNow: () => void;
+  onDebugFix: (defectId: string) => void;
+  onDebugRollback: (defectId: string) => void;
+  lastDebugScannedAt: number | null;
+}) {
+  const [sub, setSub] = useState<"coverage" | "defects">(
+    props.markdown !== null ? "coverage" : "defects",
+  );
+  const defectCount = props.defects.length;
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 items-stretch border-b bg-muted/30">
+        <button
+          type="button"
+          onClick={() => setSub("coverage")}
+          aria-pressed={sub === "coverage"}
+          className={
+            "flex-1 px-3 py-2 text-[11px] font-medium transition-colors " +
+            (sub === "coverage"
+              ? "border-b-2 border-primary text-foreground"
+              : "text-muted-foreground hover:text-foreground")
+          }
+        >
+          Coverage
+        </button>
+        <button
+          type="button"
+          onClick={() => setSub("defects")}
+          aria-pressed={sub === "defects"}
+          className={
+            "flex-1 px-3 py-2 text-[11px] font-medium transition-colors " +
+            (sub === "defects"
+              ? "border-b-2 border-primary text-foreground"
+              : "text-muted-foreground hover:text-foreground")
+          }
+        >
+          Defects {defectCount > 0 ? `· ${defectCount}` : ""}
+        </button>
+      </div>
+      {sub === "coverage" ? (
+        props.markdown !== null ? (
+          <ReviewPanel
+            markdown={props.markdown}
+            isRunning={props.isRunning}
+            onBuildMissing={props.onBuildMissing}
+            echoBackPreview={props.echoBackPreview}
+            onSendBuildFeedback={props.onSendBuildFeedback}
+          />
+        ) : (
+          <div className="flex flex-1 items-center justify-center p-8 text-center text-xs text-muted-foreground">
+            No review.md yet — Dave writes this at the end of the first build pass.
+          </div>
+        )
+      ) : (
+        <DebugPanel
+          defects={props.defects}
+          isScanning={props.isDebugScanning}
+          fixingDefectIds={props.fixingDefectIds}
+          rollingBackDefectIds={props.rollingBackDefectIds}
+          onScanNow={props.onDebugScanNow}
+          onFix={props.onDebugFix}
+          onRollback={props.onDebugRollback}
+          lastScannedAt={props.lastDebugScannedAt}
+        />
+      )}
+    </div>
   );
 }
 
@@ -242,14 +323,22 @@ export interface ResearchProgressView {
 function SpecPanel({
   spec,
   research,
+  files,
+  onFilesDropped,
 }: {
   spec: string;
   research: ResearchProgressView | null;
+  files: readonly IngestedFile[];
+  onFilesDropped: (files: readonly IngestedFile[], rawFiles: readonly File[]) => void;
 }) {
+  // Files section starts collapsed when empty (the file panel's empty
+  // state is large), expanded when at least one file exists so the
+  // novice sees it without an extra click.
+  const [filesOpen, setFilesOpen] = useState<boolean>(files.length > 0);
   return (
     <>
       <div className="border-b px-4 py-3">
-        <h2 className="text-sm font-semibold">Spec preview</h2>
+        <h2 className="text-sm font-semibold">Spec & files</h2>
         <p className="text-xs text-muted-foreground">
           Rebuilt after each answer. Becomes read-only once the build starts. Lines marked
           <span className="mx-1 inline-flex items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
@@ -260,8 +349,52 @@ function SpecPanel({
         </p>
       </div>
       {research !== null ? <ResearchProgressBlock research={research} /> : null}
+      <FilesSection
+        files={files}
+        onFilesDropped={onFilesDropped}
+        open={filesOpen}
+        onToggle={() => setFilesOpen((v) => !v)}
+      />
       <SpecBody spec={spec} />
     </>
+  );
+}
+
+function FilesSection({
+  files,
+  onFilesDropped,
+  open,
+  onToggle,
+}: {
+  files: readonly IngestedFile[];
+  onFilesDropped: (files: readonly IngestedFile[], rawFiles: readonly File[]) => void;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="shrink-0 border-b">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        aria-controls="spec-files-detail"
+        className="flex w-full items-center gap-2 bg-muted/30 px-4 py-2 text-left hover:bg-muted/50"
+      >
+        {open ? (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        )}
+        <span className="flex-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Files {files.length > 0 ? `· ${files.length}` : ""}
+        </span>
+      </button>
+      {open ? (
+        <div id="spec-files-detail" className="max-h-72 overflow-auto">
+          <FilePanel files={files} onDrop={onFilesDropped} />
+        </div>
+      ) : null}
+    </div>
   );
 }
 
