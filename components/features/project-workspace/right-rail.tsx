@@ -140,7 +140,7 @@ export function RightRail(props: RightRailProps) {
       className={
         previewFullscreen
           ? "fixed inset-0 z-50 flex min-h-0 flex-col bg-background"
-          : "hidden min-h-0 flex-col border-l lg:flex"
+          : "flex h-full min-h-0 flex-1 flex-col border-l"
       }
     >
       {previewFullscreen ? null : (

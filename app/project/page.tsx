@@ -2021,6 +2021,12 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
       () => setLaunchStatus({ kind: "idle" }),
       (e) => setLaunchStatus({ kind: "error", message: e.message }),
     );
+    // Exit preview fullscreen on stop. Otherwise the rail stays as a
+    // fixed inset-0 overlay with no toolbar (the toolbar belongs to the
+    // running PreviewPanel branch) and the novice has no on-screen way
+    // back to the rest of the workspace. ESC also restores; this matches
+    // the same intent.
+    setPreviewMaximized(false);
   }, []);
 
   // Preview-tab variant of launchApp: never opens the browser as a side

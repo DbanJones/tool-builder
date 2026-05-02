@@ -92,7 +92,7 @@ export function ResizableSplit({
 
   return (
     <div ref={containerRef} className="flex min-h-0 flex-1">
-      <div className="min-w-0 flex-1">{left}</div>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">{left}</div>
       {hideHandle ? null : (
         <div
           role="separator"
@@ -122,7 +122,10 @@ export function ResizableSplit({
           </div>
         </div>
       )}
-      <div style={{ width: rightWidth }} className="shrink-0">
+      <div
+        style={{ width: rightWidth }}
+        className="flex min-h-0 shrink-0 flex-col"
+      >
         {right}
       </div>
     </div>
