@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { isPiiColumn, parseMigration, rlsMissingScan } from "./rls-missing.js";
+import { isPiiColumn, rlsMissingScan } from "./rls-missing.js";
 
 let tmp: string;
 
@@ -50,58 +50,10 @@ describe("isPiiColumn", () => {
   });
 });
 
-describe("parseMigration", () => {
-  it("extracts table name + PII columns from CREATE TABLE", () => {
-    const sql = `
-      CREATE TABLE users (
-        id uuid PRIMARY KEY,
-        email text NOT NULL,
-        full_name text
-      );
-    `;
-    const { creates } = parseMigration(sql, "supabase/migrations/0001.sql");
-    expect(creates).toHaveLength(1);
-    expect(creates[0]!.name).toBe("users");
-    expect(creates[0]!.piiColumns).toEqual(["email"]);
-  });
-
-  it("recognises ENABLE ROW LEVEL SECURITY across many syntactic variants", () => {
-    const sql = `
-      ALTER TABLE users ENABLE ROW LEVEL SECURITY;
-      ALTER TABLE public.posts ENABLE ROW LEVEL SECURITY;
-      ALTER TABLE ONLY "comments" ENABLE ROW LEVEL SECURITY;
-    `;
-    const { enables } = parseMigration(sql, "x.sql");
-    expect([...enables].sort()).toEqual(["comments", "posts", "users"]);
-  });
-
-  it("captures CREATE POLICY targets", () => {
-    const sql = `CREATE POLICY allow_owner ON profiles FOR SELECT USING (auth.uid() = user_id);`;
-    const { policies } = parseMigration(sql, "x.sql");
-    expect([...policies]).toEqual(["profiles"]);
-  });
-
-  it("ignores CREATE TABLE inside line comments", () => {
-    const sql = `
-      -- CREATE TABLE fake_users (email text);
-      CREATE TABLE real_users (id uuid PRIMARY KEY);
-    `;
-    const { creates } = parseMigration(sql, "x.sql");
-    expect(creates).toHaveLength(1);
-    expect(creates[0]!.name).toBe("real_users");
-  });
-
-  it("recovers when a non-CREATE-TABLE statement is unparseable", () => {
-    // Some Supabase migrations include CREATE EXTENSION which the parser
-    // may not love; we should still find the CREATE TABLE.
-    const sql = `
-      CREATE EXTENSION IF NOT EXISTS pgcrypto;
-      CREATE TABLE accounts (id uuid PRIMARY KEY, email text);
-    `;
-    const { creates } = parseMigration(sql, "x.sql");
-    expect(creates.map((c) => c.name)).toEqual(["accounts"]);
-  });
-});
+// Lower-level SQL parsing (parseMigrationStatements + buildSchemaGraph)
+// has moved to ../../graph/schema.ts and is covered by schema.test.ts.
+// This file now tests only the rls-missing detector's PII heuristic +
+// finding emission.
 
 describe("rlsMissingScan — Lovable-class fixture", () => {
   it("flags a PII table with no RLS as critical (the headline case)", async () => {
