@@ -34,7 +34,11 @@ import {
   type SyntaxIssue,
 } from "./verify.js";
 
-export const MAX_TIER2_ATTEMPTS = 2;
+// Per spec.md Flow L AC6: "test-then-patch verify loop capped at 3 attempts".
+// Source spec §E.4 specifies the same. The earlier v1 cut at 2 was a
+// scope-narrowing decision walked back during the Phase G boundary recheck
+// (NB-G-1); G7 follow-up restores parity with the spec.
+export const MAX_TIER2_ATTEMPTS = 3;
 
 export type Tier2Outcome =
   | {
