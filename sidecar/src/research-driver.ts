@@ -28,6 +28,8 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 
+import { appendDirect as persistFinding } from "./handlers/research-findings.js";
+
 // The system prompt now arrives in the params (the Rust shell embeds it
 // via include_str!). The fallback file path is only used when the
 // integration test calls runResearch directly without a Tauri shell —
@@ -81,6 +83,11 @@ export interface ResearchSdkRunOptions {
   prompt: string;
   systemPrompt: string;
   cwd: string;
+  /** Project ULID — used by the MCP tool to persist findings. */
+  projectId: string;
+  /** Scan id (driver streamId) — groups every record_finding from this run
+   *  in the research_findings table. */
+  scanId: string;
   abortController: AbortController;
   onFinding: (args: {
     topic: string;
@@ -326,9 +333,36 @@ export async function runResearch(
       prompt: userPrompt,
       systemPrompt,
       cwd: opts.projectPath,
+      projectId: opts.projectId,
+      scanId: streamId,
       abortController: ac,
-      onFinding: ({ topic, body, axis, sources }) =>
-        onEvent({ kind: "finding", topic, body, axis, sources }),
+      onFinding: ({ topic, body, axis, sources }) => {
+        // Best-effort DB persist for the audit trail. Stays in-tick
+        // with the event emit so failures never desync the live tail
+        // from the table; on failure we log to stderr (Tauri shell
+        // captures it) and keep streaming the event regardless.
+        try {
+          persistFinding({
+            projectId: opts.projectId,
+            scanId: streamId,
+            topic,
+            body,
+            axis,
+            sources,
+          });
+        } catch (e) {
+          process.stderr.write(
+            JSON.stringify({
+              level: "warn",
+              message: `research_findings persist failed: ${
+                e instanceof Error ? e.message : String(e)
+              }`,
+              at: new Date().toISOString(),
+            }) + "\n",
+          );
+        }
+        onEvent({ kind: "finding", topic, body, axis, sources });
+      },
       onProposal: (markdown, summaryOfChanges) =>
         onEvent({ kind: "proposal", markdown, summaryOfChanges }),
     });

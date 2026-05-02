@@ -49,6 +49,10 @@ import {
   type ResearchTransport,
 } from "./research-driver.js";
 import {
+  listByProject as listResearchFindingsByProject,
+  listByScan as listResearchFindingsByScan,
+} from "./handlers/research-findings.js";
+import {
   graph as debugGraph,
   list as listDefects,
   scan as debugScan,
@@ -196,6 +200,8 @@ const handlers: Record<string, Handler> = {
   "chat.stop": chatStop,
   "research.start": researchStart,
   "research.stop": researchStop,
+  "researchFindings.listByScan": listResearchFindingsByScan,
+  "researchFindings.listByProject": listResearchFindingsByProject,
 };
 
 // Test injection: BUILDER_RESEARCH_STUB_JSON encodes the stub options

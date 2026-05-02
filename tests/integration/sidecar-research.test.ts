@@ -33,7 +33,13 @@ interface Project {
 type ResearchEvent =
   | { kind: "session"; id: string }
   | { kind: "assistant_delta"; text: string }
-  | { kind: "finding"; topic: string; body: string }
+  | {
+      kind: "finding";
+      topic: string;
+      body: string;
+      axis: string | null;
+      sources: string[];
+    }
   | { kind: "proposal"; markdown: string; summaryOfChanges: string }
   | {
       kind: "done";
@@ -130,12 +136,28 @@ class SidecarHarness {
 const REPO_ROOT = process.cwd();
 
 interface ResearchStubConfig {
-  findings?: Array<{ topic: string; body: string }>;
+  findings?: Array<{
+    topic: string;
+    body: string;
+    axis?: string | null;
+    sources?: string[];
+  }>;
   proposal?: { markdown: string; summaryOfChanges: string };
   costUsd?: number;
   inputTokens?: number;
   outputTokens?: number;
   abortAfterFindings?: number;
+}
+
+interface PersistedFinding {
+  id: string;
+  projectId: string;
+  scanId: string;
+  recordedAt: number;
+  topic: string;
+  body: string;
+  axis: string | null;
+  sources: string;
 }
 
 async function startWithStub(stub: ResearchStubConfig): Promise<{
@@ -179,8 +201,18 @@ describe("sidecar research.start (integration) — Flow M AC2/AC4/AC6", () => {
   it("streams findings and a final proposal in order, then a done event", async () => {
     ctx = await startWithStub({
       findings: [
-        { topic: "competitive landscape", body: "Notion, Coda, and Airtable overlap on free-form databases." },
-        { topic: "data model", body: "tasks, projects, users — soft-delete recommended." },
+        {
+          topic: "competitive landscape",
+          body: "Notion, Coda, and Airtable overlap on free-form databases.",
+          axis: "competitive_landscape",
+          sources: ["https://www.notion.so/pricing", "https://airtable.com/pricing"],
+        },
+        {
+          topic: "data model",
+          body: "tasks, projects, users — soft-delete recommended.",
+          axis: "data_model",
+          sources: [],
+        },
       ],
       proposal: {
         markdown: "# Build Spec: Demo\n\n## 1. Problem\n…expanded…",
@@ -229,6 +261,23 @@ describe("sidecar research.start (integration) — Flow M AC2/AC4/AC6", () => {
     };
     expect(lastIndexOfKind("finding")).toBeLessThan(indexOfKind("proposal"));
     expect(indexOfKind("proposal")).toBeLessThan(indexOfKind("done"));
+
+    // Persisted in research_findings (audit trail).
+    const persisted = await ctx.harness.call<PersistedFinding[]>(
+      "researchFindings.listByScan",
+      { scanId: streamId },
+    );
+    expect(persisted.ok).toBe(true);
+    if (persisted.ok) {
+      expect(persisted.result.length).toBe(2);
+      const competitive = persisted.result.find((f) => f.topic === "competitive landscape");
+      expect(competitive).toBeDefined();
+      expect(competitive!.axis).toBe("competitive_landscape");
+      expect(JSON.parse(competitive!.sources)).toEqual([
+        "https://www.notion.so/pricing",
+        "https://airtable.com/pricing",
+      ]);
+    }
   });
 
   it("handles a cancelled run mid-stream (no proposal, done.cancellation_reason='user')", async () => {
