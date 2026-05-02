@@ -430,6 +430,12 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   const announcedReviewRef = useRef(false);
   const announcedDeployedRef = useRef(false);
   const announcedPushedRef = useRef(false);
+  // Phase G G7 follow-up #4 / Flow L AC1: auto-trigger a Debug scan at
+  // the first-pass phase boundary (when review.md appears on disk so
+  // the novice sees fresh defects in the Debug rail before deciding
+  // what to do next). Once-per-session — the user can re-run via Scan
+  // now if they want a fresh pass after iterating.
+  const autoScannedAtPhaseBoundaryRef = useRef(false);
   // Build's `done` event fires every time a turn ends. If Claude finished
   // the build without writing review.md (forgot, stopped early), prompt
   // exactly once per session so the novice always gets a coverage report.
@@ -1693,6 +1699,20 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
       `${STAGE_SENTINELS.review} — the plan and activity are in the right rail. Click "Launch app" to try it locally, "Deploy" for a Vercel preview, or "Push to GitHub" to back the code up. You can also keep chatting with me to fill any gaps.`,
     );
   }, [reviewMarkdown, appendAssistantMessage, STAGE_SENTINELS.review]);
+
+  // Phase boundary auto-scan (Flow L AC1 / G7 follow-up #4). Fire-and-
+  // forget: kicks off a Debug scan once the first-pass review.md
+  // appears, so the Debug tab is populated when the novice opens it.
+  // Does not gate the existing review/Launch/Deploy flow — the full
+  // approval-modal gate remains tracked under D-015 alongside the
+  // phase_complete MCP tool.
+  useEffect(() => {
+    if (autoScannedAtPhaseBoundaryRef.current) return;
+    if (reviewMarkdown === null) return;
+    if (project === null) return;
+    autoScannedAtPhaseBoundaryRef.current = true;
+    void runDebugScanNow();
+  }, [reviewMarkdown, project, runDebugScanNow]);
 
   // Stage 3: deploy preview just succeeded.
   useEffect(() => {
