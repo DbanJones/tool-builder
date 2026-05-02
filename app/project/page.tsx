@@ -576,20 +576,36 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     };
   }, [projectId, ensureTabOpen]);
 
-  // Pull spec from answers and rebuild the preview.
+  // Pull spec from answers and rebuild the preview. EXCEPT when the
+  // project's on-disk spec.md is research-adopted (carries the v2
+  // marker `(via deep research)`) — in that case the on-disk file is
+  // the source of truth, and rebuildSpec(answers) would silently
+  // throw away the additions. Prefer disk; fall back to rebuild.
   const refreshSpec = useCallback(async (): Promise<void> => {
-    if (!projectId) return;
+    if (!projectId || !project) return;
+    let researchSpec: string | null = null;
+    try {
+      const onDisk = await invoke<string | null>("read_target_spec", {
+        projectPath: project.path,
+      });
+      if (onDisk !== null && onDisk.includes("(via deep research)")) {
+        researchSpec = onDisk;
+      }
+    } catch (e) {
+      console.warn("read_target_spec failed during refreshSpec:", e);
+    }
     const r = await sidecarCall<AnswerRow[]>("answers.list", { projectId });
     r.match(
       (rows) => {
         const rebuildAnswers = rows.map(rowToRebuildAnswer);
         try {
           setSpec(
-            appendApprovedSourceMaterials(
-              rebuildSpec(rebuildAnswers),
-              files,
-              approvedFileIds,
-            ),
+            researchSpec ??
+              appendApprovedSourceMaterials(
+                rebuildSpec(rebuildAnswers),
+                files,
+                approvedFileIds,
+              ),
           );
         } catch (e) {
           setSpec(`# Spec preview error\n\n${e instanceof Error ? e.message : String(e)}`);
@@ -620,7 +636,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
       },
       () => undefined,
     );
-  }, [projectId, echoBackConfirmed, files, approvedFileIds]);
+  }, [projectId, project, echoBackConfirmed, files, approvedFileIds]);
 
   useEffect(() => {
     if (project) void refreshSpec();
