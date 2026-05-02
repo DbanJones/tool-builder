@@ -8,6 +8,7 @@ import { create as createProject } from "./projects.js";
 import { listEvents } from "./audit.js";
 import { defects } from "../schema/defects.js";
 import type { Detector, RawFinding } from "../debug/detectors/types.js";
+import { stubTransport } from "../debug/validator/index.js";
 import { graph, scan, list } from "./debug.js";
 
 let tmpDir: string;
@@ -163,6 +164,158 @@ describe("debug.scan handler", () => {
     expect(list({ projectId })).toHaveLength(2);
     expect(list({ projectId, scanId: r1.scanId })).toHaveLength(1);
     expect(list({ projectId, scanId: r1.scanId })[0]!.ruleId).toBe("a/1");
+  });
+});
+
+describe("debug.scan with validate=true", () => {
+  it("does not invoke the validator when validate=false (default)", async () => {
+    let calls = 0;
+    const transport = {
+      async validate() {
+        calls++;
+        return JSON.stringify({
+          verdict: "real",
+          confidence: 0.9,
+          exploitPath: "x",
+          fixStrategy: "y",
+          fixTier: 1,
+        });
+      },
+    };
+    const projectId = await newProject();
+    await scan(
+      { projectId },
+      [fakeDetector("fake", [sampleFinding()])],
+      transport
+    );
+    expect(calls).toBe(0);
+    const row = list({ projectId })[0]!;
+    expect(row.validatorVerdict).toBeNull();
+    expect(row.validatedAt).toBeNull();
+  });
+
+  it("calls the validator once per finding when validate=true", async () => {
+    let calls = 0;
+    const transport = {
+      async validate() {
+        calls++;
+        return JSON.stringify({
+          verdict: "real",
+          confidence: 0.9,
+          exploitPath: "exploit",
+          fixStrategy: "fix",
+          fixTier: 1,
+        });
+      },
+    };
+    const projectId = await newProject();
+    await scan(
+      { projectId, validate: true },
+      [
+        fakeDetector("a", [sampleFinding({ ruleId: "a/1" })]),
+        fakeDetector("b", [sampleFinding({ ruleId: "b/1" })]),
+      ],
+      transport
+    );
+    expect(calls).toBe(2);
+  });
+
+  it("real verdict raises confidence and recomputes priority + band", async () => {
+    const projectId = await newProject();
+    const result = await scan(
+      { projectId, validate: true },
+      [fakeDetector("fake", [sampleFinding()])],
+      stubTransport({
+        "test/rule": JSON.stringify({
+          verdict: "real",
+          confidence: 0.95,
+          exploitPath: "validator-confirmed exploit",
+          fixStrategy: "validator-suggested fix",
+          fixTier: 1,
+        }),
+      })
+    );
+    expect(result.findingCount).toBe(1);
+    expect(result.validatorDismissed).toBe(0);
+
+    const row = list({ projectId })[0]!;
+    expect(row.validatorVerdict).toBe("real");
+    expect(row.confidence).toBeCloseTo(0.95, 5);
+    // Founder mode: (9 × 2.5 × 0.95 × 2.0) / 1.5 = 28.5 → critical (and
+    // higher than the Layer-1-only score of 21).
+    expect(row.priority).toBeCloseTo(28.5, 1);
+    expect(row.band).toBe("critical");
+    expect(row.fixTier).toBe(1);
+    expect(row.status).toBe("open");
+    expect(row.validatorNotes).toContain("validator-confirmed exploit");
+    expect(row.validatedAt).not.toBeNull();
+  });
+
+  it("false_positive verdict marks the row dismissed and counts in validatorDismissed", async () => {
+    const projectId = await newProject();
+    const result = await scan(
+      { projectId, validate: true },
+      [fakeDetector("fake", [sampleFinding()])],
+      stubTransport({
+        "test/rule": JSON.stringify({
+          verdict: "false_positive",
+          confidence: 0.9,
+          exploitPath: "",
+          fixStrategy: "",
+          fixTier: null,
+        }),
+      })
+    );
+    expect(result.validatorDismissed).toBe(1);
+
+    const row = list({ projectId })[0]!;
+    expect(row.validatorVerdict).toBe("false_positive");
+    expect(row.status).toBe("dismissed");
+  });
+
+  it("uncertain verdict leaves confidence unchanged but records the verdict", async () => {
+    const projectId = await newProject();
+    await scan(
+      { projectId, validate: true },
+      [fakeDetector("fake", [sampleFinding()])],
+      stubTransport({
+        "test/rule": JSON.stringify({
+          verdict: "uncertain",
+          confidence: 0.5,
+          exploitPath: "",
+          fixStrategy: "",
+          fixTier: null,
+        }),
+      })
+    );
+    const row = list({ projectId })[0]!;
+    expect(row.validatorVerdict).toBe("uncertain");
+    expect(row.confidence).toBeCloseTo(0.7, 5); // unchanged from Layer-1
+    expect(row.status).toBe("open");
+  });
+
+  it("audit log captures validatorDismissed in the completed payload", async () => {
+    const projectId = await newProject();
+    await scan(
+      { projectId, validate: true },
+      [
+        fakeDetector("a", [sampleFinding({ ruleId: "a/1" })]),
+        fakeDetector("b", [sampleFinding({ ruleId: "b/1" })]),
+      ],
+      stubTransport({
+        "a/1": JSON.stringify({
+          verdict: "false_positive",
+          confidence: 0.9,
+          exploitPath: "",
+          fixStrategy: "",
+          fixTier: null,
+        }),
+      })
+    );
+    const events = listEvents({ limit: 50 });
+    const completed = events.find((e) => e.action === "debug_scan_completed")!;
+    const payload = JSON.parse(completed.payload);
+    expect(payload.validatorDismissed).toBe(1);
   });
 });
 

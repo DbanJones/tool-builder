@@ -71,6 +71,13 @@
       "when": 1777657346997,
       "tag": "0009_glossy_reavers",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1777713928103,
+      "tag": "0010_real_chronomancer",
+      "breakpoints": true
     }
   ]
 }

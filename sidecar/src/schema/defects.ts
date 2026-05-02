@@ -59,6 +59,18 @@ export const defects = sqliteTable("defects", {
   fixTestPath: text("fix_test_path"),
   resolvedAt: integer("resolved_at"),
   resolvedCommit: text("resolved_commit"),
+  // Layer 2 validator output (Phase G G4). Null when the scan ran with
+  // validate=false (Layer 1 only) or when the validator has not yet
+  // adjudicated this row. The validator can up- or down-grade
+  // confidence — when it does, priority and band are recomputed on the
+  // same row in place. `validatedAt` is the wall-clock at adjudication;
+  // `validatorNotes` packs exploitPath + fixStrategy as a single JSON
+  // blob so we don't need a fourth migration just to split them.
+  validatorVerdict: text("validator_verdict", {
+    enum: ["real", "false_positive", "uncertain"],
+  }),
+  validatorNotes: text("validator_notes"),
+  validatedAt: integer("validated_at"),
 });
 
 export type Defect = typeof defects.$inferSelect;
