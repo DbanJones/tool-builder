@@ -15,7 +15,12 @@ import { sidecarCall } from "@/lib/sidecar/client";
 // opened; the strip shows which is active and which (if any) is currently
 // building. Fixed-width tabs so the strip reads as a row of equal slots.
 
-const TAB_WIDTH = "w-[200px]";
+// Tabs grow up to 200px when there's room and shrink down to ~110px when
+// the strip is crowded — same compress-then-scroll behaviour browsers use.
+// `min-w-[110px]` keeps the status dot + a few characters of name + close
+// button visible even with many tabs open; the home link and right-side
+// controls stay full-width because they live outside the scroll container.
+const TAB_WIDTH = "w-[200px] min-w-[110px]";
 
 export function TabBar() {
   // useSearchParams suspends during the static prerender pass; wrap so the
@@ -66,12 +71,12 @@ function TabBarInner() {
   };
 
   return (
-    <div className="flex h-9 shrink-0 items-end gap-0 border-b bg-muted/40">
+    <div className="flex h-9 w-full shrink-0 items-end gap-0 overflow-hidden border-b bg-muted/40">
       <Link
         href="/"
         aria-label="Dave-Builder home"
         className={
-          "flex h-9 items-center gap-2 px-3 text-xs font-semibold " +
+          "flex h-9 shrink-0 items-center gap-2 px-3 text-xs font-semibold " +
           (activeId === null && pathname === "/"
             ? "border-b-2 border-primary text-foreground"
             : "text-muted-foreground hover:text-foreground")
@@ -88,28 +93,30 @@ function TabBarInner() {
           </span>
         ) : null}
       </Link>
-      {tabs.map((t) => (
-        <Tab
-          key={t.id}
-          tab={t}
-          active={t.id === activeId}
-          onClose={(e) => onClose(t.id, e)}
-        />
-      ))}
-      {onNewProjectRoute ? (
-        <NewProjectTab />
-      ) : (
-        <Link
-          href="/new-project"
-          aria-label="Start a new project"
-          title="Start a new project"
-          className="flex h-9 shrink-0 items-center gap-1.5 border-r px-3 text-xs font-medium text-muted-foreground hover:bg-background/60 hover:text-foreground"
-        >
-          <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-          New project
-        </Link>
-      )}
-      <div className="ml-auto flex h-9 items-stretch">
+      <div className="flex min-w-0 flex-1 items-end overflow-x-auto">
+        {tabs.map((t) => (
+          <Tab
+            key={t.id}
+            tab={t}
+            active={t.id === activeId}
+            onClose={(e) => onClose(t.id, e)}
+          />
+        ))}
+        {onNewProjectRoute ? (
+          <NewProjectTab />
+        ) : (
+          <Link
+            href="/new-project"
+            aria-label="Start a new project"
+            title="Start a new project"
+            className="flex h-9 shrink-0 items-center gap-1.5 border-r px-3 text-xs font-medium text-muted-foreground hover:bg-background/60 hover:text-foreground"
+          >
+            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+            New project
+          </Link>
+        )}
+      </div>
+      <div className="flex h-9 shrink-0 items-stretch">
         {buildingTabs.length > 0 ? (
           <button
             type="button"
