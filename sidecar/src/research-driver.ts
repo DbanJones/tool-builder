@@ -28,6 +28,10 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 
+// The system prompt now arrives in the params (the Rust shell embeds it
+// via include_str!). The fallback file path is only used when the
+// integration test calls runResearch directly without a Tauri shell —
+// production paths always pass `systemPrompt`.
 const RESEARCH_PROMPT_RELATIVE_PATH = "lib/llm/prompts/deep-research.v1.md";
 const MAX_WALL_CLOCK_MS = 5 * 60 * 1000;
 const MAX_STEPS = 8;
@@ -41,7 +45,11 @@ export interface ResearchOptions {
   answersDigest: string;
   /** One block per approved file: "## file.pdf\n<summary>" */
   filesDigest: string;
-  /** Path to the repo root (so we can find lib/llm/prompts/...). Falls back to cwd. */
+  /** Pre-loaded system prompt (Rust shell ships this via include_str!).
+   *  When present, the driver uses it verbatim and skips the file load. */
+  systemPrompt?: string;
+  /** Test-only fallback: path to the repo root for the file-based load
+   *  branch (`lib/llm/prompts/...`). Production passes `systemPrompt`. */
   builderRepoPath?: string;
 }
 
@@ -248,7 +256,10 @@ export async function runResearch(
   }, MAX_WALL_CLOCK_MS);
 
   try {
-    const systemPrompt = await loadResearchPrompt(opts.builderRepoPath);
+    const systemPrompt =
+      opts.systemPrompt && opts.systemPrompt.trim().length > 0
+        ? opts.systemPrompt
+        : await loadResearchPrompt(opts.builderRepoPath);
     const userPrompt = buildResearchUserPrompt({
       specMarkdown: opts.specMarkdown,
       answersDigest: opts.answersDigest,

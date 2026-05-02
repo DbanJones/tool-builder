@@ -306,6 +306,9 @@ const ResearchStartParams = z.object({
   specMarkdown: z.string().min(1),
   answersDigest: z.string(),
   filesDigest: z.string(),
+  // Tauri shell ships the system prompt (compile-time include_str!).
+  // Optional so the integration test can fall back to the file path.
+  systemPrompt: z.string().min(1).optional(),
   builderRepoPath: z.string().min(1).optional(),
 });
 async function researchStart(rawParams: unknown): Promise<{ ok: true }> {
@@ -318,6 +321,9 @@ async function researchStart(rawParams: unknown): Promise<{ ok: true }> {
       specMarkdown: params.specMarkdown,
       answersDigest: params.answersDigest,
       filesDigest: params.filesDigest,
+      ...(params.systemPrompt !== undefined
+        ? { systemPrompt: params.systemPrompt }
+        : {}),
       ...(params.builderRepoPath !== undefined
         ? { builderRepoPath: params.builderRepoPath }
         : {}),

@@ -2,6 +2,14 @@
 // sidecar's research.start over the streaming bridge. The driver lives
 // in sidecar/src/research-driver.ts; this file is just the webview-side
 // entry point that allocates a streamId and binds the Channel.
+//
+// The deep-research system prompt is embedded into the binary at compile
+// time via include_str! and shipped to the sidecar inside the params
+// payload. This is the same pattern lib.rs uses for the project
+// scaffolding templates (TEMPLATE_CLAUDE_MD etc.) — keeps the prompt
+// file as the source of truth (rule L20) without requiring the sidecar
+// to resolve a runtime file path. Works identically in dev and in a
+// shipped Tauri build because the bytes are already inside the binary.
 
 use serde_json::Value;
 use tauri::ipc::Channel;
@@ -9,6 +17,9 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::sidecar::{sidecar_rpc, sidecar_rpc_stream, SidecarState};
+
+const DEEP_RESEARCH_SYSTEM_PROMPT: &str =
+  include_str!("../../lib/llm/prompts/deep-research.v1.md");
 
 #[tauri::command]
 pub async fn research_start(
@@ -28,6 +39,7 @@ pub async fn research_start(
     "specMarkdown": spec_markdown,
     "answersDigest": answers_digest,
     "filesDigest": files_digest,
+    "systemPrompt": DEEP_RESEARCH_SYSTEM_PROMPT,
   });
   sidecar_rpc_stream(state, "research.start".to_string(), params, stream_id.clone(), on_event)
     .map(|_| stream_id)
