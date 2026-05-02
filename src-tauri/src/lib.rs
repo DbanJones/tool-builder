@@ -4,6 +4,7 @@ mod export;
 mod launch;
 mod orchestrator;
 mod preview_proxy;
+mod research;
 mod sidecar;
 
 use keyring::Entry;
@@ -18,6 +19,7 @@ use export::{gh_export, gh_is_installed};
 use launch::{target_app_launch, target_app_stop, target_app_write_launch_scripts, LaunchState};
 use orchestrator::{orchestrator_start, orchestrator_stop, OrchestratorState};
 use preview_proxy::PreviewProxyState;
+use research::{research_start, research_stop};
 use sidecar::{sidecar_rpc, sidecar_rpc_stream, spawn_sidecar, SidecarState};
 
 // Bundled placeholder templates copied into every newly created project per
@@ -1073,6 +1075,8 @@ pub fn run() {
       chat_stop,
       orchestrator_start,
       orchestrator_stop,
+      research_start,
+      research_stop,
       vercel_is_installed,
       vercel_deploy,
       gh_is_installed,
