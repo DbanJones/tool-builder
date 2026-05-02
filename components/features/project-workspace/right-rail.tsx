@@ -82,6 +82,10 @@ interface RightRailProps {
    *  The handler should drop the rendered summary into chat and kick off a
    *  fix turn. */
   onReportPreviewBroken: (summary: string) => void;
+  /** Live deep-research state. When non-null, the Spec tab renders an
+   *  inline progress block above the spec preview so the novice can watch
+   *  findings stream in without leaving the spec context. */
+  researchProgress: ResearchProgressView | null;
   // Review
   reviewMarkdown: string | null;
   reviewIsRunning: boolean;
@@ -162,7 +166,9 @@ export function RightRail(props: RightRailProps) {
       )}
 
       <RailBody>
-        {tab === "spec" && <SpecPanel spec={props.spec} />}
+        {tab === "spec" && (
+          <SpecPanel spec={props.spec} research={props.researchProgress} />
+        )}
         {tab === "plan" && (
           <PlanAndStatusPanel
             plan={props.plan}
@@ -219,7 +225,24 @@ function RailBody({ children }: { children: ReactNode }) {
   return <div className="flex min-h-0 flex-1 flex-col">{children}</div>;
 }
 
-function SpecPanel({ spec }: { spec: string }) {
+export interface ResearchProgressView {
+  /** Number of findings recorded since the run started. */
+  findingsCount: number;
+  /** The most recent few findings (newest last) for inline display. */
+  recentFindings: ReadonlyArray<{ topic: string; body: string }>;
+  /** Wall-clock ms since the run began; rendered as mm:ss. */
+  elapsedMs: number;
+  /** Optional cancel handler — when present, a Stop button is rendered. */
+  onStop?: () => void;
+}
+
+function SpecPanel({
+  spec,
+  research,
+}: {
+  spec: string;
+  research: ResearchProgressView | null;
+}) {
   return (
     <>
       <div className="border-b px-4 py-3">
@@ -228,10 +251,61 @@ function SpecPanel({ spec }: { spec: string }) {
           Rebuilt after each answer. Becomes read-only once the build starts.
         </p>
       </div>
+      {research !== null ? <ResearchProgressBlock research={research} /> : null}
       <pre className="flex-1 overflow-auto whitespace-pre-wrap break-words bg-muted/40 p-4 text-xs leading-relaxed">
         {spec || "_(no answers recorded yet)_"}
       </pre>
     </>
+  );
+}
+
+function ResearchProgressBlock({ research }: { research: ResearchProgressView }) {
+  const minutes = Math.floor(research.elapsedMs / 60000);
+  const seconds = Math.floor((research.elapsedMs % 60000) / 1000);
+  const elapsed = `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  return (
+    <div className="shrink-0 border-b bg-primary/5 px-4 py-3" aria-live="polite">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Loader2
+            className="h-4 w-4 animate-spin text-primary motion-reduce:animate-none"
+            aria-hidden="true"
+          />
+          <h3 className="text-xs font-semibold text-primary">
+            Deep research in progress
+          </h3>
+        </div>
+        <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+          {elapsed} · {research.findingsCount} finding
+          {research.findingsCount === 1 ? "" : "s"}
+        </span>
+      </div>
+      {research.recentFindings.length === 0 ? (
+        <p className="mt-2 text-[11px] text-muted-foreground">
+          Dave is reading your spec, answers, and approved files. Findings will appear here as
+          they land. The proposed spec opens in a side-by-side diff when finished.
+        </p>
+      ) : (
+        <ol className="mt-2 space-y-1.5">
+          {research.recentFindings.map((f, i) => (
+            <li key={i} className="text-[11px] leading-relaxed">
+              <span className="font-semibold text-foreground">{f.topic}</span>
+              <span className="text-muted-foreground"> — {f.body}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+      {research.onStop ? (
+        <button
+          type="button"
+          onClick={research.onStop}
+          className="mt-2 inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <Square className="h-3 w-3" aria-hidden="true" />
+          Stop research
+        </button>
+      ) : null}
+    </div>
   );
 }
 

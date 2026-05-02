@@ -278,11 +278,17 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
 
   // Flow M (deep-research). Three discriminator states track the modal flow:
   // - "idle"      : nothing in progress
-  // - "running"   : sidecar SDK session is open; banner shows in live tail
+  // - "running"   : sidecar SDK session is open; spec tab shows progress
   // - "review"    : proposal arrived; diff modal is open
+  type ResearchFinding = { topic: string; body: string };
   type ResearchUiState =
     | { kind: "idle" }
-    | { kind: "running"; streamId: string | null; findingsCount: number }
+    | {
+        kind: "running";
+        streamId: string | null;
+        findings: ResearchFinding[];
+        startedAt: number;
+      }
     | {
         kind: "review";
         originalSpec: string;
@@ -293,6 +299,14 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
       };
   const [researchUi, setResearchUi] = useState<ResearchUiState>({ kind: "idle" });
   const researchStreamIdRef = useRef<string | null>(null);
+  // Re-render once a second while research is running so the elapsed-time
+  // counter in the progress block ticks. Cheap; 1Hz only while active.
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    if (researchUi.kind !== "running") return;
+    const id = window.setInterval(() => forceTick((n) => n + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [researchUi.kind]);
 
   // Counter the Preview tab uses as part of its iframe key. Bumped when the
   // agent emits a file-mutating tool_use (Edit/Write/MultiEdit/NotebookEdit)
@@ -1138,11 +1152,19 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         .map((f) => ({ name: f.name, summary: f.summary })),
     );
 
-    setResearchUi({ kind: "running", streamId: null, findingsCount: 0 });
-    appendAssistantMessage("Researching… typically 2-5 min. You can hit Stop in the live tail.");
+    setResearchUi({
+      kind: "running",
+      streamId: null,
+      findings: [],
+      startedAt: Date.now(),
+    });
+    appendAssistantMessage(
+      "Researching… typically 2-5 min. Switch to the Spec tab to watch findings stream in. You can hit Stop in either view to abandon.",
+    );
 
-    // Switch the rail to the live tail so the novice sees progress.
-    setTab("plan");
+    // Switch the rail to the Spec tab so the novice can watch the
+    // research-progress block (and see the existing spec for context).
+    setTab("spec");
 
     // Wrap mutable state in an object so closure assignments inside
     // `onEvent` survive TypeScript's let-narrowing across the await
@@ -1172,7 +1194,12 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
       }
       if (event.kind === "finding") {
         setResearchUi((prev) =>
-          prev.kind === "running" ? { ...prev, findingsCount: prev.findingsCount + 1 } : prev,
+          prev.kind === "running"
+            ? {
+                ...prev,
+                findings: [...prev.findings, { topic: event.topic, body: event.body }],
+              }
+            : prev,
         );
         // Push the finding into the live tail via the bridge listener so
         // it lands next to orchestrator events. One row per finding.
@@ -2366,6 +2393,16 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
             echoUserMessage(summary, "On it — looking at that now.");
             void runFollowUpTurn(summary);
           }}
+          researchProgress={
+            researchUi.kind === "running"
+              ? {
+                  findingsCount: researchUi.findings.length,
+                  recentFindings: researchUi.findings.slice(-5),
+                  elapsedMs: Date.now() - researchUi.startedAt,
+                  onStop: cancelResearchRun,
+                }
+              : null
+          }
           defects={defects}
           isDebugScanning={isDebugScanning}
           fixingDefectIds={fixingDefectIds}
@@ -2477,8 +2514,8 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         <Alert className="mx-4 mt-3 mb-1 pr-9">
           <AlertTitle className="flex items-center gap-2">
             <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-            Researching… ({researchUi.findingsCount} finding
-            {researchUi.findingsCount === 1 ? "" : "s"} so far)
+            Researching… ({researchUi.findings.length} finding
+            {researchUi.findings.length === 1 ? "" : "s"} so far)
           </AlertTitle>
           <AlertDescription>
             Dave is exploring competitors, edge cases, and data-model gaps. Typically 2-5 minutes.
