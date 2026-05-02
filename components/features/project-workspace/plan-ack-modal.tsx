@@ -1,7 +1,7 @@
 "use client";
 
 import { Dialog } from "@base-ui/react/dialog";
-import { ArrowRight, FileText } from "lucide-react";
+import { ArrowRight, FileText, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
@@ -20,6 +20,16 @@ interface PlanAckModalProps {
   approvedFileCount: number;
   onConfirm: () => void;
   onCancel: () => void;
+  /** Flow M: optional pre-build deep-research run. When undefined the
+   *  CTA is hidden — used by tests / older callers. When defined, an
+   *  opt-in tertiary action appears alongside Cancel/Go. */
+  onResearchFirst?: () => void;
+  /** When true, the Research-first button is disabled (cost ceiling at
+   *  "stop", or another research run already in flight). */
+  researchDisabled?: boolean;
+  /** Inline label appended to the Research-first button (e.g. "(at cap)").
+   *  Helps the novice understand WHY the button is disabled. */
+  researchDisabledReason?: string | null;
 }
 
 export function PlanAckModal({
@@ -28,6 +38,9 @@ export function PlanAckModal({
   approvedFileCount,
   onConfirm,
   onCancel,
+  onResearchFirst,
+  researchDisabled,
+  researchDisabledReason,
 }: PlanAckModalProps) {
   const specLines = spec.split("\n").length;
   return (
@@ -64,6 +77,43 @@ export function PlanAckModal({
                 : spec}
             </pre>
           </div>
+          {onResearchFirst ? (
+            <div className="border-t bg-primary/5 px-4 py-3">
+              <div className="flex items-start gap-3">
+                <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-medium text-foreground">
+                    Want Dave to think harder first?
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    Spend 2-5 minutes (roughly $1-3) letting him research competitors, edge
+                    cases, and data-model gaps. He&apos;ll propose an expanded spec for you to
+                    review side-by-side; the original is preserved either way. Optional —
+                    your spec is already enough to build from.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={onResearchFirst}
+                  disabled={researchDisabled || spec.trim().length === 0}
+                  title={
+                    researchDisabledReason ??
+                    "Open a deep-research session before Dave starts coding"
+                  }
+                >
+                  <Sparkles className="mr-1 h-3 w-3" aria-hidden="true" />
+                  Research first
+                  {researchDisabledReason ? (
+                    <span className="ml-1 text-muted-foreground">
+                      {researchDisabledReason}
+                    </span>
+                  ) : null}
+                </Button>
+              </div>
+            </div>
+          ) : null}
           <div className="flex items-center justify-between gap-3 border-t bg-background p-4">
             <p className="text-[11px] text-muted-foreground">
               Cancel to keep refining. Dave won&apos;t touch your project files until you click
