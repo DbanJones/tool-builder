@@ -1,6 +1,6 @@
 "use client";
 
-import { FilePlus, Plus, Square, X } from "lucide-react";
+import { FilePlus, Plus, ShieldCheck, Square, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
@@ -109,22 +109,37 @@ function TabBarInner() {
           New project
         </Link>
       )}
-      {buildingTabs.length > 0 ? (
-        <button
-          type="button"
-          onClick={() => void onStopAll()}
-          aria-label={`Stop ${buildingTabs.length === 1 ? "build" : "all builds"}`}
-          title={
-            buildingTabs.length === 1
-              ? `Stop the build on ${buildingTabs[0]?.name ?? ""}`
-              : `Stop all ${buildingTabs.length} running builds`
-          }
-          className="ml-auto flex h-9 items-center gap-1.5 px-3 text-[11px] font-medium text-destructive hover:bg-destructive/10"
-        >
-          <Square className="h-3 w-3" aria-hidden="true" />
-          Stop {buildingTabs.length === 1 ? "build" : `all ${buildingTabs.length}`}
-        </button>
-      ) : null}
+      <div className="ml-auto flex h-9 items-stretch">
+        {buildingTabs.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => void onStopAll()}
+            aria-label={`Stop ${buildingTabs.length === 1 ? "build" : "all builds"}`}
+            title={
+              buildingTabs.length === 1
+                ? `Stop the build on ${buildingTabs[0]?.name ?? ""}`
+                : `Stop all ${buildingTabs.length} running builds`
+            }
+            className="flex h-9 items-center gap-1.5 px-3 text-[11px] font-medium text-destructive hover:bg-destructive/10"
+          >
+            <Square className="h-3 w-3" aria-hidden="true" />
+            Stop {buildingTabs.length === 1 ? "build" : `all ${buildingTabs.length}`}
+          </button>
+        ) : null}
+        {DEMO_MODE ? (
+          <Link
+            href="/admin"
+            aria-label="Open admin (demo controls)"
+            title="Admin · demo lockout controls"
+            className={
+              "flex h-9 w-9 items-center justify-center border-l text-muted-foreground hover:bg-background/60 hover:text-foreground " +
+              (pathname === "/admin" ? "border-b-2 border-primary text-foreground" : "")
+            }
+          >
+            <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+          </Link>
+        ) : null}
+      </div>
     </div>
   );
 }
