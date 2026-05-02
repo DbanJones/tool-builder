@@ -41,6 +41,7 @@ import {
   runOrchestrator,
 } from "./orchestrator-driver.js";
 import { cancelChat, runChat } from "./chat-driver.js";
+import { list as listDefects, scan as debugScan } from "./handlers/debug.js";
 import {
   append as appendDrift,
   listOpen as listOpenDrifts,
@@ -139,6 +140,8 @@ const handlers: Record<string, Handler> = {
   "drift.append": appendDrift,
   "drift.resolve": resolveDrift,
   "drift.listOpen": listOpenDrifts,
+  "debug.scan": debugScan,
+  "debug.list": listDefects,
   "chatMessages.append": appendChatMessage,
   "chatMessages.list": listChatMessages,
   "permissionRequests.listOpen": listOpenPermissionRequests,

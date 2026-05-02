@@ -45,3 +45,11 @@ export const BAND_TREATMENT: Readonly<Record<Band, BandTreatment>> = {
   low: { tone: "muted", blocksDeploy: false, label: "Low" },
   info: { tone: "muted", blocksDeploy: false, label: "Info" },
 };
+
+export {
+  listDefects,
+  runDebugScan,
+  type Defect,
+  type DebugError,
+  type DebugScanResult,
+} from "./sidecar";

@@ -129,18 +129,21 @@ export function parseMigration(
   const enables = new Set<string>();
   const policies = new Set<string>();
 
+  // Strip comments once. We must run the ENABLE/POLICY regexes against
+  // the stripped text or a comment like `-- ALTER TABLE x ENABLE ROW
+  // LEVEL SECURITY` will be mistaken for the real thing.
+  const stripped = stripSqlComments(source);
+
   // ALTER TABLE … ENABLE RLS — regex (Postgres-specific syntax that
   // node-sql-parser sometimes refuses to parse).
-  for (const m of source.matchAll(ENABLE_RLS_RE)) {
+  for (const m of stripped.matchAll(ENABLE_RLS_RE)) {
     if (m.groups?.table) enables.add(unquote(m.groups.table).toLowerCase());
   }
-  for (const m of source.matchAll(CREATE_POLICY_RE)) {
+  for (const m of stripped.matchAll(CREATE_POLICY_RE)) {
     if (m.groups?.table) policies.add(unquote(m.groups.table).toLowerCase());
   }
 
   // CREATE TABLE — astify per-statement so a bad ALTER doesn't sink us.
-  // Find each CREATE TABLE block by scanning for the keyword and walking
-  // forward to the matching `;` at depth 0.
   const parser = new SqlParser();
   const statements = splitStatements(source);
   for (const stmt of statements) {
@@ -176,6 +179,10 @@ interface StatementSlice {
   line: number;
 }
 
+function stripSqlComments(source: string): string {
+  return source.replace(/--[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
 // Naive splitter: SQL statements end with ';' at depth-0. We only need
 // "good enough" because each block is then handed to a real parser.
 function splitStatements(source: string): StatementSlice[] {
@@ -187,9 +194,7 @@ function splitStatements(source: string): StatementSlice[] {
   let i = 0;
   // Strip line comments and block comments before splitting; keeps depth
   // counting honest when comments contain parens or semicolons.
-  const stripped = source
-    .replace(/--[^\n]*/g, "")
-    .replace(/\/\*[\s\S]*?\*\//g, "");
+  const stripped = stripSqlComments(source);
   while (i < stripped.length) {
     const ch = stripped[i]!;
     if (ch === "\n") line++;

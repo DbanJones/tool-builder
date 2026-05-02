@@ -1,0 +1,6 @@
+{
+  "name": "clean-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Negative-control fixture for sidecar-debug.test.ts. Same shape as lovable-rls but with RLS enabled and a per-row policy."
+}
