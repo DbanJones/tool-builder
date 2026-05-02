@@ -7,7 +7,15 @@ import { ResultAsync } from "neverthrow";
 export type ResearchEvent =
   | { kind: "session"; id: string }
   | { kind: "assistant_delta"; text: string }
-  | { kind: "finding"; topic: string; body: string }
+  | {
+      kind: "finding";
+      topic: string;
+      body: string;
+      /** Which prompt axis this came from (problem_users, competitive_landscape, …); null when the model didn't classify. */
+      axis: string | null;
+      /** URLs / file paths cited via WebFetch / Read. Empty array means general-knowledge claim. */
+      sources: string[];
+    }
   | { kind: "proposal"; markdown: string; summaryOfChanges: string }
   | {
       kind: "done";

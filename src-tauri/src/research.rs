@@ -18,8 +18,11 @@ use uuid::Uuid;
 
 use crate::sidecar::{sidecar_rpc, sidecar_rpc_stream, SidecarState};
 
+// v2 (ADR-0017 follow-up): tool-aware prompt with WebSearch / WebFetch /
+// Read instructions and the `_(via deep research)_` marker convention so
+// the spec view can highlight new content.
 const DEEP_RESEARCH_SYSTEM_PROMPT: &str =
-  include_str!("../../lib/llm/prompts/deep-research.v1.md");
+  include_str!("../../lib/llm/prompts/deep-research.v2.md");
 
 #[tauri::command]
 pub async fn research_start(

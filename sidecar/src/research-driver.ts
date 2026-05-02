@@ -32,9 +32,12 @@ import { z } from "zod";
 // via include_str!). The fallback file path is only used when the
 // integration test calls runResearch directly without a Tauri shell —
 // production paths always pass `systemPrompt`.
-const RESEARCH_PROMPT_RELATIVE_PATH = "lib/llm/prompts/deep-research.v1.md";
-const MAX_WALL_CLOCK_MS = 5 * 60 * 1000;
-const MAX_STEPS = 8;
+const RESEARCH_PROMPT_RELATIVE_PATH = "lib/llm/prompts/deep-research.v2.md";
+// 10-min wall-clock + 15 SDK steps lets the agent actually do web
+// research (search → fetch → synthesise) instead of just thinking
+// from training data. Bumped from 5min/8 in v2.
+const MAX_WALL_CLOCK_MS = 10 * 60 * 1000;
+const MAX_STEPS = 15;
 
 export interface ResearchOptions {
   projectId: string;
@@ -56,7 +59,13 @@ export interface ResearchOptions {
 export type ResearchEvent =
   | { kind: "session"; id: string }
   | { kind: "assistant_delta"; text: string }
-  | { kind: "finding"; topic: string; body: string }
+  | {
+      kind: "finding";
+      topic: string;
+      body: string;
+      axis: string | null;
+      sources: string[];
+    }
   | { kind: "proposal"; markdown: string; summaryOfChanges: string }
   | {
       kind: "done";
@@ -73,7 +82,12 @@ export interface ResearchSdkRunOptions {
   systemPrompt: string;
   cwd: string;
   abortController: AbortController;
-  onFinding: (topic: string, body: string) => void;
+  onFinding: (args: {
+    topic: string;
+    body: string;
+    axis: string | null;
+    sources: string[];
+  }) => void;
   onProposal: (markdown: string, summaryOfChanges: string) => void;
 }
 
@@ -90,22 +104,42 @@ const inflight = new Map<string, AbortController>();
  *  as plain Node functions. The handlers just route into the supplied
  *  callbacks; the driver holds the proposal in a closure variable. */
 function buildResearchMcp(
-  onFinding: (topic: string, body: string) => void,
+  onFinding: (args: { topic: string; body: string; axis: string | null; sources: string[] }) => void,
   onProposal: (markdown: string, summaryOfChanges: string) => void,
 ) {
   return createSdkMcpServer({
     name: "research",
-    version: "0.1.0",
+    version: "0.2.0",
     tools: [
       tool(
         "record_finding",
-        "Stream a one-paragraph progress note for the live tail. Use sparingly — substantive observations only.",
+        "Stream a one-paragraph progress note for the live tail. Substantive observations only — cite WebFetch / Read sources via the sources array. The axis field maps to the prompt's 9 sections (problem_users, competitive_landscape, scope_expansion, out_of_scope, flows, data_model, integrations, nfr, open_questions) for downstream auditability.",
         {
           topic: z.string().min(1).max(120),
           body: z.string().min(1).max(2000),
+          axis: z
+            .enum([
+              "problem_users",
+              "competitive_landscape",
+              "scope_expansion",
+              "out_of_scope",
+              "flows",
+              "data_model",
+              "integrations",
+              "nfr",
+              "open_questions",
+            ])
+            .nullable()
+            .optional(),
+          sources: z.array(z.string().min(1).max(500)).max(20).optional(),
         },
         async (args) => {
-          onFinding(args.topic, args.body);
+          onFinding({
+            topic: args.topic,
+            body: args.body,
+            axis: args.axis ?? null,
+            sources: args.sources ?? [],
+          });
           return {
             content: [{ type: "text", text: `Recorded finding on ${args.topic}.` }],
           };
@@ -131,16 +165,29 @@ function buildResearchMcp(
   });
 }
 
-/** Production transport: hands the prompt to the real Claude Agent SDK. */
+/** Production transport: hands the prompt to the real Claude Agent SDK.
+ *  v2 (ADR-0017 follow-up): switched to Opus + opened up WebSearch /
+ *  WebFetch / Read so the run does *real* research, not just thinking. */
 export const sdkTransport: ResearchTransport = {
   run(opts) {
     const mcp = buildResearchMcp(opts.onFinding, opts.onProposal);
     const sdkOptions: Options = {
       cwd: opts.cwd,
       additionalDirectories: [opts.cwd],
-      model: "claude-sonnet-4-5",
+      // Opus for the depth + cross-doc reasoning the prompt demands.
+      // Cost roughly 5× sonnet but gated to one run per project, opt-in.
+      model: "claude-opus-4-5",
       permissionMode: "default",
       allowedTools: [
+        // Research tools — the whole point of v2: real web research,
+        // not training-data recall.
+        "WebSearch",
+        "WebFetch",
+        // Read into the project folder so the agent can open the
+        // novice's uploaded PDFs / transcripts directly when a
+        // summary is too compressed. cwd is the project path; SDK
+        // path-sandboxes Read to additionalDirectories.
+        "Read",
         "mcp__research__record_finding",
         "mcp__research__propose_spec_revision",
       ],
@@ -158,7 +205,12 @@ export const sdkTransport: ResearchTransport = {
  *  session-init, fires the callbacks in order, replays the messages, then
  *  yields a result/success. */
 export function stubTransport(opts: {
-  findings?: ReadonlyArray<{ topic: string; body: string }>;
+  findings?: ReadonlyArray<{
+    topic: string;
+    body: string;
+    axis?: string | null;
+    sources?: string[];
+  }>;
   proposal?: { markdown: string; summaryOfChanges: string };
   extraMessages?: ReadonlyArray<SDKMessage>;
   costUsd?: number;
@@ -182,7 +234,12 @@ export function stubTransport(opts: {
           return;
         }
         const f = findings[i]!;
-        rOpts.onFinding(f.topic, f.body);
+        rOpts.onFinding({
+          topic: f.topic,
+          body: f.body,
+          axis: f.axis ?? null,
+          sources: f.sources ?? [],
+        });
       }
       if (opts.proposal) {
         rOpts.onProposal(opts.proposal.markdown, opts.proposal.summaryOfChanges);
@@ -270,7 +327,8 @@ export async function runResearch(
       systemPrompt,
       cwd: opts.projectPath,
       abortController: ac,
-      onFinding: (topic, body) => onEvent({ kind: "finding", topic, body }),
+      onFinding: ({ topic, body, axis, sources }) =>
+        onEvent({ kind: "finding", topic, body, axis, sources }),
       onProposal: (markdown, summaryOfChanges) =>
         onEvent({ kind: "proposal", markdown, summaryOfChanges }),
     });
