@@ -94,7 +94,7 @@ pub async fn start(upstream_port: u16) -> Result<PreviewProxyHandle, String> {
               let upstream_addr = upstream.clone();
               tokio::spawn(async move {
                 if let Err(e) = handle_connection(client, &upstream_addr).await {
-                  log::debug!("preview_proxy connection error: {e}");
+                  log::warn!("preview_proxy connection error: {e}");
                 }
               });
             }
@@ -130,8 +130,10 @@ async fn handle_connection(mut client: TcpStream, upstream_addr: &str) -> Result
 
   // Rewrite headers so upstream returns identity-encoded bodies (so we can
   // inject) and so neither side keeps the connection alive (we close after
-  // one exchange unless we upgrade to a websocket).
-  let rewritten = rewrite_request_headers(&head);
+  // one exchange unless we upgrade to a websocket). Also rewrites Host +
+  // strips Origin/Referer so Next 15.5+ does not reject the proxied request
+  // as cross-origin.
+  let rewritten = rewrite_request_headers(&head, upstream_addr);
   let is_ws = is_websocket_upgrade(&head);
   upstream
     .write_all(rewritten.as_bytes())
@@ -207,13 +209,23 @@ fn is_websocket_upgrade(head: &str) -> bool {
   has_upgrade_ws && has_connection_upgrade
 }
 
-fn rewrite_request_headers(head: &str) -> String {
+fn rewrite_request_headers(head: &str, upstream_addr: &str) -> String {
   let mut out = String::with_capacity(head.len() + 64);
   let mut saw_accept_encoding = false;
+  let mut saw_host = false;
   for (idx, line) in head.lines().enumerate() {
     if idx == 0 {
       out.push_str(line);
       out.push_str("\r\n");
+      continue;
+    }
+    // Skip the trailing blank line from `\r\n\r\n` — `read_request_head`
+    // returns the buffer up to and including the double-crlf, so
+    // `head.lines()` ends with one empty entry. Letting that through
+    // here would inject an end-of-headers signal mid-block, which
+    // upstream (Next.js 15.5+) rejects with 400 because the trailing
+    // Connection: close looks like a malformed second request.
+    if line.is_empty() {
       continue;
     }
     let lower = line.to_ascii_lowercase();
@@ -231,11 +243,33 @@ fn rewrite_request_headers(head: &str) -> String {
       saw_accept_encoding = true;
       continue;
     }
+    // Rewrite Host to match upstream so Next 15.5+ does not 400 the
+    // request as cross-origin (its dev server compares the Host header
+    // against the address it bound to).
+    if key == "host" {
+      out.push_str(&format!("Host: {upstream_addr}\r\n"));
+      saw_host = true;
+      continue;
+    }
+    // Drop Origin / Referer / Sec-Fetch-* — these advertise the iframe's
+    // parent context (e.g. Origin: tauri://localhost) which Next 15.5+
+    // treats as a cross-site request and rejects with 400 unless
+    // allowedDevOrigins is configured. The proxy is a same-host relay
+    // from upstream's perspective; it should look that way.
+    if matches!(
+      key,
+      "origin" | "referer" | "sec-fetch-site" | "sec-fetch-mode" | "sec-fetch-dest"
+    ) {
+      continue;
+    }
     out.push_str(line);
     out.push_str("\r\n");
   }
   if !saw_accept_encoding {
     out.push_str("Accept-Encoding: identity\r\n");
+  }
+  if !saw_host {
+    out.push_str(&format!("Host: {upstream_addr}\r\n"));
   }
   out.push_str("Connection: close\r\n");
   out.push_str("\r\n");
@@ -375,6 +409,10 @@ fn rewrite_response_headers(head: &str, new_content_length: usize) -> String {
     if idx == 0 {
       out.push_str(line);
       out.push_str("\r\n");
+      continue;
+    }
+    // Skip the trailing blank line — same reason as rewrite_request_headers.
+    if line.is_empty() {
       continue;
     }
     let lower = line.to_ascii_lowercase();
@@ -542,10 +580,80 @@ mod tests {
   #[test]
   fn rewrite_strips_accept_encoding() {
     let head = "GET / HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip, deflate\r\n";
-    let out = rewrite_request_headers(head);
+    let out = rewrite_request_headers(head, "127.0.0.1:3000");
     assert!(out.contains("Accept-Encoding: identity"));
     assert!(!out.contains("gzip"));
     assert!(out.contains("Connection: close"));
+  }
+
+  #[test]
+  fn rewrite_overwrites_host_with_upstream() {
+    // Without this Next.js 15.5+ rejects the request as cross-origin
+    // because the iframe's Host points at the proxy port, not upstream.
+    let head = "GET / HTTP/1.1\r\nHost: localhost:50994\r\n";
+    let out = rewrite_request_headers(head, "127.0.0.1:3002");
+    assert!(out.contains("Host: 127.0.0.1:3002\r\n"));
+    assert!(!out.contains("Host: localhost:50994"));
+  }
+
+  #[test]
+  fn rewrite_strips_origin_referer_and_sec_fetch() {
+    // The iframe inside Tauri sends Origin: tauri://localhost which
+    // Next 15.5 treats as a cross-site request and rejects with 400
+    // unless allowedDevOrigins is configured. We strip the lot so
+    // upstream sees a plain same-origin GET.
+    let head = "GET / HTTP/1.1\r\nHost: x\r\nOrigin: http://tauri.localhost\r\nReferer: http://tauri.localhost/\r\nSec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-Dest: iframe\r\n";
+    let out = rewrite_request_headers(head, "127.0.0.1:3000");
+    assert!(!out.to_ascii_lowercase().contains("origin:"));
+    assert!(!out.to_ascii_lowercase().contains("referer:"));
+    assert!(!out.to_ascii_lowercase().contains("sec-fetch"));
+  }
+
+  #[test]
+  fn rewrite_adds_host_when_missing() {
+    let head = "GET / HTTP/1.1\r\nAccept: */*\r\n";
+    let out = rewrite_request_headers(head, "127.0.0.1:3000");
+    assert!(out.contains("Host: 127.0.0.1:3000"));
+  }
+
+  #[test]
+  fn rewrite_skips_trailing_blank_line_from_double_crlf() {
+    // read_request_head returns the buffer up to AND INCLUDING the
+    // double-crlf, so head ends with `\r\n\r\n`. .lines() turns that
+    // into a trailing empty entry. If the rewrite loop writes that
+    // empty line, the rebuilt request has end-of-headers in the middle
+    // and the upstream rejects the trailing Connection: close as a
+    // malformed second request — Next.js 15.5+ specifically returns
+    // 400 Bad Request to this exact shape.
+    let head = "GET / HTTP/1.1\r\nHost: x\r\nAccept: */*\r\n\r\n";
+    let out = rewrite_request_headers(head, "127.0.0.1:3000");
+    // The rebuilt request must contain exactly one CRLF-CRLF (the
+    // end-of-headers terminator), at the very end.
+    let crlf_crlf_count = out.matches("\r\n\r\n").count();
+    assert_eq!(
+      crlf_crlf_count, 1,
+      "expected exactly one \\r\\n\\r\\n; got {crlf_crlf_count} in:\n{out}"
+    );
+    assert!(
+      out.ends_with("\r\n\r\n"),
+      "rewrite output must end with \\r\\n\\r\\n; got:\n{out}"
+    );
+  }
+
+  #[test]
+  fn response_rewrite_skips_trailing_blank_line() {
+    // Same bug class on the response side. Without the skip, the body
+    // injection writes Content-Length AFTER an empty-line-induced
+    // end-of-headers, so the client (Tauri webview) sees a body that
+    // starts with Content-Length: ... and a malformed page.
+    let head =
+      "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nTransfer-Encoding: chunked\r\n\r\n";
+    let out = rewrite_response_headers(head, 1024);
+    let crlf_crlf_count = out.matches("\r\n\r\n").count();
+    assert_eq!(crlf_crlf_count, 1, "got:\n{out}");
+    assert!(out.ends_with("\r\n\r\n"));
+    assert!(out.contains("Content-Length: 1024"));
+    assert!(!out.contains("Transfer-Encoding"));
   }
 
   #[test]
