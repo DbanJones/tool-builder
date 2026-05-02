@@ -27,7 +27,10 @@ import {
   commitAll,
   dispatchTier1,
   openBranch,
+  runTier2,
+  sdkPatchTransport,
   squashOntoBase,
+  type PatchTransport,
   type RunGit,
 } from "../debug/repair/index.js";
 
@@ -37,11 +40,14 @@ const ApplyFixParamsSchema = z.object({
 
 export type FixOutcome =
   | "applied"
+  | "applied_tier2"
   | "skipped_no_codemod"
   | "skipped_codemod_noop"
   | "syntax_check_failed"
   | "branch_failed"
-  | "codemod_error";
+  | "codemod_error"
+  | "tier2_no_patch"
+  | "tier2_verify_failed";
 
 export interface ApplyFixResult {
   defectId: string;
@@ -57,7 +63,10 @@ export async function applyFix(
   rawParams: unknown,
   // Tests inject a deterministic git stub; production lets the
   // repair/branch.ts default spawn `git -C <projectPath> …`.
-  runGit?: RunGit
+  runGit?: RunGit,
+  // Tier 2 patch transport. Defaults to the production SDK transport;
+  // tests inject a stub.
+  patchTransport: PatchTransport = sdkPatchTransport
 ): Promise<ApplyFixResult> {
   const params = ApplyFixParamsSchema.parse(rawParams);
   const db = getDb();
@@ -94,22 +103,12 @@ export async function applyFix(
     return failWithAudit(db, defect.id, "branch_failed", String(e), null);
   }
 
-  // Dispatch to Tier 1.
+  // Dispatch to Tier 1 first.
   const codemod = await dispatchTier1({
     defect,
     projectPath: project.path,
   });
 
-  if (codemod.kind === "skipped") {
-    await abortBranch(session, runGit);
-    return failWithAudit(
-      db,
-      defect.id,
-      "skipped_no_codemod",
-      codemod.message,
-      session.branch
-    );
-  }
   if (codemod.kind === "error") {
     await abortBranch(session, runGit);
     return failWithAudit(
@@ -119,6 +118,19 @@ export async function applyFix(
       codemod.message,
       session.branch
     );
+  }
+
+  // Tier 1 didn't match this rule — fall through to Tier 2 (LLM-driven
+  // patch generator with retry-once on syntax failure).
+  if (codemod.kind === "skipped") {
+    return await runTier2OnBranch({
+      db,
+      defect,
+      project,
+      session,
+      runGit,
+      patchTransport,
+    });
   }
 
   if (codemod.files.length === 0) {
@@ -134,7 +146,7 @@ export async function applyFix(
 
   // Minimal verification: every TS/TSX/JS/JSX file the codemod touched
   // must still parse cleanly. Catches "we broke the syntax" but not
-  // semantic regressions — those wait for the G5d verify loop.
+  // semantic regressions — those wait for behaviour-level test verify.
   const syntaxIssues = await checkSyntax(project.path, codemod.files);
   if (syntaxIssues.length > 0) {
     await abortBranch(session, runGit);
@@ -187,6 +199,103 @@ export async function applyFix(
     outcome: "applied",
     message: codemod.message,
     files: codemod.files,
+    branch: session.branch,
+  };
+}
+
+interface Tier2RunArgs {
+  db: ReturnType<typeof getDb>;
+  defect: typeof defects.$inferSelect;
+  project: typeof projects.$inferSelect;
+  session: { branch: string; baseBranch: string; projectPath: string };
+  runGit: RunGit | undefined;
+  patchTransport: PatchTransport;
+}
+
+async function runTier2OnBranch(args: Tier2RunArgs): Promise<ApplyFixResult> {
+  const { db, defect, project, session, runGit, patchTransport } = args;
+
+  const tier2 = await runTier2({
+    finding: {
+      class: defect.class,
+      ruleId: defect.ruleId,
+      severity: defect.severity,
+      blastRadius: defect.blastRadius,
+      confidence: defect.confidence,
+      difficulty: defect.difficulty,
+      file: defect.file,
+      lineStart: defect.lineStart,
+      lineEnd: defect.lineEnd,
+      humanExplanation: defect.humanExplanation,
+      codeEvidence: defect.codeEvidence,
+    },
+    projectPath: project.path,
+    transport: patchTransport,
+  });
+
+  if (tier2.kind === "no_patch") {
+    await abortBranch(session, runGit);
+    return failWithAudit(
+      db,
+      defect.id,
+      "tier2_no_patch",
+      tier2.reason,
+      session.branch
+    );
+  }
+  if (tier2.kind === "verify_failed") {
+    await abortBranch(session, runGit);
+    return failWithAudit(
+      db,
+      defect.id,
+      "tier2_verify_failed",
+      `Tier 2 gave up after ${tier2.attempts} attempts: ${tier2.lastErrors}`,
+      session.branch
+    );
+  }
+
+  // Applied. Commit + squash + mark fixed.
+  await commitAll(session, `fix: ${tier2.explanation}`, runGit);
+  await squashOntoBase(
+    session,
+    `fix: ${tier2.explanation} (defect ${defect.id})`,
+    runGit
+  );
+
+  const resolvedAt = Date.now();
+  db.update(defects)
+    .set({
+      status: "fixed",
+      fixTier: 2,
+      fixBranch: session.branch,
+      resolvedAt,
+      resolvedCommit: null,
+    })
+    .where(eq(defects.id, defect.id))
+    .run();
+
+  db.insert(auditLog)
+    .values({
+      id: ulid(),
+      action: "debug_fix_applied",
+      targetId: defect.id,
+      payload: JSON.stringify({
+        outcome: "applied_tier2",
+        ruleId: defect.ruleId,
+        fixTier: 2,
+        files: tier2.files,
+        branch: session.branch,
+        attempts: tier2.attempts,
+      }),
+      createdAt: resolvedAt,
+    })
+    .run();
+
+  return {
+    defectId: defect.id,
+    outcome: "applied_tier2",
+    message: tier2.explanation,
+    files: tier2.files,
     branch: session.branch,
   };
 }
