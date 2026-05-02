@@ -24,6 +24,8 @@ import {
   type BridgeSnapshot,
 } from "@/lib/preview-bridge";
 
+import type { Defect } from "@/lib/debug";
+import { DebugPanel } from "./debug-panel";
 import { FilePanel } from "./file-panel";
 import type { IngestedFile } from "@/lib/files/types";
 
@@ -45,7 +47,7 @@ export type LaunchStatus =
 // "plan" tab is now Plan + live Status (the activity tail) on one tab so
 // the user never has to switch to see what's happening. "activity" was
 // dropped as a standalone — its content lives at the bottom of "plan".
-export type RightTab = "spec" | "plan" | "preview" | "review" | "files";
+export type RightTab = "spec" | "plan" | "preview" | "review" | "debug" | "files";
 
 interface RightRailProps {
   tab: RightTab;
@@ -81,6 +83,13 @@ interface RightRailProps {
   onBuildMissingPieces: () => void;
   echoBackPreview: EchoBackPreview;
   onSendBuildFeedback: (feedback: string) => void;
+  // Debug (Phase G G6 — Flow L AC3/AC4)
+  defects: readonly Defect[];
+  isDebugScanning: boolean;
+  fixingDefectIds: ReadonlySet<string>;
+  onDebugScanNow: () => void;
+  onDebugFix: (defectId: string) => void;
+  lastDebugScannedAt: number | null;
   // Files
   files: readonly IngestedFile[];
   onFilesDropped: (files: readonly IngestedFile[], rawFiles: readonly File[]) => void;
@@ -98,6 +107,10 @@ export function RightRail(props: RightRailProps) {
     // (e.g. recovered or re-created builds) but no session id yet.
     { id: "preview", label: "Preview", visible: true },
     { id: "review", label: "Review", visible: hasStarted && props.reviewMarkdown !== null },
+    // Debug tab is visible once a build has started — defects are
+    // produced by the orchestrator's target-app code, so the tab has
+    // nothing to surface before that.
+    { id: "debug", label: "Debug", visible: hasStarted },
     { id: "files", label: "Files", visible: true },
   ];
 
@@ -155,6 +168,16 @@ export function RightRail(props: RightRailProps) {
             onBuildMissing={props.onBuildMissingPieces}
             echoBackPreview={props.echoBackPreview}
             onSendBuildFeedback={props.onSendBuildFeedback}
+          />
+        )}
+        {tab === "debug" && (
+          <DebugPanel
+            defects={props.defects}
+            isScanning={props.isDebugScanning}
+            fixingDefectIds={props.fixingDefectIds}
+            onScanNow={props.onDebugScanNow}
+            onFix={props.onDebugFix}
+            lastScannedAt={props.lastDebugScannedAt}
           />
         )}
         {tab === "files" && (

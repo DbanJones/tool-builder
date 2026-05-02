@@ -61,6 +61,12 @@ import {
   writeCapToStorage,
   type CostCeilingResult,
 } from "@/lib/cost-ceiling";
+import {
+  applyDebugFix,
+  listDefects,
+  runDebugScan,
+  type Defect,
+} from "@/lib/debug";
 import { deployToVercel, getVercelToken, isVercelInstalled } from "@/lib/deploy";
 import { listOpenDrifts, type DriftEvent } from "@/lib/drift";
 import {
@@ -270,6 +276,72 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   // a maximized rail can't strand the user without their chat. ESC also
   // restores. D-028 follow-up.
   const [previewMaximized, setPreviewMaximized] = useState(false);
+
+  // Debug module (Phase G G6 — Flow L AC2-AC6). On-demand scan only at
+  // v1; no polling loop. The handler runs every Layer 1 detector and
+  // optionally the Layer 2 validator (validate flag is off here for
+  // latency — Debug now should feel responsive; the phase-boundary
+  // scan in Flow L AC1 will set validate=true once that wiring lands).
+  const [defects, setDefects] = useState<readonly Defect[]>([]);
+  const [isDebugScanning, setIsDebugScanning] = useState(false);
+  const [fixingDefectIds, setFixingDefectIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [lastDebugScannedAt, setLastDebugScannedAt] = useState<number | null>(null);
+
+  const runDebugScanNow = useCallback(async () => {
+    if (!project) return;
+    setIsDebugScanning(true);
+    try {
+      const scan = await runDebugScan({ projectId: project.id });
+      if (scan.isErr()) {
+        // Surface via the same console pattern as other transient errors;
+        // future G6 follow-up can route this to a toast.
+        // eslint-disable-next-line no-console
+        console.error("debug.scan failed:", scan.error.message);
+        return;
+      }
+      const list = await listDefects({ projectId: project.id });
+      if (list.isErr()) {
+        // eslint-disable-next-line no-console
+        console.error("debug.list failed:", list.error.message);
+        return;
+      }
+      setDefects(list.value);
+      setLastDebugScannedAt(Date.now());
+    } finally {
+      setIsDebugScanning(false);
+    }
+  }, [project]);
+
+  const runDebugFix = useCallback(
+    async (defectId: string) => {
+      if (!project) return;
+      setFixingDefectIds((prev) => {
+        const next = new Set(prev);
+        next.add(defectId);
+        return next;
+      });
+      try {
+        const result = await applyDebugFix({ defectId });
+        if (result.isErr()) {
+          // eslint-disable-next-line no-console
+          console.error("debug.applyFix failed:", result.error.message);
+          return;
+        }
+        // Refresh the list so status updates land on the card.
+        const list = await listDefects({ projectId: project.id });
+        if (list.isOk()) setDefects(list.value);
+      } finally {
+        setFixingDefectIds((prev) => {
+          const next = new Set(prev);
+          next.delete(defectId);
+          return next;
+        });
+      }
+    },
+    [project],
+  );
 
   // Deploy / GitHub export
   const [deployModalOpen, setDeployModalOpen] = useState(false);
@@ -1983,6 +2055,12 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
           previewRefreshTrigger={previewRefreshTrigger}
           previewMaximized={previewMaximized}
           onTogglePreviewMaximize={() => setPreviewMaximized((v) => !v)}
+          defects={defects}
+          isDebugScanning={isDebugScanning}
+          fixingDefectIds={fixingDefectIds}
+          onDebugScanNow={() => void runDebugScanNow()}
+          onDebugFix={(id) => void runDebugFix(id)}
+          lastDebugScannedAt={lastDebugScannedAt}
           files={files}
           onFilesDropped={handleFilesDropped}
         />
