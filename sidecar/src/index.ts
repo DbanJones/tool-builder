@@ -42,6 +42,13 @@ import {
 } from "./orchestrator-driver.js";
 import { cancelChat, runChat } from "./chat-driver.js";
 import {
+  cancelAllResearch,
+  cancelResearch,
+  runResearch,
+  stubTransport as researchStubTransport,
+  type ResearchTransport,
+} from "./research-driver.js";
+import {
   graph as debugGraph,
   list as listDefects,
   scan as debugScan,
@@ -187,7 +194,34 @@ const handlers: Record<string, Handler> = {
   "orch.stop": orchStop,
   "chat.start": chatStart,
   "chat.stop": chatStop,
+  "research.start": researchStart,
+  "research.stop": researchStop,
 };
+
+// Test injection: BUILDER_RESEARCH_STUB_JSON encodes the stub options
+// (findings, proposal, abort point) so the integration test can run the
+// research driver without a real Claude call. Same pattern as
+// validatorTransportOverride above.
+const researchTransportOverride: ResearchTransport | undefined =
+  parseResearchStub();
+
+function parseResearchStub(): ResearchTransport | undefined {
+  const raw = process.env.BUILDER_RESEARCH_STUB_JSON;
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as Parameters<typeof researchStubTransport>[0];
+    writeLog("info", "research stub transport active for tests");
+    return researchStubTransport(parsed);
+  } catch (e) {
+    writeLog(
+      "warn",
+      `BUILDER_RESEARCH_STUB_JSON failed to parse — falling back to sdkTransport: ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    );
+    return undefined;
+  }
+}
 
 // ADR-0005: streaming orchestrator. The webview-side Tauri command holds
 // the request open while we push notifications keyed by streamId. Returns
@@ -260,6 +294,51 @@ const ChatStopParams = z.object({ streamId: z.string().min(1) });
 function chatStop(rawParams: unknown): { cancelled: boolean } {
   const params = ChatStopParams.parse(rawParams);
   return { cancelled: cancelChat(params.streamId) };
+}
+
+// Deep research path (Flow M). Streams ResearchEvents via notifications
+// keyed by streamId. ADR-0017 §"Why a separate SDK session" — runs in its
+// own inflight slot, never shares state with the build orchestrator.
+const ResearchStartParams = z.object({
+  streamId: z.string().min(1),
+  projectId: z.string().min(1),
+  projectPath: z.string().min(1),
+  specMarkdown: z.string().min(1),
+  answersDigest: z.string(),
+  filesDigest: z.string(),
+  builderRepoPath: z.string().min(1).optional(),
+});
+async function researchStart(rawParams: unknown): Promise<{ ok: true }> {
+  const params = ResearchStartParams.parse(rawParams);
+  await runResearch(
+    params.streamId,
+    {
+      projectId: params.projectId,
+      projectPath: params.projectPath,
+      specMarkdown: params.specMarkdown,
+      answersDigest: params.answersDigest,
+      filesDigest: params.filesDigest,
+      ...(params.builderRepoPath !== undefined
+        ? { builderRepoPath: params.builderRepoPath }
+        : {}),
+    },
+    (event) => writeNotification(params.streamId, event),
+    researchTransportOverride,
+  );
+  return { ok: true };
+}
+
+const ResearchStopParams = z.object({
+  streamId: z.string().min(1).nullable().optional(),
+});
+function researchStop(rawParams: unknown): { cancelled: boolean; count: number } {
+  const params = ResearchStopParams.parse(rawParams);
+  if (params.streamId) {
+    const cancelled = cancelResearch(params.streamId);
+    return { cancelled, count: cancelled ? 1 : 0 };
+  }
+  const count = cancelAllResearch();
+  return { cancelled: count > 0, count };
 }
 
 const handleLine = async (line: string): Promise<void> => {

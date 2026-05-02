@@ -1,0 +1,387 @@
+// Deep-research driver per ADR-0017 / spec.md Flow M.
+//
+// Same shape as chat-driver / orchestrator-driver: opens a Claude Agent SDK
+// session distinct from the build orchestrator (its own stream id in the
+// `inflight` map), feeds it the current spec.md + recorded answers + approved
+// file summaries, and lets it call two MCP tools:
+//   - record_finding({ topic, body })           — streams progress to UI
+//   - propose_spec_revision({ markdown, summaryOfChanges }) — closing action
+//
+// Cap: 5 minutes wall-clock + maxTurns: 8 (rule L19). The transport seam
+// follows the validator/driver.ts pattern so tests run deterministically
+// without a real SDK call (G4 echo-back decision #1, applied here too).
+//
+// The proposed spec is NOT written to disk by this driver. The webview
+// receives it via a `proposal` event and is responsible for backing up the
+// original (Tauri command `backup_target_spec`) before overwriting spec.md.
+// See ADR-0017 §"Why the proposed spec is held in sidecar memory".
+
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+
+import {
+  query,
+  type Options,
+  type SDKMessage,
+  createSdkMcpServer,
+  tool,
+} from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod";
+
+const RESEARCH_PROMPT_RELATIVE_PATH = "lib/llm/prompts/deep-research.v1.md";
+const MAX_WALL_CLOCK_MS = 5 * 60 * 1000;
+const MAX_STEPS = 8;
+
+export interface ResearchOptions {
+  projectId: string;
+  projectPath: string;
+  /** The current spec.md content, fenced into the user prompt. */
+  specMarkdown: string;
+  /** One line per recorded answer: "Q12 (confident): ..." */
+  answersDigest: string;
+  /** One block per approved file: "## file.pdf\n<summary>" */
+  filesDigest: string;
+  /** Path to the repo root (so we can find lib/llm/prompts/...). Falls back to cwd. */
+  builderRepoPath?: string;
+}
+
+export type ResearchEvent =
+  | { kind: "session"; id: string }
+  | { kind: "assistant_delta"; text: string }
+  | { kind: "finding"; topic: string; body: string }
+  | { kind: "proposal"; markdown: string; summaryOfChanges: string }
+  | {
+      kind: "done";
+      cost_usd: number | null;
+      input_tokens: number | null;
+      output_tokens: number | null;
+      cancellation_reason: "none" | "user" | "wall_clock" | "step_cap";
+    }
+  | { kind: "rate_limit"; message: string }
+  | { kind: "error"; message: string };
+
+export interface ResearchSdkRunOptions {
+  prompt: string;
+  systemPrompt: string;
+  cwd: string;
+  abortController: AbortController;
+  onFinding: (topic: string, body: string) => void;
+  onProposal: (markdown: string, summaryOfChanges: string) => void;
+}
+
+/** Transport seam — production calls the real SDK; tests use stubTransport
+ *  to drive the driver deterministically. Same pattern as
+ *  `sidecar/src/debug/validator/driver.ts`. */
+export interface ResearchTransport {
+  run(opts: ResearchSdkRunOptions): AsyncIterable<SDKMessage>;
+}
+
+const inflight = new Map<string, AbortController>();
+
+/** Build the MCP server that exposes record_finding + propose_spec_revision
+ *  as plain Node functions. The handlers just route into the supplied
+ *  callbacks; the driver holds the proposal in a closure variable. */
+function buildResearchMcp(
+  onFinding: (topic: string, body: string) => void,
+  onProposal: (markdown: string, summaryOfChanges: string) => void,
+) {
+  return createSdkMcpServer({
+    name: "research",
+    version: "0.1.0",
+    tools: [
+      tool(
+        "record_finding",
+        "Stream a one-paragraph progress note for the live tail. Use sparingly — substantive observations only.",
+        {
+          topic: z.string().min(1).max(120),
+          body: z.string().min(1).max(2000),
+        },
+        async (args) => {
+          onFinding(args.topic, args.body);
+          return {
+            content: [{ type: "text", text: `Recorded finding on ${args.topic}.` }],
+          };
+        },
+      ),
+      tool(
+        "propose_spec_revision",
+        "Submit the rewritten spec.md. Call this exactly once, at the end of the analysis.",
+        {
+          markdown: z.string().min(50),
+          summaryOfChanges: z.string().min(10).max(4000),
+        },
+        async (args) => {
+          onProposal(args.markdown, args.summaryOfChanges);
+          return {
+            content: [
+              { type: "text", text: `Proposal accepted (${args.markdown.length} chars).` },
+            ],
+          };
+        },
+      ),
+    ],
+  });
+}
+
+/** Production transport: hands the prompt to the real Claude Agent SDK. */
+export const sdkTransport: ResearchTransport = {
+  run(opts) {
+    const mcp = buildResearchMcp(opts.onFinding, opts.onProposal);
+    const sdkOptions: Options = {
+      cwd: opts.cwd,
+      additionalDirectories: [opts.cwd],
+      model: "claude-sonnet-4-5",
+      permissionMode: "default",
+      allowedTools: [
+        "mcp__research__record_finding",
+        "mcp__research__propose_spec_revision",
+      ],
+      mcpServers: { research: mcp },
+      systemPrompt: opts.systemPrompt,
+      maxTurns: MAX_STEPS,
+      abortController: opts.abortController,
+    };
+    return query({ prompt: opts.prompt, options: sdkOptions });
+  },
+};
+
+/** Stub transport for tests. The caller can pre-bake findings, a proposal,
+ *  and any extra SDKMessages (assistant deltas, etc.) — the stub yields a
+ *  session-init, fires the callbacks in order, replays the messages, then
+ *  yields a result/success. */
+export function stubTransport(opts: {
+  findings?: ReadonlyArray<{ topic: string; body: string }>;
+  proposal?: { markdown: string; summaryOfChanges: string };
+  extraMessages?: ReadonlyArray<SDKMessage>;
+  costUsd?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  /** When set, the stub aborts mid-run after firing N findings. The driver
+   *  should still emit a `done` event with cancellation_reason="user". */
+  abortAfterFindings?: number;
+}): ResearchTransport {
+  return {
+    async *run(rOpts) {
+      yield {
+        type: "system",
+        subtype: "init",
+        session_id: "stub-research-session",
+      } as unknown as SDKMessage;
+      const findings = opts.findings ?? [];
+      for (let i = 0; i < findings.length; i++) {
+        if (opts.abortAfterFindings !== undefined && i >= opts.abortAfterFindings) {
+          rOpts.abortController.abort();
+          return;
+        }
+        const f = findings[i]!;
+        rOpts.onFinding(f.topic, f.body);
+      }
+      if (opts.proposal) {
+        rOpts.onProposal(opts.proposal.markdown, opts.proposal.summaryOfChanges);
+      }
+      for (const m of opts.extraMessages ?? []) yield m;
+      yield {
+        type: "result",
+        subtype: "success",
+        total_cost_usd: opts.costUsd ?? 0.0,
+        usage: {
+          input_tokens: opts.inputTokens ?? 0,
+          output_tokens: opts.outputTokens ?? 0,
+        },
+      } as unknown as SDKMessage;
+    },
+  };
+}
+
+/** Build the user-message payload that goes to the deep-research session. */
+export function buildResearchUserPrompt(opts: {
+  specMarkdown: string;
+  answersDigest: string;
+  filesDigest: string;
+}): string {
+  const fileBlock =
+    opts.filesDigest.trim().length === 0
+      ? "(no approved files)"
+      : opts.filesDigest.trim();
+  return [
+    "Here is the current `spec.md` to expand:",
+    "",
+    "```markdown",
+    opts.specMarkdown,
+    "```",
+    "",
+    "Recorded interview answers (Q1-Q35):",
+    "",
+    opts.answersDigest.trim().length === 0 ? "(none)" : opts.answersDigest.trim(),
+    "",
+    "Approved file summaries:",
+    "",
+    fileBlock,
+    "",
+    "Begin.",
+  ].join("\n");
+}
+
+async function loadResearchPrompt(builderRepoPath: string | undefined): Promise<string> {
+  const root = builderRepoPath ?? process.cwd();
+  const path = join(root, RESEARCH_PROMPT_RELATIVE_PATH);
+  return await readFile(path, "utf8");
+}
+
+export async function runResearch(
+  streamId: string,
+  opts: ResearchOptions,
+  onEvent: (event: ResearchEvent) => void,
+  transport: ResearchTransport = sdkTransport,
+): Promise<void> {
+  const ac = new AbortController();
+  inflight.set(streamId, ac);
+
+  // Wall-clock cap. setTimeout aborts the controller; the driver translates
+  // the abort into a "done" event with cancellation_reason="wall_clock".
+  let cancellationReason: "none" | "user" | "wall_clock" | "step_cap" = "none";
+  const wallClockTimer = setTimeout(() => {
+    if (!ac.signal.aborted) {
+      cancellationReason = "wall_clock";
+      ac.abort();
+    }
+  }, MAX_WALL_CLOCK_MS);
+
+  try {
+    const systemPrompt = await loadResearchPrompt(opts.builderRepoPath);
+    const userPrompt = buildResearchUserPrompt({
+      specMarkdown: opts.specMarkdown,
+      answersDigest: opts.answersDigest,
+      filesDigest: opts.filesDigest,
+    });
+    const stream = transport.run({
+      prompt: userPrompt,
+      systemPrompt,
+      cwd: opts.projectPath,
+      abortController: ac,
+      onFinding: (topic, body) => onEvent({ kind: "finding", topic, body }),
+      onProposal: (markdown, summaryOfChanges) =>
+        onEvent({ kind: "proposal", markdown, summaryOfChanges }),
+    });
+
+    let cost: number | null = null;
+    let inputTokens: number | null = null;
+    let outputTokens: number | null = null;
+
+    for await (const msg of stream) {
+      const events = translate(msg);
+      for (const ev of events) {
+        if (ev.kind === "_result") {
+          cost = ev.cost_usd;
+          inputTokens = ev.input_tokens;
+          outputTokens = ev.output_tokens;
+        } else {
+          onEvent(ev);
+        }
+      }
+    }
+
+    // If the SDK reports more steps than allowed (defence in depth — the
+    // SDK enforces maxTurns itself), still surface a step_cap reason.
+    if (cancellationReason === "none" && ac.signal.aborted) {
+      cancellationReason = "user";
+    }
+
+    onEvent({
+      kind: "done",
+      cost_usd: cost,
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
+      cancellation_reason: cancellationReason,
+    });
+  } catch (e) {
+    if (ac.signal.aborted) {
+      onEvent({
+        kind: "done",
+        cost_usd: null,
+        input_tokens: null,
+        output_tokens: null,
+        cancellation_reason:
+          cancellationReason === "none" ? "user" : cancellationReason,
+      });
+      return;
+    }
+    onEvent({ kind: "error", message: e instanceof Error ? e.message : String(e) });
+  } finally {
+    clearTimeout(wallClockTimer);
+    inflight.delete(streamId);
+  }
+}
+
+export function cancelResearch(streamId: string): boolean {
+  const ac = inflight.get(streamId);
+  if (!ac) return false;
+  ac.abort();
+  return true;
+}
+
+export function cancelAllResearch(): number {
+  let count = 0;
+  for (const [, ac] of inflight) {
+    ac.abort();
+    count++;
+  }
+  return count;
+}
+
+// Internal "_result" wrapper so translate() can return result data without
+// emitting it directly — runResearch holds the cost/tokens until it knows
+// the final cancellation_reason.
+type InternalEvent =
+  | Exclude<ResearchEvent, { kind: "done" }>
+  | { kind: "_result"; cost_usd: number | null; input_tokens: number | null; output_tokens: number | null };
+
+function translate(msg: SDKMessage): InternalEvent[] {
+  switch (msg.type) {
+    case "system": {
+      const m = msg as { type: "system"; subtype?: string; session_id?: string };
+      if (m.subtype === "init" && m.session_id) {
+        return [{ kind: "session", id: m.session_id }];
+      }
+      return [];
+    }
+    case "assistant": {
+      const m = msg as unknown as {
+        type: "assistant";
+        message: { content: Array<Record<string, unknown>> };
+      };
+      const content = Array.isArray(m.message?.content) ? m.message.content : [];
+      let text = "";
+      for (const block of content) {
+        if (
+          (block as { type?: string }).type === "text" &&
+          typeof (block as { text?: unknown }).text === "string"
+        ) {
+          text += (block as { text: string }).text;
+        }
+      }
+      return text ? [{ kind: "assistant_delta", text }] : [];
+    }
+    case "result": {
+      const m = msg as {
+        type: "result";
+        subtype?: string;
+        total_cost_usd?: number;
+        usage?: { input_tokens?: number; output_tokens?: number };
+      };
+      if (m.subtype !== "success") return [];
+      return [
+        {
+          kind: "_result",
+          cost_usd: typeof m.total_cost_usd === "number" ? m.total_cost_usd : null,
+          input_tokens:
+            typeof m.usage?.input_tokens === "number" ? m.usage.input_tokens : null,
+          output_tokens:
+            typeof m.usage?.output_tokens === "number" ? m.usage.output_tokens : null,
+        },
+      ];
+    }
+    default:
+      return [];
+  }
+}
