@@ -2,6 +2,26 @@
 
 Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction or accepted drift is logged here with date, AC id or scope item, drift type, resolution, and commit hash. This is the audit trail.
 
+## 2026-05-02
+
+### D-039 — Phase G EXIT recheck: five-correction batch + boundary approval
+- **Drift type**: corrections + drift closures + non-blocker tracking. The Phase G exit `/recheck` ran cleanly (0 blockers, 21 non-blockers carried forward) and recommended five next-actions; this entry records executing all five plus the Phase G boundary approval.
+- **Discovered at**: `/recheck` against the post-G7c codebase (commit `f99eed1`). Report at [docs/spec-trace.md](spec-trace.md).
+- **Resolutions**:
+  - **`82ca9cf`** (#1) — Restored `MAX_TIER2_ATTEMPTS` from 2 to 3 in `sidecar/src/debug/repair/tier2.ts` to match Flow L AC6 verbatim and source spec §E.4. **Closes NB-G-1.**
+  - **(no commit; verified)** (#2) — ADR-0014 already cites Flow K AC4/AC9/AC11 from D-038's housekeeping pass.
+  - **`1b683c4`** (#3) — Stood up Playwright E2E harness: `playwright.config.ts` + `tests/e2e/smoke.spec.ts` (Next 404 smoke + canary stylesheet check) + `tests/e2e/README.md` documenting the webview-only-vs-tauri-driver split. Three `@tauri-context`-tagged `test.skip` placeholders for Flow A / Flow C / Flow L AC2-AC5 await the `tauri-driver` profile. **Partially closes D-004**; full closure requires `tauri-driver` install + a built signed/stub binary.
+  - **`f3a86b9`** (#4) — Added the Flow L AC1 phase-boundary auto-trigger half: a fresh `useEffect` in `app/project/page.tsx` watches `reviewMarkdown !== null` and fires `runDebugScanNow()` exactly once per session. **Closes NB-G-3** (the auto-trigger half). The approval-modal gating half remains under D-015 alongside the `phase_complete` MCP tool.
+  - **`a0cd3cb`** (#5) — Tightened `tests/integration/sidecar-debug.test.ts` duration assertions to the §6 NFRs: Layer 1 ≤ 5s, validate=true ≤ 30s (with stub validator). Renamed the existing test for clarity. **Partially closes NB-G-2**; the third NFR (regression rate ≤ 15%) needs runtime telemetry not synthesisable in CI.
+- **Boundary approval**: Phase G EXIT self-check PASSED at 12:20:00Z. `.builder/state.json` updated to `phase: "G"` with `phase_g_completed_at: "2026-05-02T12:25:00Z"`, `phase_f_completed_at: "2026-04-29T18:00:00Z"` (back-filled), tests bumped to 945 (824 unit + 77 integration + 44 Rust), drift count 20 non-blockers. `next_task: "WAITING_ON_E0_AND_TAURI_DRIVER_AND_TESTERS"`.
+- **Files changed**: `sidecar/src/debug/repair/tier2.ts`, `playwright.config.ts` (new), `tests/e2e/{README.md,smoke.spec.ts}` (new), `app/project/page.tsx`, `tests/integration/sidecar-debug.test.ts`, `.builder/state.json`, `docs/drift-log.md`.
+- **Commits**: `82ca9cf`, `1b683c4`, `f3a86b9`, `a0cd3cb`, plus this state-update commit.
+- **Follow-up** (now the canonical residual list at the Phase G boundary):
+  1. **D-004 full closure** — install `tauri-driver`, add the Tauri-context Playwright profile, lift the `@tauri-context` skips into real specs (Flow A, Flow C, Flow L). Unblocks the spec.md §7 Phase G G7 `pnpm e2e -- --grep debug` AC.
+  2. **D-015 full closure** — define + register the `phase_complete` MCP tool; add the approval-modal UI; gate phase advancement on novice review of debug findings. Closes Flow L AC1's gating half + Flow F AC5's phase-boundary modal.
+  3. **NB-G-2 third bullet** — wire runtime telemetry for the 50-fix-rolling-window regression-rate NFR. Pre-launch this is a no-op; post-launch the Builder needs an opt-in metric pipeline.
+  4. **D-001/D-002/D-016/D-017/D-018/D-019** — long-standing non-blockers carried since Phase D/E. None block any flow today; revisit on next cadence.
+
 ## 2026-05-01
 
 ### D-038 — Phase G entry: Debug module spec amendment + process-artefact reconciliation

@@ -1,27 +1,47 @@
 {
   "schema_version": 1,
   "project_path": ".",
-  "phase": "E",
-  "phase_started_at": "2026-04-26T19:15:00Z",
+  "phase": "G",
+  "phase_started_at": "2026-05-01T18:00:00Z",
   "phase_a_completed_at": "2026-04-26T10:30:00Z",
   "phase_b_completed_at": "2026-04-26T11:45:00Z",
   "phase_c_completed_at": "2026-04-26T17:00:00Z",
   "phase_d_completed_at": "2026-04-26T19:10:00Z",
   "phase_e_completed_at": "2026-04-26T20:05:00Z",
-  "tasks_total_in_phase": 6,
-  "tasks_completed_in_phase": 6,
+  "phase_f_completed_at": "2026-04-29T18:00:00Z",
+  "phase_g_completed_at": "2026-05-02T12:25:00Z",
+  "tasks_total_in_phase": 7,
+  "tasks_completed_in_phase": 7,
   "current_task": null,
-  "next_task": "WAITING_ON_E0_AND_TESTERS",
+  "next_task": "WAITING_ON_E0_AND_TAURI_DRIVER_AND_TESTERS",
   "drift": {
     "blocker_count": 0,
-    "non_blocker_count": 19,
-    "last_check_at": "2026-04-26T19:10:00Z",
-    "notes": "Open drift: D-001, D-002, D-004 to D-020 (19). Closed: D-003. Phase D boundary PASSED at 19:10:00Z. E3/E5 wiring shipped with placeholder/SDK-deferred halves (D-017, D-019); E4 ships optional spend cap (D-018); E6 marketing site shipped with placeholder downloads (D-020). Phase E ready for boundary check."
+    "non_blocker_count": 20,
+    "last_check_at": "2026-05-02T12:20:00Z",
+    "notes": "Open drift: D-001, D-002, D-004 to D-020 (19) plus NB-G-2 (debug NFR harness — partial; perf budgets asserted, regression-rate telemetry deferred). NB-G-1 closed at 82ca9cf (Tier 2 cap restored to 3). NB-G-3 closed at f3a86b9 (phase-boundary auto-trigger half shipped). Phase G EXIT recheck PASSED at 12:20:00Z; ready for human boundary approval. The five recheck-recommended corrections all landed (#1 cap bump, #2 ADR-0014 cite verified, #3 Playwright harness scaffolded with Tauri-driver path tracked under D-004, #4 phase-boundary auto-scan, #5 §6 NFR budgets enforced)."
   },
-  "tests": { "passing": 350, "failing": 0, "skipped": 0, "breakdown": "246 TS unit + 60 TS integration + 44 Rust unit" },
+  "tests": { "passing": 945, "failing": 0, "skipped": 0, "breakdown": "824 TS unit + 77 TS integration + 44 Rust unit" },
   "cost_so_far_usd": 0.0,
   "tokens": { "input": 0, "output": 0 },
   "history": [
+    {
+      "task_id": "G-recheck-fixes",
+      "completed_at": "2026-05-02T12:25:00Z",
+      "commit": "a0cd3cb",
+      "notes": "Phase G EXIT recheck five-correction batch. (1) 82ca9cf — restored Tier 2 cap to 3 attempts to match Flow L AC6 + source spec §E.4 (was 2 in v1; closed NB-G-1). (2) Verified ADR-0014 already cites Flow K AC4/AC9/AC11 from D-038 housekeeping. (3) 1b683c4 — scaffolded Playwright E2E harness (playwright.config.ts + tests/e2e/smoke.spec.ts + README.md); webview-only smoke covers Next 404; Tauri-driver path with @tauri-context tags awaits D-004 install. (4) f3a86b9 — auto-trigger Debug scan on review.md phase boundary (Flow L AC1 half; gating-modal half still D-015). (5) a0cd3cb — tightened §6 NFR budgets in the integration test (≤5s Layer 1, ≤30s validate=true). corepack pnpm verify GREEN: 824 unit + 77 integration. Phase G: 7/7 — boundary self-check PASSED."
+    },
+    {
+      "task_id": "G-summary",
+      "completed_at": "2026-05-02T11:50:00Z",
+      "commit": "f99eed1",
+      "notes": "Phase G complete in 23 commits (38d730f → f99eed1) across G1-G7. G1 spec amendment + ADR-0007 + defects schema. G2a/refactor/G2b-1/G2b-2/G2c — Layer 1: 6 detectors (secret-regex, tsc, hallucinated-import, rls-missing, client-side-auth, env-leak) + scan handler + Lovable RLS E2E fixture. G3a/G3b/G3c — software graph: routes + schema + auth model + buildGraph + debug.graph handler. G4a/G4b/G4c/G4d — Layer 2 LLM validator: subgraph slice + prompt + driver + handler integration + webview wire types + E2E with stub transport. G5a/G5b/G5c/G5d — repair pyramid: branch isolation + Tier 1 codemods (extract-secret, add-rls-migration) + applyFix handler + Tier 2 LLM-with-retry-once. G6a/G6b — UI: right-rail Debug panel + DebugCard + Deploy gate modal hooked into Flow I. G7a/G7b/G7d/G7c — Tier 3 explainer + 7-day rollback + prompt-injection adversarial test suite + slopsquat detector (opt-in). corepack pnpm verify GREEN: 824 unit + 76 integration. Two Tauri-related items remain partial: D-004 (tauri-driver E2E) and D-015 (phase_complete MCP tool + approval modal); both have clear next steps."
+    },
+    {
+      "task_id": "F-summary",
+      "completed_at": "2026-04-29T18:00:00Z",
+      "commit": "b16d508",
+      "notes": "Phase F novice-readiness hardening per build-order. Eight slices F1-F8: SDK-sidecar chat/build, reliable Stop, echo-back gating, Q1-Q35 validation (Q33-Q35 added in D-023), file approval with PII review, approved source-material injection, concrete target-app rules + Corepack scripts, doc/ADR alignment. Plus the post-F slice batches D-023..D-037 (six post-Phase-F slices in ac533fc; D-031..D-037 in 9cdcb94 covering visual feedback + demo build). Closed by D-022."
+    },
     {
       "task_id": "E6",
       "completed_at": "2026-04-26T20:01:00Z",
