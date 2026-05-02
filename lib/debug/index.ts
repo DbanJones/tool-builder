@@ -61,4 +61,5 @@ export {
   type SchemaPolicy,
   type SchemaTable,
   type SoftwareGraph,
+  type ValidatorVerdict,
 } from "./sidecar";

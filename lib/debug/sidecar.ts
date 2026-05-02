@@ -12,7 +12,11 @@ export interface DebugScanResult {
   findingCount: number;
   durationMs: number;
   failures: Array<{ detectorId: string; message: string }>;
+  /** Number of findings the Layer 2 validator marked false_positive. */
+  validatorDismissed: number;
 }
+
+export type ValidatorVerdict = "real" | "false_positive" | "uncertain";
 
 export interface Defect {
   id: string;
@@ -38,6 +42,11 @@ export interface Defect {
   fixTestPath: string | null;
   resolvedAt: number | null;
   resolvedCommit: string | null;
+  /** Layer 2 validator output (Phase G G4); null when validate=false. */
+  validatorVerdict: ValidatorVerdict | null;
+  /** JSON-encoded {exploitPath, fixStrategy}; null when no validator. */
+  validatorNotes: string | null;
+  validatedAt: number | null;
 }
 
 export type DebugError = { kind: "Sidecar"; message: string };
@@ -51,10 +60,16 @@ const fromSidecarError = (e: SidecarError): DebugError => ({
  * `debug.scan` over the sidecar — runs every Layer 1 detector against the
  * project's folder, persists scored findings to the `defects` table, and
  * returns a summary. Audit-logs `debug_scan_started` + `debug_scan_completed`.
+ *
+ * `validate: true` runs the Layer 2 LLM validator against every Layer 1
+ * finding before persisting; updates each row's confidence + priority +
+ * band in place and dismisses false-positive verdicts. Off by default
+ * because it adds an SDK round-trip per finding.
  */
 export function runDebugScan(params: {
   projectId: string;
   userMode?: "founder" | "team";
+  validate?: boolean;
 }): ResultAsync<DebugScanResult, DebugError> {
   return sidecarCall<DebugScanResult>("debug.scan", params).mapErr(fromSidecarError);
 }

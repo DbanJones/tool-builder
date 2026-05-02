@@ -46,6 +46,7 @@ import {
   list as listDefects,
   scan as debugScan,
 } from "./handlers/debug.js";
+import { stubTransport, type ValidatorTransport } from "./debug/validator/index.js";
 import {
   append as appendDrift,
   listOpen as listOpenDrifts,
@@ -120,6 +121,31 @@ try {
   process.exit(1);
 }
 
+// Test injection point: when BUILDER_VALIDATOR_STUB_JSON is set, parse
+// it as a `Record<ruleId, jsonResponseString>` and use stubTransport.
+// Used only by the integration test harness; production startup leaves
+// this undefined and the scan handler defaults to sdkTransport.
+const validatorTransportOverride: ValidatorTransport | undefined =
+  parseValidatorStub();
+
+function parseValidatorStub(): ValidatorTransport | undefined {
+  const raw = process.env.BUILDER_VALIDATOR_STUB_JSON;
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, string>;
+    writeLog("info", "validator stub transport active for tests");
+    return stubTransport(parsed);
+  } catch (e) {
+    writeLog(
+      "warn",
+      `BUILDER_VALIDATOR_STUB_JSON failed to parse — falling back to sdkTransport: ${
+        e instanceof Error ? e.message : String(e)
+      }`
+    );
+    return undefined;
+  }
+}
+
 const handlers: Record<string, Handler> = {
   ping: () => ({ pong: true, version: "0.1.0", at: new Date().toISOString() }),
   "audit.logEvent": logEvent,
@@ -144,7 +170,7 @@ const handlers: Record<string, Handler> = {
   "drift.append": appendDrift,
   "drift.resolve": resolveDrift,
   "drift.listOpen": listOpenDrifts,
-  "debug.scan": debugScan,
+  "debug.scan": (params) => debugScan(params, undefined, validatorTransportOverride),
   "debug.list": listDefects,
   "debug.graph": debugGraph,
   "chatMessages.append": appendChatMessage,

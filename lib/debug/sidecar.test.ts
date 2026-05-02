@@ -44,6 +44,9 @@ const sampleDefect = (overrides: Partial<Defect> = {}): Defect => ({
   fixTestPath: null,
   resolvedAt: null,
   resolvedCommit: null,
+  validatorVerdict: null,
+  validatorNotes: null,
+  validatedAt: null,
   ...overrides,
 });
 
@@ -54,6 +57,7 @@ describe("runDebugScan", () => {
       findingCount: 1,
       durationMs: 42,
       failures: [],
+      validatorDismissed: 0,
     };
     mockSidecar.mockReturnValueOnce(okAsync(expected));
 
@@ -65,6 +69,23 @@ describe("runDebugScan", () => {
     });
     expect(result.isOk()).toBe(true);
     expect(result._unsafeUnwrap()).toEqual(expected);
+  });
+
+  it("forwards the validate flag when set", async () => {
+    mockSidecar.mockReturnValueOnce(
+      okAsync({
+        scanId: "01SCAN",
+        findingCount: 0,
+        durationMs: 1,
+        failures: [],
+        validatorDismissed: 0,
+      })
+    );
+    await runDebugScan({ projectId: "01PROJ", validate: true });
+    expect(mockSidecar).toHaveBeenCalledWith("debug.scan", {
+      projectId: "01PROJ",
+      validate: true,
+    });
   });
 
   it("translates a Sidecar error into a DebugError", async () => {
