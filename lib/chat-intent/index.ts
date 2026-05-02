@@ -16,6 +16,7 @@
 export type ChatIntent =
   | "stop"
   | "build"
+  | "research"
   | "launch"
   | "deploy"
   | "push"
@@ -115,6 +116,22 @@ const ANNOTATE_PHRASES = new Set([
   "markup",
 ]);
 
+// Flow M (deep research). Offered in the chat the moment the interview
+// hits readiness; the novice can also type these phrases on their own.
+// Only valid before the build has started — running research mid-build
+// would race against the orchestrator's use of spec.md.
+const RESEARCH_PHRASES = new Set([
+  "research",
+  "research it",
+  "research first",
+  "deep research",
+  "do research",
+  "do deep research",
+  "yes research",
+  "research approach",
+  "research the approach",
+]);
+
 function normalise(message: string): string {
   return message
     .trim()
@@ -137,6 +154,18 @@ export function detectIntent(message: string, ctx: IntentContext): ChatIntent {
   if (!ctx.isRunning && (BUILD_PHRASES.has(m) || RESUME_PHRASES.has(m))) {
     if (!ctx.hasStarted && !ctx.isReadyToBuild) return "none";
     return "build";
+  }
+
+  // Deep research — only when the interview has reached readiness AND the
+  // build hasn't started yet. After the build kicks off, spec.md is the
+  // orchestrator's input and a research overwrite would race.
+  if (
+    !ctx.isRunning &&
+    !ctx.hasStarted &&
+    ctx.isReadyToBuild &&
+    RESEARCH_PHRASES.has(m)
+  ) {
+    return "research";
   }
 
   // Annotate works any time the build has started (button is gated the
@@ -170,6 +199,8 @@ export function ackForIntent(intent: ChatIntent, ctx?: IntentContext): string {
       return ctx?.hasStarted
         ? "Resuming the build."
         : "Kicking off the build. The dashboard will show progress.";
+    case "research":
+      return "Starting deep research. This usually takes 2-5 minutes — you'll see findings stream in the live tail and a side-by-side diff at the end.";
     case "launch":
       return "Launching the app. Your default browser will open.";
     case "deploy":

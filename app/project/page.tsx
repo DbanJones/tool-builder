@@ -698,7 +698,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     if (readiness.fastPathAnswered < readiness.fastPathTotal) return;
     announcedReadyRef.current = true;
     appendAssistantMessage(
-      `${STAGE_SENTINELS.ready} Review the final check above the chat, then confirm it when it looks right. After that, say "build it" and I'll start.`,
+      `${STAGE_SENTINELS.ready} Review the final check above the chat, then confirm it when it looks right. After that, say **"build it"** and I'll start.\n\nOptional: say **"deep research"** first and I'll spend 2-5 minutes (roughly $1-3) thinking through competitors, edge cases, and data-model gaps, then propose an expanded spec for you to review side-by-side. Your original spec is preserved either way.`,
     );
   }, [
     readiness.fastPathAnswered,
@@ -1739,6 +1739,9 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
           return;
         case "build":
           void startBuild();
+          return;
+        case "research":
+          void runDeepResearch();
           return;
         case "launch":
           void launchApp();

@@ -124,6 +124,32 @@ describe("detectIntent", () => {
     });
   });
 
+  describe("research (only between readiness and first build)", () => {
+    it.each([
+      "research",
+      "research it",
+      "deep research",
+      "do research",
+      "yes research",
+      "research approach",
+    ])("matches %j when ready and not started", (msg) => {
+      expect(detectIntent(msg, readyToBuild)).toBe("research");
+    });
+
+    it("does not match before readiness", () => {
+      expect(detectIntent("research", preBuild)).toBe("none");
+    });
+
+    it("does not match once the build has started", () => {
+      expect(detectIntent("research", pausedAfterStart)).toBe("none");
+      expect(detectIntent("deep research", builtIdle)).toBe("none");
+    });
+
+    it("does not match while a turn is streaming", () => {
+      expect(detectIntent("research", running)).toBe("none");
+    });
+  });
+
   describe("plan (tab switch, always allowed)", () => {
     it.each(["plan", "show plan", "what's the plan"])("matches %j in any state", (msg) => {
       expect(detectIntent(msg, preBuild)).toBe("plan");
@@ -153,7 +179,7 @@ describe("detectIntent", () => {
 
 describe("ackForIntent", () => {
   it("returns a non-empty acknowledgement for every active intent", () => {
-    const intents = ["stop", "build", "launch", "deploy", "push", "plan", "annotate"] as const;
+    const intents = ["stop", "build", "research", "launch", "deploy", "push", "plan", "annotate"] as const;
     for (const i of intents) {
       expect(ackForIntent(i, readyToBuild).length).toBeGreaterThan(0);
     }
