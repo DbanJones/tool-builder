@@ -160,3 +160,34 @@ export function runDebugGraph(params: {
 }): ResultAsync<SoftwareGraph, DebugError> {
   return sidecarCall<SoftwareGraph>("debug.graph", params).mapErr(fromSidecarError);
 }
+
+export type FixOutcome =
+  | "applied"
+  | "skipped_no_codemod"
+  | "skipped_codemod_noop"
+  | "syntax_check_failed"
+  | "branch_failed"
+  | "codemod_error";
+
+export interface ApplyFixResult {
+  defectId: string;
+  outcome: FixOutcome;
+  message: string;
+  files: string[];
+  branch: string | null;
+}
+
+/**
+ * Apply the matching Tier 1 codemod to a defect. The sidecar opens a
+ * fresh `ai-fix-<defectId>` branch in the target-app repo, runs the
+ * codemod, syntax-checks the modified files, and squashes onto the
+ * user's working branch on success — or aborts and leaves the user on
+ * their working branch on failure. On `applied` the defects row is
+ * updated to status='fixed' with the fixTier + branch name. On any
+ * other outcome the row stays open.
+ */
+export function applyDebugFix(params: {
+  defectId: string;
+}): ResultAsync<ApplyFixResult, DebugError> {
+  return sidecarCall<ApplyFixResult>("debug.applyFix", params).mapErr(fromSidecarError);
+}

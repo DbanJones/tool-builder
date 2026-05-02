@@ -46,6 +46,7 @@ import {
   list as listDefects,
   scan as debugScan,
 } from "./handlers/debug.js";
+import { applyFix as debugApplyFix } from "./handlers/repair.js";
 import { stubTransport, type ValidatorTransport } from "./debug/validator/index.js";
 import {
   append as appendDrift,
@@ -173,6 +174,7 @@ const handlers: Record<string, Handler> = {
   "debug.scan": (params) => debugScan(params, undefined, validatorTransportOverride),
   "debug.list": listDefects,
   "debug.graph": debugGraph,
+  "debug.applyFix": debugApplyFix,
   "chatMessages.append": appendChatMessage,
   "chatMessages.list": listChatMessages,
   "permissionRequests.listOpen": listOpenPermissionRequests,

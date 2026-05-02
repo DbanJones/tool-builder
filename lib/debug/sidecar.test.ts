@@ -4,9 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sidecarCall } from "@/lib/sidecar/client";
 
 import {
+  applyDebugFix,
   listDefects,
   runDebugGraph,
   runDebugScan,
+  type ApplyFixResult,
   type Defect,
   type DebugScanResult,
   type SoftwareGraph,
@@ -143,6 +145,31 @@ describe("runDebugGraph", () => {
       errAsync({ kind: "Sidecar", code: "HANDLER_ERROR", message: "boom" })
     );
     const result = await runDebugGraph({ projectId: "01PROJ" });
+    expect(result.isErr()).toBe(true);
+    expect(result._unsafeUnwrapErr().message).toContain("HANDLER_ERROR");
+  });
+});
+
+describe("applyDebugFix", () => {
+  it("forwards { defectId } to debug.applyFix and returns the result", async () => {
+    const expected: ApplyFixResult = {
+      defectId: "01DEF",
+      outcome: "applied",
+      message: "fixed it",
+      files: ["lib/aws.ts", ".env.example"],
+      branch: "ai-fix-01DEF",
+    };
+    mockSidecar.mockReturnValueOnce(okAsync(expected));
+    const result = await applyDebugFix({ defectId: "01DEF" });
+    expect(mockSidecar).toHaveBeenCalledWith("debug.applyFix", { defectId: "01DEF" });
+    expect(result._unsafeUnwrap()).toEqual(expected);
+  });
+
+  it("translates a Sidecar error", async () => {
+    mockSidecar.mockReturnValueOnce(
+      errAsync({ kind: "Sidecar", code: "HANDLER_ERROR", message: "no defect" })
+    );
+    const result = await applyDebugFix({ defectId: "01DEF" });
     expect(result.isErr()).toBe(true);
     expect(result._unsafeUnwrapErr().message).toContain("HANDLER_ERROR");
   });
