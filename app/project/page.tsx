@@ -26,6 +26,7 @@ import {
   type DisplayMessage,
 } from "@/components/features/project-workspace/chat-panel";
 import { AnnotationModal } from "@/components/features/annotation/annotation-modal";
+import { DeployGateModal, selectUnresolvedCritical } from "@/components/features/project-workspace/deploy-gate-modal";
 import { DeployModal } from "@/components/features/project-workspace/deploy-modal";
 import { PlanAckModal } from "@/components/features/project-workspace/plan-ack-modal";
 import { DriftBanner } from "@/components/features/project-workspace/drift-banner";
@@ -342,6 +343,14 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     },
     [project],
   );
+
+  // Deploy gate (Flow L AC8): when the user clicks Deploy and there
+  // are unresolved critical-band defects, intercept with a typed-
+  // confirmation modal. Once the user types the phrase + confirms, we
+  // mark the gate bypassed and proceed; the bypass is per-deploy-attempt
+  // (clears on completion / cancel / page navigation).
+  const [deployGateOpen, setDeployGateOpen] = useState(false);
+  const [deployGateBypassed, setDeployGateBypassed] = useState(false);
 
   // Deploy / GitHub export
   const [deployModalOpen, setDeployModalOpen] = useState(false);
@@ -1534,6 +1543,19 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
 
   const deployPreview = useCallback(async (): Promise<void> => {
     if (!project) return;
+
+    // Gate first (Flow L AC8). If there are unresolved critical-band
+    // defects and the user hasn't typed the bypass phrase this attempt,
+    // open the gate modal and stop — it'll re-call deployPreview when
+    // the user confirms.
+    if (!deployGateBypassed) {
+      const blocking = selectUnresolvedCritical(defects);
+      if (blocking.length > 0) {
+        setDeployGateOpen(true);
+        return;
+      }
+    }
+
     const installed = await isVercelInstalled();
     if (installed.isErr() || !installed.value) {
       setDeployStatus({
@@ -1548,8 +1570,12 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
       setDeployModalOpen(true);
       return;
     }
+    // Bypass is per-deploy-attempt: clear it the moment the deploy
+    // kicks off so a follow-up attempt re-checks the gate against the
+    // current defect state.
+    setDeployGateBypassed(false);
     void runDeploy();
-  }, [project, runDeploy]);
+  }, [project, runDeploy, deployGateBypassed, defects]);
 
   // ---- Launch target app (CLAUDE.md O33) -------------------------------
   const launchApp = useCallback(async (): Promise<void> => {
@@ -2083,6 +2109,18 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         open={deployModalOpen}
         onOpenChange={setDeployModalOpen}
         onTokenSaved={() => void runDeploy()}
+      />
+
+      <DeployGateModal
+        open={deployGateOpen}
+        criticalDefects={selectUnresolvedCritical(defects)}
+        onCancel={() => setDeployGateOpen(false)}
+        onConfirm={() => {
+          setDeployGateOpen(false);
+          setDeployGateBypassed(true);
+          // Re-trigger the deploy now that the gate is bypassed.
+          void deployPreview();
+        }}
       />
 
       {concurrentBuildPrompt ? (
