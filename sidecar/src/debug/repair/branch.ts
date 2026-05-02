@@ -197,3 +197,49 @@ async function currentBranch(run: RunGit, cwd: string): Promise<string> {
   }
   return name;
 }
+
+/**
+ * Read the current HEAD commit. Used by the repair handler to capture
+ * the post-squash commit hash for the 7-day rollback feature (G7b).
+ */
+export async function headCommit(
+  projectPath: string,
+  runGit?: RunGit
+): Promise<string> {
+  const run = runGit ?? defaultRunGit;
+  const r = await run(["rev-parse", "HEAD"], projectPath);
+  if (r.exitCode !== 0) {
+    throw new Error(`git rev-parse HEAD failed: ${r.stderr.trim()}`);
+  }
+  const hash = r.stdout.trim();
+  if (!/^[0-9a-f]{40}$/i.test(hash)) {
+    throw new Error(`git rev-parse HEAD returned unexpected output: "${hash}"`);
+  }
+  return hash;
+}
+
+/**
+ * Revert a previously-squashed fix commit. Creates a new commit on
+ * the current branch that undoes the named commit's changes. Throws
+ * with a clear message if there's a conflict (typically caused by the
+ * user editing the same files since the fix landed).
+ */
+export async function revertCommit(
+  projectPath: string,
+  commit: string,
+  runGit?: RunGit
+): Promise<void> {
+  const run = runGit ?? defaultRunGit;
+  const r = await run(
+    ["revert", "--no-edit", commit],
+    projectPath
+  );
+  if (r.exitCode !== 0) {
+    // Best-effort: try to abort any in-progress revert so the user
+    // doesn't end up in a half-resolved state.
+    await run(["revert", "--abort"], projectPath);
+    throw new Error(
+      `git revert ${commit} failed (the user may have edited the same files): ${r.stderr.trim() || r.stdout.trim()}`
+    );
+  }
+}

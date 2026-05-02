@@ -49,6 +49,7 @@ export const BAND_TREATMENT: Readonly<Record<Band, BandTreatment>> = {
 export {
   applyDebugFix,
   listDefects,
+  rollbackDebugFix,
   runDebugGraph,
   runDebugScan,
   type ApplyFixResult,
@@ -58,6 +59,8 @@ export {
   type DebugScanResult,
   type FixOutcome,
   type HttpMethod,
+  type RollbackOutcome,
+  type RollbackResult,
   type RouteAuthInfo,
   type RouteInfo,
   type SchemaColumn,

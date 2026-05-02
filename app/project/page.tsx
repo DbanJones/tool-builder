@@ -65,6 +65,7 @@ import {
 import {
   applyDebugFix,
   listDefects,
+  rollbackDebugFix,
   runDebugScan,
   type Defect,
 } from "@/lib/debug";
@@ -288,6 +289,9 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   const [fixingDefectIds, setFixingDefectIds] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
+  const [rollingBackDefectIds, setRollingBackDefectIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const [lastDebugScannedAt, setLastDebugScannedAt] = useState<number | null>(null);
 
   const runDebugScanNow = useCallback(async () => {
@@ -335,6 +339,34 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         if (list.isOk()) setDefects(list.value);
       } finally {
         setFixingDefectIds((prev) => {
+          const next = new Set(prev);
+          next.delete(defectId);
+          return next;
+        });
+      }
+    },
+    [project],
+  );
+
+  const runDebugRollback = useCallback(
+    async (defectId: string) => {
+      if (!project) return;
+      setRollingBackDefectIds((prev) => {
+        const next = new Set(prev);
+        next.add(defectId);
+        return next;
+      });
+      try {
+        const result = await rollbackDebugFix({ defectId });
+        if (result.isErr()) {
+          // eslint-disable-next-line no-console
+          console.error("debug.rollbackFix failed:", result.error.message);
+          return;
+        }
+        const list = await listDefects({ projectId: project.id });
+        if (list.isOk()) setDefects(list.value);
+      } finally {
+        setRollingBackDefectIds((prev) => {
           const next = new Set(prev);
           next.delete(defectId);
           return next;
@@ -2084,8 +2116,10 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
           defects={defects}
           isDebugScanning={isDebugScanning}
           fixingDefectIds={fixingDefectIds}
+          rollingBackDefectIds={rollingBackDefectIds}
           onDebugScanNow={() => void runDebugScanNow()}
           onDebugFix={(id) => void runDebugFix(id)}
+          onDebugRollback={(id) => void runDebugRollback(id)}
           lastDebugScannedAt={lastDebugScannedAt}
           files={files}
           onFilesDropped={handleFilesDropped}

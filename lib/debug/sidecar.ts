@@ -198,3 +198,30 @@ export function applyDebugFix(params: {
 }): ResultAsync<ApplyFixResult, DebugError> {
   return sidecarCall<ApplyFixResult>("debug.applyFix", params).mapErr(fromSidecarError);
 }
+
+export type RollbackOutcome =
+  | "rolled_back"
+  | "expired"
+  | "not_fixed"
+  | "no_commit_recorded"
+  | "revert_failed";
+
+export interface RollbackResult {
+  defectId: string;
+  outcome: RollbackOutcome;
+  message: string;
+}
+
+/**
+ * Roll back a previously-applied Tier 1 or Tier 2 fix. Runs `git revert`
+ * against the recorded post-squash commit; on success flips the row
+ * back to status='open' and clears the fix metadata. Capped at 7 days
+ * from the original resolvedAt — past that, the user reverts manually.
+ */
+export function rollbackDebugFix(params: {
+  defectId: string;
+}): ResultAsync<RollbackResult, DebugError> {
+  return sidecarCall<RollbackResult>("debug.rollbackFix", params).mapErr(
+    fromSidecarError
+  );
+}

@@ -4,7 +4,9 @@
 export {
   abortBranch,
   commitAll,
+  headCommit,
   openBranch,
+  revertCommit,
   squashOntoBase,
   type BranchSession,
   type RunGit,

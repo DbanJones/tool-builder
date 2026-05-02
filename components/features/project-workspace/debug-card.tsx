@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ChevronRight,
   Loader2,
+  RotateCcw,
   Wrench,
   XCircle,
 } from "lucide-react";
@@ -13,6 +14,15 @@ import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { BAND_TREATMENT, type Defect } from "@/lib/debug";
+
+const ROLLBACK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+function isRollbackAvailable(defect: Defect): boolean {
+  if (defect.status !== "fixed") return false;
+  if (defect.resolvedCommit === null) return false;
+  if (defect.resolvedAt === null) return false;
+  return Date.now() - defect.resolvedAt < ROLLBACK_WINDOW_MS;
+}
 
 // One finding card. Founder mode UX per debug_repair_engine_spec.md §F.2:
 // plain-English impact first, code evidence second (one tap), no CWE
@@ -26,14 +36,25 @@ export interface DebugCardProps {
   hasCodemod: boolean;
   /** Set while applyDebugFix is in flight for this defect. */
   isFixing: boolean;
+  /** Set while rollbackDebugFix is in flight for this defect. */
+  isRollingBack: boolean;
   onFix: (defectId: string) => void;
+  onRollback: (defectId: string) => void;
 }
 
-export function DebugCard({ defect, hasCodemod, isFixing, onFix }: DebugCardProps) {
+export function DebugCard({
+  defect,
+  hasCodemod,
+  isFixing,
+  isRollingBack,
+  onFix,
+  onRollback,
+}: DebugCardProps) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const treatment = BAND_TREATMENT[defect.band];
   const isFixed = defect.status === "fixed";
   const isDismissed = defect.status === "dismissed";
+  const canRollback = isRollbackAvailable(defect);
 
   return (
     <article
@@ -61,9 +82,28 @@ export function DebugCard({ defect, hasCodemod, isFixing, onFix }: DebugCardProp
 
       <div className="mt-2 flex items-center gap-2">
         {isFixed ? (
-          <span className="inline-flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-300">
-            <CheckCircle2 className="h-3 w-3" aria-hidden="true" /> Fixed
-          </span>
+          <>
+            <span className="inline-flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-300">
+              <CheckCircle2 className="h-3 w-3" aria-hidden="true" /> Fixed
+            </span>
+            {canRollback && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={isRollingBack}
+                onClick={() => onRollback(defect.id)}
+                data-testid={`debug-card-rollback-${defect.id}`}
+              >
+                {isRollingBack ? (
+                  <Loader2 className="mr-1 h-3 w-3 animate-spin" aria-hidden="true" />
+                ) : (
+                  <RotateCcw className="mr-1 h-3 w-3" aria-hidden="true" />
+                )}
+                Roll back
+              </Button>
+            )}
+          </>
         ) : isDismissed ? (
           <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
             <XCircle className="h-3 w-3" aria-hidden="true" /> Dismissed by validator

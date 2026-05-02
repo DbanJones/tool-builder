@@ -83,12 +83,14 @@ interface RightRailProps {
   onBuildMissingPieces: () => void;
   echoBackPreview: EchoBackPreview;
   onSendBuildFeedback: (feedback: string) => void;
-  // Debug (Phase G G6 — Flow L AC3/AC4)
+  // Debug (Phase G G6 — Flow L AC3/AC4; G7b adds rollback)
   defects: readonly Defect[];
   isDebugScanning: boolean;
   fixingDefectIds: ReadonlySet<string>;
+  rollingBackDefectIds: ReadonlySet<string>;
   onDebugScanNow: () => void;
   onDebugFix: (defectId: string) => void;
+  onDebugRollback: (defectId: string) => void;
   lastDebugScannedAt: number | null;
   // Files
   files: readonly IngestedFile[];
@@ -175,8 +177,10 @@ export function RightRail(props: RightRailProps) {
             defects={props.defects}
             isScanning={props.isDebugScanning}
             fixingDefectIds={props.fixingDefectIds}
+            rollingBackDefectIds={props.rollingBackDefectIds}
             onScanNow={props.onDebugScanNow}
             onFix={props.onDebugFix}
+            onRollback={props.onDebugRollback}
             lastScannedAt={props.lastDebugScannedAt}
           />
         )}

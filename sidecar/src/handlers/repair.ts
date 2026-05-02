@@ -26,7 +26,9 @@ import {
   abortBranch,
   commitAll,
   dispatchTier1,
+  headCommit,
   openBranch,
+  revertCommit,
   runTier2,
   sdkPatchTransport,
   squashOntoBase,
@@ -165,6 +167,14 @@ export async function applyFix(
     `fix: ${codemod.message} (defect ${defect.id})`,
     runGit
   );
+  // G7b: capture the post-squash HEAD so the 7-day rollback can find
+  // exactly which commit to revert.
+  let resolvedCommit: string | null = null;
+  try {
+    resolvedCommit = await headCommit(project.path, runGit);
+  } catch {
+    resolvedCommit = null;
+  }
 
   const resolvedAt = Date.now();
   db.update(defects)
@@ -173,7 +183,7 @@ export async function applyFix(
       fixTier: codemod.fixTier,
       fixBranch: session.branch,
       resolvedAt,
-      resolvedCommit: null, // future: capture HEAD post-squash if needed.
+      resolvedCommit,
     })
     .where(eq(defects.id, defect.id))
     .run();
@@ -288,6 +298,13 @@ async function runTier2OnBranch(args: Tier2RunArgs): Promise<ApplyFixResult> {
     `fix: ${tier2.explanation} (defect ${defect.id})`,
     runGit
   );
+  // G7b: capture the post-squash HEAD for the 7-day rollback.
+  let tier2ResolvedCommit: string | null = null;
+  try {
+    tier2ResolvedCommit = await headCommit(project.path, runGit);
+  } catch {
+    tier2ResolvedCommit = null;
+  }
 
   const resolvedAt = Date.now();
   db.update(defects)
@@ -296,7 +313,7 @@ async function runTier2OnBranch(args: Tier2RunArgs): Promise<ApplyFixResult> {
       fixTier: 2,
       fixBranch: session.branch,
       resolvedAt,
-      resolvedCommit: null,
+      resolvedCommit: tier2ResolvedCommit,
     })
     .where(eq(defects.id, defect.id))
     .run();
@@ -402,4 +419,131 @@ function scriptKindFor(ext: string): ts.ScriptKind {
     default:
       return ts.ScriptKind.TS;
   }
+}
+
+// ----- G7b: 7-day rollback handler -----------------------------------
+
+const ROLLBACK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+const RollbackParamsSchema = z.object({
+  defectId: z.string().min(1),
+});
+
+export type RollbackOutcome =
+  | "rolled_back"
+  | "expired"
+  | "not_fixed"
+  | "no_commit_recorded"
+  | "revert_failed";
+
+export interface RollbackResult {
+  defectId: string;
+  outcome: RollbackOutcome;
+  message: string;
+}
+
+/**
+ * `debug.rollbackFix({ defectId })` — undo a previously-applied fix
+ * within the 7-day rollback window. Runs `git revert <resolvedCommit>`
+ * on the user's working branch; on success flips the defect back to
+ * status='open' and clears the fix metadata. On conflict (the user has
+ * edited the same files since the fix landed), aborts the revert and
+ * reports revert_failed.
+ */
+export async function rollbackFix(
+  rawParams: unknown,
+  runGit?: RunGit
+): Promise<RollbackResult> {
+  const params = RollbackParamsSchema.parse(rawParams);
+  const db = getDb();
+
+  const [defect] = db
+    .select()
+    .from(defects)
+    .where(eq(defects.id, params.defectId))
+    .all();
+  if (!defect) {
+    throw new Error(`debug.rollbackFix: defect not found '${params.defectId}'`);
+  }
+
+  if (defect.status !== "fixed" || defect.resolvedAt === null) {
+    return {
+      defectId: defect.id,
+      outcome: "not_fixed",
+      message: "this defect has no applied fix to roll back",
+    };
+  }
+  if (defect.resolvedCommit === null) {
+    return {
+      defectId: defect.id,
+      outcome: "no_commit_recorded",
+      message:
+        "the fix did not record a commit hash (older fix predating G7b); cannot auto-roll-back",
+    };
+  }
+  if (Date.now() - defect.resolvedAt > ROLLBACK_WINDOW_MS) {
+    return {
+      defectId: defect.id,
+      outcome: "expired",
+      message: "rollback window of 7 days has elapsed; revert manually with git",
+    };
+  }
+
+  const [project] = db
+    .select()
+    .from(projects)
+    .where(eq(projects.id, defect.projectId))
+    .all();
+  if (!project) {
+    throw new Error(
+      `debug.rollbackFix: project not found for defect '${params.defectId}'`
+    );
+  }
+
+  try {
+    await revertCommit(project.path, defect.resolvedCommit, runGit);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    db.insert(auditLog)
+      .values({
+        id: ulid(),
+        action: "debug_fix_rollback_failed",
+        targetId: defect.id,
+        payload: JSON.stringify({ message, resolvedCommit: defect.resolvedCommit }),
+        createdAt: Date.now(),
+      })
+      .run();
+    return {
+      defectId: defect.id,
+      outcome: "revert_failed",
+      message,
+    };
+  }
+
+  db.update(defects)
+    .set({
+      status: "open",
+      fixTier: null,
+      fixBranch: null,
+      resolvedAt: null,
+      resolvedCommit: null,
+    })
+    .where(eq(defects.id, defect.id))
+    .run();
+
+  db.insert(auditLog)
+    .values({
+      id: ulid(),
+      action: "debug_fix_rolled_back",
+      targetId: defect.id,
+      payload: JSON.stringify({ revertedCommit: defect.resolvedCommit }),
+      createdAt: Date.now(),
+    })
+    .run();
+
+  return {
+    defectId: defect.id,
+    outcome: "rolled_back",
+    message: `Reverted commit ${defect.resolvedCommit.slice(0, 7)} on the user's working branch`,
+  };
 }

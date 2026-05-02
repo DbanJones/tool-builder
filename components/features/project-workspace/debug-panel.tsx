@@ -37,8 +37,11 @@ export interface DebugPanelProps {
   isScanning: boolean;
   /** Set of defect ids whose applyDebugFix is in flight. */
   fixingDefectIds: ReadonlySet<string>;
+  /** Set of defect ids whose rollbackDebugFix is in flight. */
+  rollingBackDefectIds: ReadonlySet<string>;
   onScanNow: () => void;
   onFix: (defectId: string) => void;
+  onRollback: (defectId: string) => void;
   /** Last completed scan timestamp; null before the first scan. */
   lastScannedAt: number | null;
 }
@@ -47,8 +50,10 @@ export function DebugPanel({
   defects,
   isScanning,
   fixingDefectIds,
+  rollingBackDefectIds,
   onScanNow,
   onFix,
+  onRollback,
   lastScannedAt,
 }: DebugPanelProps) {
   const [showDismissed, setShowDismissed] = useState(false);
@@ -126,7 +131,9 @@ export function DebugPanel({
                     defect={d}
                     hasCodemod={RULE_IDS_WITH_CODEMOD.has(d.ruleId)}
                     isFixing={fixingDefectIds.has(d.id)}
+                    isRollingBack={rollingBackDefectIds.has(d.id)}
                     onFix={onFix}
+                    onRollback={onRollback}
                   />
                 ))}
               </BandSection>

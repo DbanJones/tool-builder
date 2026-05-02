@@ -13,7 +13,8 @@ import {
   type RunGit,
   type RunResult,
 } from "../debug/repair/index.js";
-import { applyFix } from "./repair.js";
+import { applyFix, rollbackFix } from "./repair.js";
+import { eq } from "drizzle-orm";
 
 // Default Tier 2 transport for tests that exercise a Tier 1 path —
 // the dispatcher falls through to Tier 2 when Tier 1 doesn't match,
@@ -328,5 +329,131 @@ describe("debug.applyFix handler", () => {
     const result = await applyFix({ defectId }, git.asRunGit(), NO_PATCH_TRANSPORT);
     expect(result.outcome).toBe("syntax_check_failed");
     expect(result.message).toContain("lib/aws.ts");
+  });
+});
+
+// ----- G7b: rollback handler -----------------------------------------
+
+describe("debug.rollbackFix handler", () => {
+  function seedFixedDefect(
+    projectId: string,
+    overrides: Record<string, unknown> = {}
+  ): string {
+    const id = `defect-${Math.random().toString(36).slice(2, 10)}`;
+    getDb()
+      .insert(defects)
+      .values({
+        id,
+        projectId,
+        scanId: "test-scan",
+        detectedAt: Date.now(),
+        class: "security",
+        severity: 9,
+        blastRadius: 2.5,
+        confidence: 0.9,
+        difficulty: 1,
+        priority: 40.5,
+        band: "critical",
+        file: "lib/aws.ts",
+        lineStart: 1,
+        lineEnd: 1,
+        ruleId: "secret-regex/aws-access-key",
+        humanExplanation: "...",
+        codeEvidence: "...",
+        status: "fixed",
+        fixTier: 1,
+        fixBranch: `ai-fix-${id}`,
+        resolvedAt: Date.now(),
+        resolvedCommit: "abc1234567890abc1234567890abc1234567890a",
+        ...overrides,
+      })
+      .run();
+    return id;
+  }
+
+  it("rolls back a fixed defect: runs git revert + flips status back to open", async () => {
+    const projectId = await newProjectAt(projectPath);
+    const defectId = seedFixedDefect(projectId);
+    const git = new GitStub().enqueue(ok("")); // git revert --no-edit <commit>
+
+    const result = await rollbackFix({ defectId }, git.asRunGit());
+
+    expect(result.outcome).toBe("rolled_back");
+    expect(git.calls[0]!.slice(0, 3)).toEqual(["revert", "--no-edit", "abc1234567890abc1234567890abc1234567890a"]);
+
+    const row = getDb().select().from(defects).all()[0]!;
+    expect(row.status).toBe("open");
+    expect(row.fixTier).toBeNull();
+    expect(row.fixBranch).toBeNull();
+    expect(row.resolvedAt).toBeNull();
+    expect(row.resolvedCommit).toBeNull();
+  });
+
+  it("emits debug_fix_rolled_back audit on success", async () => {
+    const projectId = await newProjectAt(projectPath);
+    const defectId = seedFixedDefect(projectId);
+    const git = new GitStub().enqueue(ok(""));
+
+    await rollbackFix({ defectId }, git.asRunGit());
+
+    const events = listEvents({ limit: 50 });
+    expect(events.some((e) => e.action === "debug_fix_rolled_back")).toBe(true);
+  });
+
+  it("returns expired when the rollback window has elapsed", async () => {
+    const projectId = await newProjectAt(projectPath);
+    const eightDaysAgo = Date.now() - 8 * 24 * 60 * 60 * 1000;
+    const defectId = seedFixedDefect(projectId, { resolvedAt: eightDaysAgo });
+
+    const result = await rollbackFix({ defectId });
+
+    expect(result.outcome).toBe("expired");
+    // Row unchanged.
+    const row = getDb().select().from(defects).where(eq(defects.id, defectId)).all()[0]!;
+    expect(row.status).toBe("fixed");
+  });
+
+  it("returns not_fixed when the defect's status is open", async () => {
+    const projectId = await newProjectAt(projectPath);
+    const defectId = seedFixedDefect(projectId, {
+      status: "open",
+      resolvedAt: null,
+      resolvedCommit: null,
+      fixBranch: null,
+      fixTier: null,
+    });
+
+    const result = await rollbackFix({ defectId });
+    expect(result.outcome).toBe("not_fixed");
+  });
+
+  it("returns no_commit_recorded for legacy fixes that predate G7b", async () => {
+    const projectId = await newProjectAt(projectPath);
+    const defectId = seedFixedDefect(projectId, { resolvedCommit: null });
+    const result = await rollbackFix({ defectId });
+    expect(result.outcome).toBe("no_commit_recorded");
+  });
+
+  it("returns revert_failed and audits when git revert errors (e.g. conflict)", async () => {
+    const projectId = await newProjectAt(projectPath);
+    const defectId = seedFixedDefect(projectId);
+    const git = new GitStub().enqueue(fail("conflict in lib/aws.ts"), ok(""));
+
+    const result = await rollbackFix({ defectId }, git.asRunGit());
+
+    expect(result.outcome).toBe("revert_failed");
+    expect(result.message).toContain("conflict");
+    // Row unchanged.
+    const row = getDb().select().from(defects).all()[0]!;
+    expect(row.status).toBe("fixed");
+
+    const events = listEvents({ limit: 50 });
+    expect(events.some((e) => e.action === "debug_fix_rollback_failed")).toBe(true);
+  });
+
+  it("rejects an unknown defectId", async () => {
+    await expect(rollbackFix({ defectId: "does-not-exist" })).rejects.toThrow(
+      /defect not found/
+    );
   });
 });
