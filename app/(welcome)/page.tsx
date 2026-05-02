@@ -75,7 +75,7 @@ export default function WelcomePage() {
   }, []);
 
   return (
-    <main className="flex min-h-full items-center justify-center bg-background p-8">
+    <main className="flex min-h-full justify-center overflow-y-auto bg-background p-8">
       <div className="w-full max-w-2xl">
         {pendingUpdate ? (
           <UpdatePrompt update={pendingUpdate} onDismiss={() => setPendingUpdate(null)} />
