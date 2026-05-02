@@ -393,7 +393,11 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     if (!project) return;
     setIsDebugScanning(true);
     try {
-      const scan = await runDebugScan({ projectId: project.id });
+      const scan = await runDebugScan({
+        projectId: project.id,
+        validate: true,
+        validatorModel: resolveModel("debug_validator"),
+      });
       if (scan.isErr()) {
         // Surface via the same console pattern as other transient errors;
         // future G6 follow-up can route this to a toast.
@@ -423,7 +427,10 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         return next;
       });
       try {
-        const result = await applyDebugFix({ defectId });
+        const result = await applyDebugFix({
+          defectId,
+          model: resolveModel("repair"),
+        });
         if (result.isErr()) {
           // eslint-disable-next-line no-console
           console.error("debug.applyFix failed:", result.error.message);

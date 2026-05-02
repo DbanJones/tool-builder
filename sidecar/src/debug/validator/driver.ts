@@ -31,8 +31,10 @@ export interface ValidatorResult {
 }
 
 export interface ValidatorTransport {
-  /** Send a rendered prompt to the validator; return the model's raw text. */
-  validate(prompt: RenderedPrompt): Promise<string>;
+  /** Send a rendered prompt to the validator; return the model's raw text.
+   *  Optional `model` overrides the SDK default; transport implementations
+   *  that don't honour it are free to ignore the param. */
+  validate(prompt: RenderedPrompt, model?: string): Promise<string>;
 }
 
 const ValidatorResponseSchema = z.object({
@@ -121,7 +123,7 @@ function extractJsonObject(text: string): unknown {
  * per finding — that batching is implemented by the caller, not here.
  */
 export const sdkTransport: ValidatorTransport = {
-  async validate(prompt) {
+  async validate(prompt, model) {
     const messages: SDKMessage[] = [];
     const stream = query({
       prompt: prompt.user,
@@ -131,6 +133,7 @@ export const sdkTransport: ValidatorTransport = {
         // sidecar (it has no tools registered for this session).
         maxTurns: 1,
         systemPrompt: prompt.system,
+        ...(model !== undefined ? { model } : {}),
       },
     });
     for await (const msg of stream) {
@@ -193,13 +196,14 @@ export async function validateFinding(
   finding: RawFinding,
   graph: SoftwareGraph,
   projectPath: string,
-  transport: ValidatorTransport
+  transport: ValidatorTransport,
+  model?: string,
 ): Promise<ValidatorResult> {
   const slice = await extractSlice(finding, graph, projectPath);
   const prompt = renderPrompt(slice);
   let raw = "";
   try {
-    raw = await transport.validate(prompt);
+    raw = await transport.validate(prompt, model);
   } catch (e) {
     raw = `transport_error: ${e instanceof Error ? e.message : String(e)}`;
   }

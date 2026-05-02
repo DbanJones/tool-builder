@@ -38,6 +38,9 @@ import {
 
 const ApplyFixParamsSchema = z.object({
   defectId: z.string().min(1),
+  /** Optional model override for the Tier 2 patch generator. When
+   *  omitted the SDK transport uses the CLI auth's default. */
+  model: z.string().min(1).optional(),
 });
 
 export type FixOutcome =
@@ -132,6 +135,7 @@ export async function applyFix(
       session,
       runGit,
       patchTransport,
+      ...(params.model !== undefined ? { model: params.model } : {}),
     });
   }
 
@@ -220,10 +224,12 @@ interface Tier2RunArgs {
   session: { branch: string; baseBranch: string; projectPath: string };
   runGit: RunGit | undefined;
   patchTransport: PatchTransport;
+  /** Optional model override forwarded into Tier2Input.model. */
+  model?: string;
 }
 
 async function runTier2OnBranch(args: Tier2RunArgs): Promise<ApplyFixResult> {
-  const { db, defect, project, session, runGit, patchTransport } = args;
+  const { db, defect, project, session, runGit, patchTransport, model } = args;
 
   const tier2 = await runTier2({
     finding: {
@@ -241,6 +247,7 @@ async function runTier2OnBranch(args: Tier2RunArgs): Promise<ApplyFixResult> {
     },
     projectPath: project.path,
     transport: patchTransport,
+    ...(model !== undefined ? { model } : {}),
   });
 
   if (tier2.kind === "no_patch") {

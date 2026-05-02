@@ -64,6 +64,8 @@ export interface Tier2Input {
   finding: RawFinding;
   projectPath: string;
   transport: PatchTransport;
+  /** Optional model override threaded into the SDK transport. */
+  model?: string;
 }
 
 /**
@@ -87,7 +89,7 @@ export async function runTier2(input: Tier2Input): Promise<Tier2Outcome> {
     const prompt = renderPatchPrompt(slice, previousAttempt);
     let raw = "";
     try {
-      raw = await input.transport.generate(prompt);
+      raw = await input.transport.generate(prompt, input.model);
     } catch (e) {
       raw = `transport_error: ${e instanceof Error ? e.message : String(e)}`;
     }

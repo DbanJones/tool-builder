@@ -77,6 +77,8 @@ export function runDebugScan(params: {
   projectId: string;
   userMode?: "founder" | "team";
   validate?: boolean;
+  /** Optional model override for the Layer 2 validator. */
+  validatorModel?: string;
 }): ResultAsync<DebugScanResult, DebugError> {
   return sidecarCall<DebugScanResult>("debug.scan", params).mapErr(fromSidecarError);
 }
@@ -195,6 +197,8 @@ export interface ApplyFixResult {
  */
 export function applyDebugFix(params: {
   defectId: string;
+  /** Optional model override for the Tier 2 patch generator. */
+  model?: string;
 }): ResultAsync<ApplyFixResult, DebugError> {
   return sidecarCall<ApplyFixResult>("debug.applyFix", params).mapErr(fromSidecarError);
 }

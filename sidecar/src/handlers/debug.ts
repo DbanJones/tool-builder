@@ -56,6 +56,9 @@ const ScanParamsSchema = z.object({
    * meant for the explicit "Debug now" path or phase-boundary scans.
    */
   validate: z.boolean().default(false),
+  /** Optional model override for the Layer 2 validator. When omitted,
+   *  the SDK transport uses the CLI auth's default. */
+  validatorModel: z.string().min(1).optional(),
 });
 
 export interface ScanResult {
@@ -129,7 +132,13 @@ export async function scan(
   if (params.validate && outcome.findings.length > 0) {
     const graph = await buildGraph(project.path);
     for (const f of outcome.findings) {
-      const result = await validateFinding(f.raw, graph, project.path, transport);
+      const result = await validateFinding(
+        f.raw,
+        graph,
+        project.path,
+        transport,
+        params.validatorModel,
+      );
       verdicts.set(findingKey(f), result);
       if (result.verdict === "false_positive") validatorDismissed++;
     }

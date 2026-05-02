@@ -32,8 +32,10 @@ export type PatchOutcome =
   | { kind: "no_patch"; reason: string; raw: string };
 
 export interface PatchTransport {
-  /** Send a rendered prompt to the patch generator; return the model's raw text. */
-  generate(prompt: { system: string; user: string }): Promise<string>;
+  /** Send a rendered prompt to the patch generator; return the model's
+   *  raw text. Optional `model` overrides the SDK default; transports
+   *  that don't honour it are free to ignore the param. */
+  generate(prompt: { system: string; user: string }, model?: string): Promise<string>;
 }
 
 const PatchEditSchema = z.object({
@@ -196,11 +198,15 @@ function stripMarkers(text: string): string {
 }
 
 export const sdkPatchTransport: PatchTransport = {
-  async generate(prompt) {
+  async generate(prompt, model) {
     const messages: SDKMessage[] = [];
     const stream = query({
       prompt: prompt.user,
-      options: { maxTurns: 1, systemPrompt: prompt.system },
+      options: {
+        maxTurns: 1,
+        systemPrompt: prompt.system,
+        ...(model !== undefined ? { model } : {}),
+      },
     });
     for await (const msg of stream) messages.push(msg);
     return concatAssistantText(messages);
@@ -228,7 +234,7 @@ export function stubPatchTransport(
   responses: Readonly<Record<string, string>> = {}
 ): PatchTransport {
   return {
-    async generate(prompt) {
+    async generate(prompt, _model) {
       const m = /Rule id: ([^\n]+)/.exec(prompt.user);
       const ruleId = m?.[1]?.trim() ?? "";
       if (responses[ruleId]) return responses[ruleId];
