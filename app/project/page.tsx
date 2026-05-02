@@ -10,6 +10,7 @@ import {
   Pencil,
   Play,
   Rocket,
+  Sparkles,
   Square,
   X,
 } from "lucide-react";
@@ -1127,18 +1128,30 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     if (!project) return;
     if (researchUi.kind !== "idle") return;
 
-    // Rebuild the current spec.md the same way performBuild would, then
-    // freeze it as the diff baseline. We don't write it to disk yet —
-    // the proposal will be diffed against this string in memory.
+    // Pick the diff baseline. If the project already has a research-
+    // adopted spec on disk, USE THAT — re-running research should
+    // build on the previous research run, not start over from the
+    // interview baseline. Otherwise rebuild deterministically from
+    // the answer table.
     const answersResult = await sidecarCall<AnswerRow[]>("answers.list", {
       projectId: project.id,
     });
     const recordedAnswers = answersResult.isOk() ? answersResult.value : [];
-    const baselineSpec = appendApprovedSourceMaterials(
+    let baselineSpec = appendApprovedSourceMaterials(
       rebuildSpec(recordedAnswers.map(rowToRebuildAnswer)),
       files,
       approvedFileIds,
     );
+    try {
+      const onDisk = await invoke<string | null>("read_target_spec", {
+        projectPath: project.path,
+      });
+      if (onDisk !== null && onDisk.includes("(via deep research)")) {
+        baselineSpec = onDisk;
+      }
+    } catch (e) {
+      console.warn("read_target_spec failed during research baseline pick:", e);
+    }
     const answersDigest = buildAnswersDigest(
       recordedAnswers.map((r) => ({
         questionId: r.questionId,
@@ -2211,6 +2224,26 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
               {hasStarted ? "Resume" : "Build it"}
             </Button>
           )}
+          {/* Deep-research escape hatch (Flow M). Always reachable while
+              the build isn't actively streaming, so a started project
+              can be re-researched between turns and the proposal
+              survives via the spec.md marker check in performBuild. */}
+          {!isRunning && researchUi.kind === "idle" && (canStartOrResume || hasStarted) ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={ceiling.state === "stop"}
+              onClick={() => void runDeepResearch()}
+              title={
+                hasStarted
+                  ? "Re-run deep research against the current spec — adopted changes survive on Resume"
+                  : "Spend 2-5 min researching competitors / edge cases before any code is written"
+              }
+            >
+              <Sparkles className="mr-1 h-3 w-3" />
+              Deep research
+            </Button>
+          ) : null}
           {hasStarted && reviewMarkdown !== null ? (
             launchStatus.kind === "running" ? (
               <>
