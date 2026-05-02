@@ -59,6 +59,7 @@ import {
   type HistoryActionEntry,
   type TargetState,
 } from "@/lib/build-state";
+import { renderTurnSummary, summariseTurn } from "@/lib/build-state/turn-summary";
 import {
   evaluate as evaluateCostCeiling,
   readCapFromStorage,
@@ -238,6 +239,14 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   // Build orchestrator state
   const [targetState, setTargetState] = useState<TargetState | null>(null);
   const [actions, setActions] = useState<readonly HistoryActionEntry[]>([]);
+  // Mirror of `actions` so the orchestrator event handler (memoised with
+  // a narrow dep list to avoid churn) can read the latest list inside its
+  // `done` branch when computing the turn summary. Without this, the
+  // closure captures whatever `actions` was at memo time — usually empty.
+  const actionsRef = useRef<readonly HistoryActionEntry[]>([]);
+  useEffect(() => {
+    actionsRef.current = actions;
+  }, [actions]);
   const [plan, setPlan] = useState<readonly TodoItem[]>([]);
   const [latestToolLine, setLatestToolLine] = useState<string | null>(null);
   const [costSum, setCostSum] = useState<CostSum | null>(null);
@@ -362,6 +371,23 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   );
   const [lastDebugScannedAt, setLastDebugScannedAt] = useState<number | null>(null);
 
+  // Appends an assistant turn to the chat scrollback + persists it to the
+  // chat_messages table. Defined here (before the debug callbacks below)
+  // so runDebugFix can drop a "what was edited" summary on success.
+  // The canonical definition; later code references this same const.
+  const appendAssistantMessage = useCallback(
+    (text: string): void => {
+      if (!project) return;
+      setMessages((prev) => [...prev, { role: "assistant" as const, text }]);
+      void sidecarCall("chatMessages.append", {
+        projectId: project.id,
+        role: "assistant",
+        text,
+      });
+    },
+    [project],
+  );
+
   const runDebugScanNow = useCallback(async () => {
     if (!project) return;
     setIsDebugScanning(true);
@@ -405,6 +431,33 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         // Refresh the list so status updates land on the card.
         const list = await listDefects({ projectId: project.id });
         if (list.isOk()) setDefects(list.value);
+        // Drop a "what was edited" summary into the chat, mirroring the
+        // build-turn-done hook. The repair handler returns the canonical
+        // list of files it touched; rendering through the same helper
+        // keeps the format consistent.
+        const fix = result.value;
+        const fileList = fix.files;
+        if (fileList.length > 0) {
+          const synthetic = renderTurnSummary(
+            {
+              filesEdited: fileList,
+              filesWritten: [],
+              bashCount: 0,
+              testCount: 0,
+              totalActions: fileList.length,
+            },
+            "repair",
+          );
+          if (synthetic.length > 0) {
+            const outcomeNote =
+              fix.outcome === "applied"
+                ? " ✅"
+                : fix.outcome === "syntax_check_failed"
+                  ? " ⚠️ (verifier rejected — patch reverted)"
+                  : "";
+            appendAssistantMessage(`${synthetic}${outcomeNote}`);
+          }
+        }
       } finally {
         setFixingDefectIds((prev) => {
           const next = new Set(prev);
@@ -413,7 +466,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         });
       }
     },
-    [project],
+    [project, appendAssistantMessage],
   );
 
   const runDebugRollback = useCallback(
@@ -703,19 +756,6 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   // Helper: append + persist an assistant-style message (used by the chat
   // intent dispatcher, the build event handlers, and the stage-transition
   // acks below).
-  const appendAssistantMessage = useCallback(
-    (text: string): void => {
-      if (!project) return;
-      setMessages((prev) => [...prev, { role: "assistant" as const, text }]);
-      void sidecarCall("chatMessages.append", {
-        projectId: project.id,
-        role: "assistant",
-        text,
-      });
-    },
-    [project],
-  );
-
   // Stage-transition phrases. Each is the leading sentinel substring of
   // the corresponding ack — used both to write the message and to detect
   // (on rehydrate) that we already announced this stage in a prior session.
@@ -1080,10 +1120,20 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
           }, 1500);
         }
       } else if (event.kind === "done") {
-        if (turnStartRef.current !== null) {
-          const elapsed = Date.now() - turnStartRef.current;
+        const turnStartedAt = turnStartRef.current;
+        if (turnStartedAt !== null) {
+          const elapsed = Date.now() - turnStartedAt;
           setTurnDurations((prev) => [...prev, elapsed]);
           turnStartRef.current = null;
+        }
+        // Drop a "what was edited this turn" summary into the chat so the
+        // novice sees concrete progress without scanning the live tail.
+        // sinceTs = turn start (or 0 if we somehow lost it) so the slice
+        // matches exactly the actions emitted in this orchestrator turn.
+        if (turnStartedAt !== null) {
+          const summary = summariseTurn(actionsRef.current, turnStartedAt - 1);
+          const rendered = renderTurnSummary(summary, "build");
+          if (rendered.length > 0) appendAssistantMessage(rendered);
         }
         if (!hasMadeSentryDecision()) setShowSentryPrompt(true);
         void (async () => {
