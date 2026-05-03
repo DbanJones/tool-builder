@@ -262,6 +262,14 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     actionsRef.current = actions;
   }, [actions]);
   const [plan, setPlan] = useState<readonly TodoItem[]>([]);
+  // Mirror of plan state in a ref so the todos_updated handler can do
+  // its prev/next diff WITHOUT calling setActions inside the setPlan
+  // updater (React strict mode double-invokes pure updaters and would
+  // emit duplicate stage rows otherwise).
+  const planRef = useRef<readonly TodoItem[]>([]);
+  useEffect(() => {
+    planRef.current = plan;
+  }, [plan]);
   const [latestToolLine, setLatestToolLine] = useState<string | null>(null);
   const [costSum, setCostSum] = useState<CostSum | null>(null);
   const [openDrifts, setOpenDrifts] = useState<readonly DriftEvent[]>([]);
@@ -1143,50 +1151,46 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
           currentSessionId: event.id,
         });
       } else if (event.kind === "todos_updated") {
-        // Two things happen here:
-        //  1. Diff prev → next to spot newly-completed plan items, and
-        //     emit a synthetic "Stage X of N complete" line into the
-        //     live tail so the novice sees milestones without having to
-        //     read the rail.
-        //  2. Update the plan, with the review-mode merge from D-040
-        //     follow-up so reviews don't erase the build plan.
-        setPlan((prev) => {
-          const next = event.todos;
-          const newlyCompleted: { idx: number; content: string }[] = [];
-          next.forEach((t, i) => {
-            const before = prev[i];
-            if (t.status === "completed" && before?.status !== "completed") {
-              newlyCompleted.push({ idx: i, content: t.content });
-            }
-          });
-          if (newlyCompleted.length > 0) {
-            const at = Date.now();
-            const total = next.length;
-            setActions((acts) => [
-              ...acts,
-              ...newlyCompleted.map((c, j) => ({
-                id: `stage-${String(at)}-${String(c.idx)}`,
-                ts: at + j,
-                tool: "stage",
-                rawInput: "",
-                humanLine: `Stage ${String(c.idx + 1)} of ${String(total)} complete — ${c.content}`,
-                phase: null,
-                taskId: null,
-              })),
-            ]);
+        // Diff once against the ref (read-only side), then dispatch the
+        // two state updates separately — React strict mode invokes pure
+        // updaters twice, so calling setActions inside setPlan's updater
+        // produced duplicate stage rows in dev. Doing the diff here
+        // means each update is a single, pure transform.
+        const prev = planRef.current;
+        const next = event.todos;
+        const newlyCompleted: { idx: number; content: string }[] = [];
+        next.forEach((t, i) => {
+          const before = prev[i];
+          if (t.status === "completed" && before?.status !== "completed") {
+            newlyCompleted.push({ idx: i, content: t.content });
           }
-          if (reviewMarkdown !== null) {
-            const prevContents = new Set(prev.map((t) => t.content));
-            const carried = prev.map((t) =>
-              t.status === "completed"
-                ? t
-                : { ...t, status: "completed" as const },
-            );
-            const additions = next.filter((t) => !prevContents.has(t.content));
-            return [...carried, ...additions];
-          }
-          return next;
         });
+        if (newlyCompleted.length > 0) {
+          const at = Date.now();
+          const total = next.length;
+          const additions = newlyCompleted.map((c, j) => ({
+            id: `stage-${String(at)}-${String(c.idx)}-${String(j)}`,
+            ts: at + j,
+            tool: "stage",
+            rawInput: "",
+            humanLine: `Stage ${String(c.idx + 1)} of ${String(total)} complete — ${c.content}`,
+            phase: null,
+            taskId: null,
+          }));
+          setActions((acts) => [...acts, ...additions]);
+        }
+        if (reviewMarkdown !== null) {
+          const prevContents = new Set(prev.map((t) => t.content));
+          const carried = prev.map((t) =>
+            t.status === "completed"
+              ? t
+              : { ...t, status: "completed" as const },
+          );
+          const newOnes = next.filter((t) => !prevContents.has(t.content));
+          setPlan([...carried, ...newOnes]);
+        } else {
+          setPlan(next);
+        }
       } else if (event.kind === "tool_use") {
         const humanLine = translate(event.tool, event.raw_input);
         setLatestToolLine(humanLine);
