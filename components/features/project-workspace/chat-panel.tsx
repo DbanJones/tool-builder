@@ -1,6 +1,6 @@
 "use client";
 
-import { FileSpreadsheet, FileText, Image as ImageIcon, Loader2, Send } from "lucide-react";
+import { FileSpreadsheet, FileText, Image as ImageIcon, Loader2, Paperclip, Send } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -46,6 +46,9 @@ interface ChatPanelProps {
   // filenames. Selecting one inserts the filename literally; the parent
   // can then expand the @ reference into a context block on send.
   availableFiles: readonly IngestedFile[];
+  // Optional handler for inline file uploads from the chat composer; the
+  // parent runs the same ingest pipeline used by the FilePanel drop zone.
+  onAttachFiles?: (rawFiles: readonly File[]) => void;
 }
 
 export function ChatPanel({
@@ -64,6 +67,7 @@ export function ChatPanel({
   isPreparingBank,
   inputRef,
   availableFiles,
+  onAttachFiles,
 }: ChatPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const isStreaming = status.kind === "streaming";
@@ -194,6 +198,7 @@ export function ChatPanel({
         disabledReason={disabledReason}
         inputRef={inputRef}
         availableFiles={availableFiles}
+        {...(onAttachFiles ? { onAttachFiles } : {})}
       />
     </section>
   );
@@ -236,6 +241,7 @@ interface ChatInputProps {
   disabledReason: string | null;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
   availableFiles: readonly IngestedFile[];
+  onAttachFiles?: (rawFiles: readonly File[]) => void;
 }
 
 function ChatInput({
@@ -246,9 +252,11 @@ function ChatInput({
   disabledReason,
   inputRef,
   availableFiles,
+  onAttachFiles,
 }: ChatInputProps) {
   const [caret, setCaret] = useState(0);
   const [pickerHover, setPickerHover] = useState(0);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const updateCaret = (): void => {
     const el = inputRef.current;
@@ -391,6 +399,32 @@ function ChatInput({
             rows={2}
             className="block flex-1 resize-none rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50"
           />
+          {onAttachFiles ? (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  const picked = Array.from(e.target.files ?? []);
+                  if (picked.length > 0) onAttachFiles(picked);
+                  // Reset so picking the same file again still fires onChange.
+                  e.target.value = "";
+                }}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                disabled={disabled}
+                onClick={() => fileInputRef.current?.click()}
+                aria-label="Attach files"
+                title="Attach files to this project"
+              >
+                <Paperclip className="h-4 w-4" aria-hidden="true" />
+              </Button>
+            </>
+          ) : null}
           <Button
             type="button"
             disabled={disabled || input.trim().length === 0}

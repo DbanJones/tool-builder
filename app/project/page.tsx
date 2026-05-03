@@ -209,6 +209,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [recoveredFromCrash, setRecoveredFromCrash] = useState(false);
   const [recoveredBannerDismissed, setRecoveredBannerDismissed] = useState(false);
+  const [reviewBannerDismissed, setReviewBannerDismissed] = useState(false);
 
   // Chat scrollback (unified; interview turns + build turns share the column).
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
@@ -609,6 +610,12 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   // what to do next). Once-per-session — the user can re-run via Scan
   // now if they want a fresh pass after iterating.
   const autoScannedAtPhaseBoundaryRef = useRef(false);
+  // Auto-load the preview at the phase boundary so a broken build is caught
+  // before the novice has to click around looking for it. One-shot per
+  // session: clicking Stop preview / Launch app / re-running the build
+  // resets the user-controlled launchStatus and the next phase boundary
+  // re-arms naturally because review.md re-writes only on a fresh build.
+  const autoPreviewLoadAttemptedRef = useRef(false);
   // Build's `done` event fires every time a turn ends. If Claude finished
   // the build without writing review.md (forgot, stopped early), prompt
   // exactly once per session so the novice always gets a coverage report.
@@ -1128,7 +1135,24 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
           currentSessionId: event.id,
         });
       } else if (event.kind === "todos_updated") {
-        setPlan(event.todos);
+        // After first-pass build completes (review.md exists) the agent
+        // often emits a fresh todo list for the iterate phase. Replacing
+        // would erase the build plan from the rail; merge instead so
+        // build items survive as completed and new review items appear
+        // below them. Per D-040 follow-up: "if a review happens, add it
+        // to the plan, not erase the plan".
+        if (reviewMarkdown !== null) {
+          setPlan((prev) => {
+            const prevContents = new Set(prev.map((t) => t.content));
+            const carried = prev.map((t) =>
+              t.status === "completed" ? t : { ...t, status: "completed" as const },
+            );
+            const additions = event.todos.filter((t) => !prevContents.has(t.content));
+            return [...carried, ...additions];
+          });
+        } else {
+          setPlan(event.todos);
+        }
       } else if (event.kind === "tool_use") {
         const humanLine = translate(event.tool, event.raw_input);
         setLatestToolLine(humanLine);
@@ -1287,7 +1311,7 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         setStatus({ kind: "error", message: event.message });
       }
     },
-    [project, appendAssistantMessage],
+    [project, appendAssistantMessage, reviewMarkdown],
   );
 
   // Flow M / ADR-0017. Optional deep-research session that runs after the
@@ -2198,6 +2222,50 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     void runDebugScanNow();
   }, [reviewMarkdown, project, runDebugScanNow]);
 
+  // Auto-load the preview at the phase boundary so a broken build is
+  // caught before the novice has to click around. Switches the rail to
+  // the Preview tab so the iframe mounts and the bridge surfaces any
+  // console / network / server errors in the live status. One-shot per
+  // session via autoPreviewLoadAttemptedRef.
+  useEffect(() => {
+    if (autoPreviewLoadAttemptedRef.current) return;
+    if (reviewMarkdown === null) return;
+    if (project === null) return;
+    if (launchStatus.kind !== "idle") return;
+    autoPreviewLoadAttemptedRef.current = true;
+    appendAssistantMessage(
+      "Auto-loading the preview to check the build runs…",
+    );
+    setTab("preview");
+    void startPreviewServer();
+  }, [
+    reviewMarkdown,
+    project,
+    launchStatus.kind,
+    startPreviewServer,
+    appendAssistantMessage,
+  ]);
+
+  // Announce the auto-preview result. Tied to the attempt ref so it only
+  // fires when the launch was kicked off automatically (not when the
+  // user clicked Launch app themselves — that flow has its own banners).
+  const autoPreviewResultAnnouncedRef = useRef(false);
+  useEffect(() => {
+    if (!autoPreviewLoadAttemptedRef.current) return;
+    if (autoPreviewResultAnnouncedRef.current) return;
+    if (launchStatus.kind === "running") {
+      autoPreviewResultAnnouncedRef.current = true;
+      appendAssistantMessage(
+        `Preview is up at ${launchStatus.url}. The Preview tab will surface any errors as they happen — leave a comment to iterate if something looks off.`,
+      );
+    } else if (launchStatus.kind === "error") {
+      autoPreviewResultAnnouncedRef.current = true;
+      appendAssistantMessage(
+        `Preview failed to start: ${launchStatus.message}. The build may not be runnable yet — leave a comment in the chat to fix it.`,
+      );
+    }
+  }, [launchStatus, appendAssistantMessage]);
+
   // Stage 3: deploy preview just succeeded.
   useEffect(() => {
     if (announcedDeployedRef.current) return;
@@ -2590,6 +2658,47 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         }
       />
 
+      {reviewMarkdown !== null && !reviewBannerDismissed ? (
+        <Alert className="relative mx-4 mt-3 mb-1 pr-9">
+          <AlertTitle>First-pass build done — review and iterate</AlertTitle>
+          <AlertDescription>
+            <p>
+              Try the build below. When you spot something to change, leave a
+              comment in the chat or annotate a screenshot — Dave picks up
+              from where it left off.
+            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => {
+                  requestAnimationFrame(() => inputRef.current?.focus());
+                }}
+              >
+                Review with comments
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => void openAnnotation()}
+              >
+                <Pencil className="mr-1 h-3 w-3" aria-hidden="true" />
+                Annotate a screenshot
+              </Button>
+            </div>
+          </AlertDescription>
+          <button
+            type="button"
+            onClick={() => setReviewBannerDismissed(true)}
+            aria-label="Dismiss review banner"
+            className="absolute right-2 top-2 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <X className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        </Alert>
+      ) : null}
+
       <ResizableSplit
         rightWidth={rightRailWidth}
         onRightWidthChange={setRightRailWidth}
@@ -2622,6 +2731,9 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
               isPreparingBank={isPreparingBank}
               inputRef={inputRef}
               availableFiles={files}
+              onAttachFiles={(rawFiles) =>
+                acceptDroppedFiles(Array.from(rawFiles))
+              }
             />
           )
         }

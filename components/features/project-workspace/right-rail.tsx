@@ -573,6 +573,7 @@ function PlanAndStatusPanel({
     errorCount: 0,
   });
   useEffect(() => getBridgeListener().subscribe(setBridge), []);
+  const [planCollapsed, setPlanCollapsed] = useState(false);
 
   const completed = plan.filter((t) => t.status === "completed").length;
   const total = plan.length;
@@ -594,39 +595,52 @@ function PlanAndStatusPanel({
   }, [recentActions.length]);
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="shrink-0 border-b px-4 py-2.5">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+      <button
+        type="button"
+        onClick={() => setPlanCollapsed((c) => !c)}
+        aria-expanded={!planCollapsed}
+        aria-controls="plan-rail-detail"
+        className="flex w-full shrink-0 items-center gap-2 border-b px-4 py-2.5 text-left hover:bg-muted/40"
+      >
+        {planCollapsed ? (
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        ) : (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        )}
+        <h2 className="flex-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Plan {total > 0 ? `· ${completed} / ${total}` : null}
         </h2>
-      </div>
-      <div className="max-h-[45%] shrink-0 overflow-auto p-4">
-        {plan.length === 0 ? (
-          <p className="text-xs text-muted-foreground">
-            Dave will lay out the steps here as soon as the build starts.
-          </p>
-        ) : (
-          <ol className="space-y-2 text-xs">
-            {plan.map((todo, i) => (
-              <li
-                key={`${i}-${todo.content}`}
-                className={
-                  "flex items-start gap-2 " +
-                  (todo.status === "completed" ? "text-muted-foreground line-through" : "")
-                }
-              >
-                <PlanStatusIcon status={todo.status} />
-                <span className="flex-1">
-                  {todo.status === "in_progress" ? (
-                    <span className="font-medium">{todo.activeForm}</span>
-                  ) : (
-                    todo.content
-                  )}
-                </span>
-              </li>
-            ))}
-          </ol>
-        )}
-      </div>
+      </button>
+      {planCollapsed ? null : (
+        <div id="plan-rail-detail" className="max-h-[45%] shrink-0 overflow-auto p-4">
+          {plan.length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              Dave will lay out the steps here as soon as the build starts.
+            </p>
+          ) : (
+            <ol className="space-y-2 text-xs">
+              {plan.map((todo, i) => (
+                <li
+                  key={`${i}-${todo.content}`}
+                  className={
+                    "flex items-start gap-2 " +
+                    (todo.status === "completed" ? "text-muted-foreground line-through" : "")
+                  }
+                >
+                  <PlanStatusIcon status={todo.status} />
+                  <span className="flex-1">
+                    {todo.status === "in_progress" ? (
+                      <span className="font-medium">{todo.activeForm}</span>
+                    ) : (
+                      todo.content
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      )}
       <div className="flex min-h-0 flex-1 flex-col border-t">
         <div className="flex shrink-0 items-center justify-between border-b bg-muted/30 px-4 py-2">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
