@@ -10,6 +10,7 @@ import { useOpenTabs, type TabSummary } from "@/lib/open-tabs";
 import { orchestratorStop } from "@/lib/orchestrator";
 import type { Project } from "@/lib/project";
 import { sidecarCall } from "@/lib/sidecar/client";
+import { Logo } from "./logo";
 
 // Tab strip across the top of the window. Tabs are projects the novice has
 // opened; the strip shows which is active and which (if any) is currently
@@ -74,15 +75,15 @@ function TabBarInner() {
     <div className="flex h-9 w-full shrink-0 items-end gap-0 overflow-hidden border-b bg-muted/40">
       <Link
         href="/"
-        aria-label="Dave-Builder home"
+        aria-label="Dave home"
         className={
           "flex h-9 shrink-0 items-center gap-2 px-3 text-xs font-semibold " +
           (activeId === null && pathname === "/"
-            ? "border-b-2 border-primary text-foreground"
+            ? "border-b-2 border-primary text-primary"
             : "text-muted-foreground hover:text-foreground")
         }
       >
-        <span>Dave-Builder</span>
+        <Logo />
         {DEMO_MODE ? (
           <span
             aria-label="Demo build"
