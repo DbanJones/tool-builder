@@ -31,6 +31,10 @@ import { DeployGateModal, selectUnresolvedCritical } from "@/components/features
 import { DeployModal } from "@/components/features/project-workspace/deploy-modal";
 import { PlanAckModal } from "@/components/features/project-workspace/plan-ack-modal";
 import { ResearchDiffModal } from "@/components/features/project-workspace/research-diff-modal";
+import {
+  WorkspaceActionsMenu,
+  type ActionItem,
+} from "@/components/features/project-workspace/actions-menu";
 import { DriftBanner } from "@/components/features/project-workspace/drift-banner";
 import {
   PermissionPromptBanner,
@@ -2353,131 +2357,142 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
           <p className="truncate font-mono text-xs text-muted-foreground">{project.path}</p>
         </div>
         <div className="flex items-center gap-2">
-          {!hasStarted && (
+          {!hasStarted ? (
             <span className="text-xs text-muted-foreground" aria-label="Fast-path interview progress">
               {readiness.fastPathAnswered} / {readiness.fastPathTotal} answered
             </span>
-          )}
-          {hasStarted ? (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => void openAnnotation()}
-              title={isRunning ? "Pause the build and annotate a screenshot" : "Annotate a screenshot of the build"}
-            >
-              <Pencil className="mr-1 h-3 w-3" />
-              {isRunning ? "Pause & annotate" : "Annotate"}
-            </Button>
           ) : null}
-          {isRunning ? (
-            <Button size="sm" variant="outline" onClick={() => void stopBuild()} title="Stop the build">
-              <Square className="mr-1 h-3 w-3" />
-              Stop
-            </Button>
-          ) : (
-            <Button
-              size="sm"
-              disabled={ceiling.state === "stop" || !canStartOrResume}
-              onClick={() => void startBuild()}
-              title={!canStartOrResume ? readiness.reason : undefined}
-            >
-              <Play className="mr-1 h-3 w-3" />
-              {hasStarted ? "Resume" : "Build it"}
-            </Button>
-          )}
-          {/* Deep-research escape hatch (Flow M). Always reachable while
-              the build isn't actively streaming, so a started project
-              can be re-researched between turns and the proposal
-              survives via the spec.md marker check in performBuild. */}
-          {!isRunning && researchUi.kind === "idle" && (canStartOrResume || hasStarted) ? (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={ceiling.state === "stop"}
-              onClick={() => void runDeepResearch()}
-              title={
-                hasStarted
-                  ? "Re-run deep research against the current spec — adopted changes survive on Resume"
-                  : "Spend 2-5 min researching competitors / edge cases before any code is written"
+          <WorkspaceActionsMenu
+            triggerLabel={
+              isRunning
+                ? "Stop / Actions"
+                : hasStarted
+                  ? "Resume / Actions"
+                  : "Build / Actions"
+            }
+            items={(() => {
+              const items: ActionItem[] = [];
+              // Primary: Build / Resume / Stop. Same gating logic as
+              // before, just no longer a standalone button.
+              if (isRunning) {
+                items.push({
+                  id: "stop",
+                  label: "Stop the build",
+                  icon: <Square className="h-3 w-3" />,
+                  onSelect: () => void stopBuild(),
+                  destructive: true,
+                  title: "Stop the build",
+                });
+              } else {
+                items.push({
+                  id: "build",
+                  label: hasStarted ? "Resume build" : "Build it",
+                  icon: <Play className="h-3 w-3" />,
+                  onSelect: () => void startBuild(),
+                  disabled: ceiling.state === "stop" || !canStartOrResume,
+                  ...(!canStartOrResume ? { title: readiness.reason } : {}),
+                });
               }
-            >
-              <Sparkles className="mr-1 h-3 w-3" />
-              Deep research
-            </Button>
-          ) : null}
-          {hasStarted && reviewMarkdown !== null ? (
-            launchStatus.kind === "running" ? (
-              <>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() =>
-                    window.open(launchStatus.url, "_blank", "noopener,noreferrer")
-                  }
-                  title={`Open ${launchStatus.url} in your browser`}
-                >
-                  <ExternalLink className="mr-1 h-3 w-3" />
-                  Open app
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void stopLaunchedApp()}
-                  title="Stop the running dev server"
-                >
-                  <Square className="mr-1 h-3 w-3" />
-                  Stop app
-                </Button>
-              </>
-            ) : (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => void launchApp()}
-                disabled={launchStatus.kind === "starting"}
-                title="Start the dev server and open it in your browser"
-              >
-                {launchStatus.kind === "starting" ? (
-                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                ) : (
-                  <Globe className="mr-1 h-3 w-3" />
-                )}
-                Launch app
-              </Button>
-            )
-          ) : null}
-          {hasStarted ? (
-            <>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => void deployPreview()}
-                disabled={deployStatus.kind === "running"}
-                title="Deploy a preview to Vercel"
-              >
-                {deployStatus.kind === "running" ? (
-                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                ) : (
-                  <Rocket className="mr-1 h-3 w-3" />
-                )}
-                Deploy
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => void exportToGithubFlow()}
-                disabled={exportStatus.kind === "running"}
-                title="Push the project folder to a private GitHub repo"
-              >
-                {exportStatus.kind === "running" ? (
-                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                ) : (
-                  <GitBranch className="mr-1 h-3 w-3" />
-                )}
-                Push to GitHub
-              </Button>
-            </>
-          ) : null}
+              // Deep research — pre-build OR between turns of a started build.
+              if (!isRunning && researchUi.kind === "idle" && (canStartOrResume || hasStarted)) {
+                items.push({
+                  id: "research",
+                  label: "Deep research",
+                  icon: <Sparkles className="h-3 w-3 text-primary" />,
+                  onSelect: () => void runDeepResearch(),
+                  disabled: ceiling.state === "stop",
+                  title: hasStarted
+                    ? "Re-run deep research against the current spec — adopted changes survive on Resume"
+                    : "Spend 2-5 min researching competitors / edge cases before any code is written",
+                  separatorBefore: true,
+                });
+              }
+              // Annotate — once any build session has started.
+              if (hasStarted) {
+                items.push({
+                  id: "annotate",
+                  label: isRunning ? "Pause & annotate" : "Annotate the build",
+                  icon: <Pencil className="h-3 w-3" />,
+                  onSelect: () => void openAnnotation(),
+                  title: isRunning
+                    ? "Pause the build and annotate a screenshot"
+                    : "Annotate a screenshot of the build",
+                  separatorBefore: true,
+                });
+              }
+              // Launch / Open / Stop app — only after review.md exists.
+              if (hasStarted && reviewMarkdown !== null) {
+                if (launchStatus.kind === "running") {
+                  items.push(
+                    {
+                      id: "open-app",
+                      label: "Open app in browser",
+                      icon: <ExternalLink className="h-3 w-3" />,
+                      onSelect: () =>
+                        window.open(launchStatus.url, "_blank", "noopener,noreferrer"),
+                      title: `Open ${launchStatus.url} in your browser`,
+                      separatorBefore: true,
+                    },
+                    {
+                      id: "stop-app",
+                      label: "Stop dev server",
+                      icon: <Square className="h-3 w-3" />,
+                      onSelect: () => void stopLaunchedApp(),
+                      title: "Stop the running dev server",
+                    },
+                  );
+                } else {
+                  items.push({
+                    id: "launch-app",
+                    label: "Launch app",
+                    icon:
+                      launchStatus.kind === "starting" ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Globe className="h-3 w-3" />
+                      ),
+                    onSelect: () => void launchApp(),
+                    disabled: launchStatus.kind === "starting",
+                    title: "Start the dev server and open it in your browser",
+                    separatorBefore: true,
+                  });
+                }
+              }
+              // Deploy / Push — once any build has started.
+              if (hasStarted) {
+                items.push(
+                  {
+                    id: "deploy",
+                    label: "Deploy preview to Vercel",
+                    icon:
+                      deployStatus.kind === "running" ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Rocket className="h-3 w-3" />
+                      ),
+                    onSelect: () => void deployPreview(),
+                    disabled: deployStatus.kind === "running",
+                    title: "Deploy a preview to Vercel",
+                    separatorBefore: true,
+                  },
+                  {
+                    id: "push",
+                    label: "Push to GitHub",
+                    icon:
+                      exportStatus.kind === "running" ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <GitBranch className="h-3 w-3" />
+                      ),
+                    onSelect: () => void exportToGithubFlow(),
+                    disabled: exportStatus.kind === "running",
+                    title: "Push the project folder to a private GitHub repo",
+                  },
+                );
+              }
+              return items;
+            })()}
+          />
         </div>
       </header>
 
