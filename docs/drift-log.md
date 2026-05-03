@@ -2,6 +2,23 @@
 
 Per [rules/07-self-check.md](../rules/07-self-check.md) SC26: every correction or accepted drift is logged here with date, AC id or scope item, drift type, resolution, and commit hash. This is the audit trail.
 
+## 2026-05-03
+
+### D-040 — "Build it" forces a Plan-ack modal that isn't required by the spec
+- **Drift type**: implementation drift against Flow E AC1 spirit + Flow M AC1 entry-point semantics.
+- **Discovered at**: novice user feedback during a live session — "I've clicked build it several times… echo back is fine, but it should be one screen, not repeated prompts telling the model to build something." A stale `status='building'` row on a prior project ("Echo") was also triggering the concurrent-build conflict prompt on every click; that row was reset to `'ready'` (DB-only fix, no code change) and is not part of this drift.
+- **Cause**: [app/project/page.tsx:1634-1637](../app/project/page.tsx#L1634-L1637) opens `PlanAckModal` unconditionally on the first Build it click. Per `spec.md` Flow M AC1 the Plan-ack modal is the entry point for the *Research first* opt-in ("the novice opens the Plan-ack modal and clicks Research first") — it is not specified as a generic pre-build confirmation. Per Flow E AC1, "Readiness auto-confirms once the fast-path is complete (no separate 'Looks right' popup)"; D-024 deliberately removed novice-facing confirmation friction at the build threshold because novices skipped past it without reading. The current code re-introduces the same anti-pattern at the next threshold.
+- **Impact**: novices click Build it, see an unexpected modal, dismiss it, and report that the Builder is stuck in interview. Status never flips from `interviewing` → `building`. Erodes the spec.md success metric (deployed Phase 1 app in under 90 minutes, novice unaided).
+- **Resolutions** (per SC24 — needs user pick):
+  - **(a) Revert code to match spec**: `startBuild()` calls `performBuild()` directly. *Research first* stays a separate top-level action (already present in the Build / Actions dropdown as `id: "research"`). The Plan-ack modal becomes the body of *Research first*, not a wall before Build.
+  - **(b) Amend spec via ADR**: keep the modal as a deliberate pre-build pause; rewrite Flow M AC1 to make the modal mandatory rather than a research opt-in. Adds an ADR. Goes against user's stated preference and D-024 precedent.
+  - **(c) Park as accepted drift**: leave behaviour as-is, add `// drift-accepted: see ADR-NNNN` + tracker issue. Not recommended — direct user evidence shows the current path harms the success metric.
+- **User decision (ratified via Echo-back, 2026-05-03)**: option (b') — amend the spec to mandate a **single Ready-to-build screen** that owns all pre-build confirmation, replacing both the concurrent-build modal and the Plan-ack modal. Not (a) zero confirmation, not (b) formalize the current chain.
+- **Resolution**: spec amended at Flow E (trigger + AC1 + AC3) and Flow M (trigger + AC1 + AC6). New [ADR-0018](adr/0018-single-screen-build-confirm.md) records the decision and supersedes the modal-chain implication of D-024 / D-025 + the Plan-ack modal as a generic pre-build wall.
+- **Status**: spec amended; ADR-0018 written. Implementation slice pending separate Echo-back per CLAUDE.md.
+- **Files changed (this slice)**: `spec.md`, `docs/adr/0018-single-screen-build-confirm.md` (new), `docs/drift-log.md`.
+- **Follow-up (implementation slice — separate Echo-back)**: replace the early `setPlanAckOpen(true); return;` branch + the standalone `concurrentBuildPrompt` modal with a Ready-to-build route. The existing `PlanAckModal` contents migrate to the new screen's research card; the existing `setConcurrentBuildPrompt` discriminated state becomes inline UI on the same route. Update unit/integration tests that assert plan-ack-on-build-click; add an E2E asserting a single Build it click on the Ready-to-build screen flips status to `building` with no intermediate dialog.
+
 ## 2026-05-02
 
 ### D-039 — Phase G EXIT recheck: five-correction batch + boundary approval

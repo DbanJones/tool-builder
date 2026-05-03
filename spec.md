@@ -80,11 +80,11 @@ Explicit non-goals:
 
 ### Flow E: Ready to build
 - **Given** all 35 fast-path questions (including Q33 deliverable artifact, Q34 reference anchors, Q35 non-negotiables) and all activated high-stakes questions have answers,
-- **When** the novice clicks Start build,
+- **When** the novice clicks **Ready to build** in the workspace,
 - **Then**:
-  - **Flow E AC1**: Readiness auto-confirms once the fast-path is complete (no separate "Looks right" popup). The deliverable artifact, reference anchors, and non-negotiables remain visible in the Spec tab and re-surface in the post-build "verify against your spec" panel; per D-024 the explicit echo-back popup was removed because it added a friction step the novice repeatedly skipped past without reading.
-  - **Flow E AC2**: With readiness satisfied, the unified project workspace enables Start build and switches into the build dashboard state.
-  - **Flow E AC3**: If at least one other project is currently `building`, the Builder shows a modal listing those projects with three actions: **Run alongside** (start this build in parallel — both share the Claude account's rate-limit budget), **Stop them first** (cancel each in-flight build via per-project orchestrator stop, mark each `paused`, then start this one), **Cancel** (close modal, do nothing). Concurrent builds are supported because each project's SDK session lives behind its own stream id in the sidecar's `inflight` map. Per D-025 (supersedes D-024 silent preempt).
+  - **Flow E AC1**: A single Ready-to-build screen opens. It surfaces the deliverable artifact (Q33), reference anchors (Q34), non-negotiables (Q35), the live spec summary, any concurrent-build conflicts (per AC3), an optional *Research first* link (per Flow M), and a **Build it** button. No additional modal or popup may appear between this screen and the start of the build. Per D-040 (supersedes D-024 readiness echo-back removal + the Plan-ack modal as a generic pre-build wall).
+  - **Flow E AC2**: With readiness satisfied, the unified project workspace enables Ready to build and switches into the build dashboard state once Build it is clicked on the Ready-to-build screen.
+  - **Flow E AC3**: If at least one other project is currently `building`, the conflict is surfaced **inline** on the Ready-to-build screen (not as a separate modal) with the same three choices: **Run alongside** (start this build in parallel — both share the Claude account's rate-limit budget), **Stop them first** (cancel each in-flight build via per-project orchestrator stop, mark each `paused`, then start this one), **Cancel** (returns to the workspace, do nothing). Concurrent builds are supported because each project's SDK session lives behind its own stream id in the sidecar's `inflight` map. Per D-025 + D-040 (supersedes D-024 silent preempt and the standalone concurrent-build modal).
   - **Flow E AC4**: The sidecar starts a Claude Agent SDK session in the project folder with `CLAUDE.md` and `rules/` already present, using the `claude` CLI only as the auth backend.
   - **Flow E AC5**: The dashboard begins streaming.
 
@@ -174,14 +174,14 @@ Explicit non-goals:
 
 ### Flow M: Optional deep research before build
 - **Given** the interview has reached readiness (all fast-path questions answered, echo-back confirmed) and the cost ceiling is not in the "stop" state,
-- **When** the novice opens the Plan-ack modal and clicks **Research first** (an opt-in tertiary action alongside Refine spec / Go),
+- **When** the novice clicks **Research first** on the Ready-to-build screen,
 - **Then**:
-  - **Flow M AC1**: The modal explains the trade-off in plain English ("Spend 2-5 min and roughly $1-3 letting Dave think harder about market, competitors, data model, and edge cases before any code is written. Optional — your existing spec is already enough.") and offers Cancel / Run.
+  - **Flow M AC1**: The Ready-to-build screen reveals an inline research card with the trade-off explainer in plain English ("Spend 2-5 min and roughly $1-3 letting Dave think harder about market, competitors, data model, and edge cases before any code is written. Optional — your existing spec is already enough.") and offers Cancel / Run; both keep the novice on the same screen. The Plan-ack modal as a separate dialog is removed per D-040.
   - **Flow M AC2**: On Run, the modal closes, the right-rail switches to Plan & status, and a research banner shows "Researching… (typically 2-5 min)" with a Stop button. The build is NOT started yet.
   - **Flow M AC3**: The sidecar opens a Claude Agent SDK session distinct from the orchestrator session (its own stream id in the `inflight` map), feeds it the current `spec.md`, the recorded answers, and the approved file summaries, and instructs it to expand and clarify but never contradict explicit answers. The session is capped at 5 minutes wall-clock and `maxSteps: 8`.
   - **Flow M AC4**: Findings stream into the live tail via a `record_finding` MCP tool. On completion the agent calls `propose_spec_revision({ markdown, summaryOfChanges })`; the proposed text is held in sidecar memory and surfaced to the webview, not yet written to disk.
   - **Flow M AC5**: The webview opens a side-by-side diff modal (rendered original on the left, rendered proposal on the right; "Show raw diff" toggles to a unified diff) with three actions: **Use new spec**, **Keep original**, **Discard**. On "Use new spec" the original is backed up to `{project}/.builder/spec.pre-research.md` (idempotent — only written if absent) before `spec.md` is overwritten with the proposal.
-  - **Flow M AC6**: On Stop, cap-hit, or cost-ceiling trip mid-run, the SDK session is aborted via AbortController, no spec changes are written, the live tail records the cancellation, and the modal returns to its prior state. The novice can re-open the Plan-ack modal and choose Go (skip research) or Research first again.
+  - **Flow M AC6**: On Stop, cap-hit, or cost-ceiling trip mid-run, the SDK session is aborted via AbortController, no spec changes are written, the live tail records the cancellation, and the inline research card returns to its prior state. The novice returns to the Ready-to-build screen and can choose Build it (skip research) or Research first again.
   - **Flow M AC7**: A successful run appends a `costs` row with `category: "research"`, and writes `deep_research_completed_at` + `deep_research_token_cost_usd` to the target app's `.builder/state.json`. The audit log records `deep_research_started` at start and `deep_research_completed` (or `_cancelled`) at end.
 
 ### Flow L: Debug and repair (target-app defect detection)
