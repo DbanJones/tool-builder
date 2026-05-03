@@ -50,8 +50,17 @@ jobs:
           # Avoid clobbering ubuntu/macos cache if those jobs are added later.
           shared-key: tauri-windows
 
-      - name: Install JS dependencies
+      - name: Install JS dependencies (root)
         run: corepack pnpm install --frozen-lockfile
+
+      # The sidecar is a separate package (not a pnpm workspace member),
+      # so `pnpm install` at the root does not pull its deps. The
+      # tauri-action's beforeBuildCommand → `pnpm build` chains through
+      # `pnpm sidecar:build` which tsc-compiles the sidecar; without its
+      # node_modules every drizzle-orm / ulid / better-sqlite3 import
+      # fails type resolution and the build aborts.
+      - name: Install JS dependencies (sidecar)
+        run: corepack pnpm --dir sidecar install --frozen-lockfile
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
