@@ -68,18 +68,18 @@ export const STAGE_CATALOGUE: readonly StageDescriptor[] = [
     default: "claude-sonnet-4-5",
   },
   {
-    id: "build",
-    label: "Build orchestration",
-    description:
-      "The agent that writes the target app's code. The session can run for hours with hundreds of tool calls, so cost compounds.",
-    default: "claude-sonnet-4-5",
-  },
-  {
     id: "research",
     label: "Deep research",
     description:
       "Expands the spec before any code is written. Tool-aware (WebSearch / WebFetch / Read). Heavier model usually buys real research depth.",
     default: "claude-opus-4-5",
+  },
+  {
+    id: "build",
+    label: "Build orchestration",
+    description:
+      "The agent that writes the target app's code. The session can run for hours with hundreds of tool calls, so cost compounds.",
+    default: "claude-sonnet-4-5",
   },
   {
     id: "debug_validator",
