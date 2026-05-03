@@ -22,7 +22,7 @@ use std::sync::mpsc::{channel as mpsc_channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tauri::ipc::Channel;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 pub struct SidecarHandle {
   pub stdin: Mutex<ChildStdin>,
@@ -78,31 +78,77 @@ pub fn project_root_from_cwd() -> Result<PathBuf, String> {
   }
 }
 
+/// Resolve where the sidecar lives at runtime. Two strategies in order:
+///
+/// 1. **Dev tree**: cwd points at the repo (or src-tauri/), `sidecar/dist`
+///    exists relative to it. Use that path so dev iterations don't require
+///    re-running `package-sidecar.mjs`.
+/// 2. **Packaged .app / .msi**: Tauri's bundle.resources lands the
+///    `sidecar-bundle/` directory under Resources/. Resolve via
+///    `app.path().resource_dir()`. This is what makes the .app actually
+///    work end-to-end.
+fn resolve_sidecar_paths(app: &AppHandle) -> Result<(PathBuf, PathBuf, PathBuf), String> {
+  // Try dev tree first.
+  if let Ok(project_root) = project_root_from_cwd() {
+    let dev_script = project_root.join("sidecar").join("dist").join("index.js");
+    let dev_migrations = project_root.join("sidecar").join("migrations");
+    let dev_db = project_root.join(".builder").join("builder.db");
+    if dev_script.exists() && dev_migrations.exists() {
+      return Ok((dev_script, dev_migrations, dev_db));
+    }
+  }
+  // Fall back to bundled resources (packaged .app / .msi).
+  let resource_dir = app
+    .path()
+    .resource_dir()
+    .map_err(|e| format!("resource_dir unavailable: {e}"))?;
+  let bundle = resource_dir.join("sidecar-bundle");
+  let bundled_script = bundle.join("dist").join("index.js");
+  let bundled_migrations = bundle.join("migrations");
+  if !bundled_script.exists() {
+    return Err(format!(
+      "sidecar script not found in bundle at {} (and no dev tree available)",
+      bundled_script.display()
+    ));
+  }
+  if !bundled_migrations.exists() {
+    return Err(format!(
+      "sidecar migrations folder not found in bundle at {}",
+      bundled_migrations.display()
+    ));
+  }
+  // The packaged .app cannot write to its own Resources/. Drop the DB
+  // (and the rest of `.builder/`) into the user's app-data folder
+  // instead. Tauri's `app_data_dir()` resolves to the platform-correct
+  // location (~/Library/Application Support/<bundleId>/ on macOS,
+  // %APPDATA%\<bundleId>\ on Windows, ~/.local/share/<bundleId>/ on
+  // Linux).
+  let app_data = app
+    .path()
+    .app_data_dir()
+    .map_err(|e| format!("app_data_dir unavailable: {e}"))?;
+  let builder_state_dir = app_data.join(".builder");
+  std::fs::create_dir_all(&builder_state_dir)
+    .map_err(|e| format!("create app_data .builder dir: {e}"))?;
+  let bundled_db = builder_state_dir.join("builder.db");
+  Ok((bundled_script, bundled_migrations, bundled_db))
+}
+
 /// Spawn the Node sidecar process + start the background reader thread that
 /// dispatches responses + notifications. Returns the handle (stdin only —
 /// stdout is owned by the reader thread).
 pub fn spawn_sidecar(
-  _app: &AppHandle,
+  app: &AppHandle,
   pending: PendingMap,
   channels: ChannelMap,
 ) -> Result<SidecarHandle, String> {
-  let project_root = project_root_from_cwd()?;
-  let sidecar_script = project_root.join("sidecar").join("dist").join("index.js");
-  let migrations_folder = project_root.join("sidecar").join("migrations");
-  let db_path = project_root.join(".builder").join("builder.db");
-
-  if !sidecar_script.exists() {
-    return Err(format!(
-      "sidecar script not found at {}; run `pnpm sidecar:build` first",
-      sidecar_script.display()
-    ));
-  }
-  if !migrations_folder.exists() {
-    return Err(format!(
-      "sidecar migrations folder not found at {}; run `pnpm sidecar:build` first",
-      migrations_folder.display()
-    ));
-  }
+  let (sidecar_script, migrations_folder, db_path) = resolve_sidecar_paths(app)?;
+  log::info!(
+    "sidecar: script={} migrations={} db={}",
+    sidecar_script.display(),
+    migrations_folder.display(),
+    db_path.display()
+  );
 
   let mut child = Command::new("node")
     .arg(&sidecar_script)

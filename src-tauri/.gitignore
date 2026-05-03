@@ -2,3 +2,9 @@
 # will have compiled files and executables
 /target/
 /gen/schemas
+# Materialised by scripts/package-sidecar.mjs at build time. Tracked
+# at the directory level via .gitkeep so Tauri's codegen finds the
+# resource path during `cargo check`; contents are ~400MB and are
+# regenerated on every `pnpm build` / `pnpm tauri build`.
+/sidecar-bundle/*
+!/sidecar-bundle/.gitkeep
