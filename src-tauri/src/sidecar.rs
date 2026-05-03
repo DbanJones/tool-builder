@@ -194,12 +194,15 @@ fn dispatch_line(line: &str, pending: &PendingMap, channels: &ChannelMap) {
   }
 }
 
-/// Send a JSON-RPC request to the sidecar and return its response.
-#[tauri::command]
-pub fn sidecar_rpc(
-  state: State<'_, SidecarState>,
+/// Internal: send a request and wait for a response with an optional
+/// timeout. `None` waits forever — required by streaming methods
+/// (orch.start / chat.start / research.start) whose final response
+/// only lands when the SDK session ends, which can be hours later.
+fn sidecar_rpc_inner(
+  state: &State<'_, SidecarState>,
   method: String,
   params: Value,
+  timeout: Option<std::time::Duration>,
 ) -> Result<Value, String> {
   let id = state.next_id.fetch_add(1, Ordering::Relaxed).to_string();
   let (tx, rx) = mpsc_channel();
@@ -211,26 +214,36 @@ pub fn sidecar_rpc(
 
   let request = serde_json::json!({ "id": id, "method": method, "params": params });
   let request_str = serde_json::to_string(&request).map_err(|e| format!("serialise: {e}"))?;
-  write_to_sidecar(&state, &request_str)?;
+  write_to_sidecar(state, &request_str)?;
 
-  // 30s defensive timeout — the sidecar processes one RPC at a time
-  // (better-sqlite3 + a single Node thread), and a long-running call
-  // (debug.scan with validate=true on a real codebase, deep research)
-  // would otherwise block this Tauri worker thread forever if the
-  // response went missing. The cap is generous enough to avoid false
-  // positives on legitimate slow calls — the scan auto-trigger now
-  // runs Layer 1 only specifically to keep this <5s.
-  match rx.recv_timeout(std::time::Duration::from_secs(30)) {
-    Ok(v) => Ok(v),
-    Err(_) => {
-      // Best-effort cleanup so a later, successful response doesn't try
-      // to write into a dropped sender.
-      if let Ok(mut map) = state.pending.lock() {
-        map.remove(&id);
-      }
-      Err(format!("sidecar response timed out after 30s for method={method}"))
+  let result = match timeout {
+    Some(d) => rx.recv_timeout(d).map_err(|_| {
+      format!("sidecar response timed out after {}s for method={method}", d.as_secs())
+    }),
+    None => rx.recv().map_err(|e| format!("sidecar response channel closed: {e}")),
+  };
+  if result.is_err() {
+    // Best-effort cleanup so a later, successful response doesn't try
+    // to write into a dropped sender.
+    if let Ok(mut map) = state.pending.lock() {
+      map.remove(&id);
     }
   }
+  result
+}
+
+/// Send a JSON-RPC request to the sidecar and return its response.
+/// Default 30s timeout — generous enough for any non-streaming call
+/// (DB read, file ingest, debug.scan in Layer 1 mode) on a real
+/// machine. Streaming calls go through sidecar_rpc_stream which is
+/// unbounded.
+#[tauri::command]
+pub fn sidecar_rpc(
+  state: State<'_, SidecarState>,
+  method: String,
+  params: Value,
+) -> Result<Value, String> {
+  sidecar_rpc_inner(&state, method, params, Some(std::time::Duration::from_secs(30)))
 }
 
 /// Streaming variant: same request shape, but the webview supplies a
@@ -253,7 +266,12 @@ pub fn sidecar_rpc_stream(
     .map_err(|e| format!("channels lock: {e}"))?
     .insert(stream_id.clone(), on_event);
 
-  let result = sidecar_rpc(state.clone(), method, params);
+  // Streaming calls (orch.start / chat.start / research.start) only
+  // resolve when the SDK session ends — minutes for a chat turn, hours
+  // for a build. Pass `None` so the rx.recv waits indefinitely; the
+  // webview's per-call cancellation (chat.stop / orch.stop / research
+  // .stop) is what unblocks it.
+  let result = sidecar_rpc_inner(&state, method, params, None);
 
   // Always unregister.
   if let Ok(mut map) = state.channels.lock() {
