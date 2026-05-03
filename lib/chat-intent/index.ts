@@ -22,6 +22,10 @@ export type ChatIntent =
   | "push"
   | "plan"
   | "annotate"
+  | "set_model_opus"
+  | "set_model_sonnet"
+  | "set_model_haiku"
+  | "set_model_default"
   | "none";
 
 export interface IntentContext {
@@ -116,6 +120,45 @@ const ANNOTATE_PHRASES = new Set([
   "markup",
 ]);
 
+// Model-swap shortcuts. Setting the model from chat applies the same
+// override the Settings page exposes — but to *every* stage at once.
+// For per-stage tuning the novice still goes to Settings; this is the
+// "give me opus quality across the board" or "drop to sonnet to save
+// money" shortcut. Always allowed (no state guard) — the new model
+// only takes effect on the next session start for each stage.
+const MODEL_OPUS_PHRASES = new Set([
+  "use opus",
+  "switch to opus",
+  "opus please",
+  "opus mode",
+  "set model opus",
+  "make it opus",
+]);
+const MODEL_SONNET_PHRASES = new Set([
+  "use sonnet",
+  "switch to sonnet",
+  "sonnet please",
+  "sonnet mode",
+  "set model sonnet",
+  "make it sonnet",
+]);
+const MODEL_HAIKU_PHRASES = new Set([
+  "use haiku",
+  "switch to haiku",
+  "haiku please",
+  "haiku mode",
+  "set model haiku",
+  "make it haiku",
+]);
+const MODEL_DEFAULT_PHRASES = new Set([
+  "default model",
+  "default models",
+  "reset model",
+  "reset models",
+  "use defaults",
+  "default ai",
+]);
+
 // Flow M (deep research). Offered in the chat the moment the interview
 // hits readiness; the novice can also type these phrases on their own.
 // Only valid before the build has started — running research mid-build
@@ -183,6 +226,13 @@ export function detectIntent(message: string, ctx: IntentContext): ChatIntent {
   // Plan is a tab-switch — always allowed, no state gate.
   if (PLAN_PHRASES.has(m)) return "plan";
 
+  // Model swaps — always allowed. They only affect future session
+  // starts, so an in-flight build/research keeps its current model.
+  if (MODEL_OPUS_PHRASES.has(m)) return "set_model_opus";
+  if (MODEL_SONNET_PHRASES.has(m)) return "set_model_sonnet";
+  if (MODEL_HAIKU_PHRASES.has(m)) return "set_model_haiku";
+  if (MODEL_DEFAULT_PHRASES.has(m)) return "set_model_default";
+
   return "none";
 }
 
@@ -211,6 +261,14 @@ export function ackForIntent(intent: ChatIntent, ctx?: IntentContext): string {
       return "Switching to the Plan & status tab.";
     case "annotate":
       return "Pausing the build (if running) and opening the annotate window.";
+    case "set_model_opus":
+      return "Switching every stage to Claude Opus 4.5. Takes effect on the next chat / build / research turn.";
+    case "set_model_sonnet":
+      return "Switching every stage to Claude Sonnet 4.5. Takes effect on the next chat / build / research turn.";
+    case "set_model_haiku":
+      return "Switching every stage to Claude Haiku 4.5. Fastest + cheapest, but only suited to short structured turns.";
+    case "set_model_default":
+      return "Resetting every stage to its built-in default. Settings page > Reset all to defaults does the same thing.";
     case "none":
       return "";
   }

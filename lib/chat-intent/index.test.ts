@@ -150,6 +150,28 @@ describe("detectIntent", () => {
     });
   });
 
+  describe("set_model (always allowed)", () => {
+    it.each(["use opus", "switch to opus", "opus please", "make it opus"])(
+      "matches %j → set_model_opus",
+      (msg) => {
+        expect(detectIntent(msg, preBuild)).toBe("set_model_opus");
+        expect(detectIntent(msg, running)).toBe("set_model_opus");
+      },
+    );
+    it.each(["use sonnet", "sonnet please"])("matches %j → set_model_sonnet", (msg) => {
+      expect(detectIntent(msg, preBuild)).toBe("set_model_sonnet");
+    });
+    it.each(["use haiku", "switch to haiku"])("matches %j → set_model_haiku", (msg) => {
+      expect(detectIntent(msg, preBuild)).toBe("set_model_haiku");
+    });
+    it.each(["default model", "reset model", "use defaults"])(
+      "matches %j → set_model_default",
+      (msg) => {
+        expect(detectIntent(msg, preBuild)).toBe("set_model_default");
+      },
+    );
+  });
+
   describe("plan (tab switch, always allowed)", () => {
     it.each(["plan", "show plan", "what's the plan"])("matches %j in any state", (msg) => {
       expect(detectIntent(msg, preBuild)).toBe("plan");
@@ -179,7 +201,20 @@ describe("detectIntent", () => {
 
 describe("ackForIntent", () => {
   it("returns a non-empty acknowledgement for every active intent", () => {
-    const intents = ["stop", "build", "research", "launch", "deploy", "push", "plan", "annotate"] as const;
+    const intents = [
+      "stop",
+      "build",
+      "research",
+      "launch",
+      "deploy",
+      "push",
+      "plan",
+      "annotate",
+      "set_model_opus",
+      "set_model_sonnet",
+      "set_model_haiku",
+      "set_model_default",
+    ] as const;
     for (const i of intents) {
       expect(ackForIntent(i, readyToBuild).length).toBeGreaterThan(0);
     }

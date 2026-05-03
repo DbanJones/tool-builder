@@ -162,3 +162,14 @@ export function resetStage(stage: StageId): void {
 export function resetAll(): void {
   writeSettings(DEFAULT_SETTINGS);
 }
+
+/** Apply one model id as the override for *every* stage. Used by the
+ *  chat shortcut "use opus" / "use sonnet" / "use haiku" — finer-
+ *  grained per-stage control still goes through the Settings page. */
+export function setAllStages(model: ModelId): void {
+  const next: Settings = { models: {} };
+  for (const stage of STAGE_IDS) {
+    next.models![stage] = model;
+  }
+  writeSettings(next);
+}

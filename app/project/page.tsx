@@ -107,7 +107,7 @@ import {
   type ResearchEvent,
 } from "@/lib/research";
 import type { Project } from "@/lib/project";
-import { resolveModel } from "@/lib/settings";
+import { resetAll as resetAllSettings, resolveModel, setAllStages } from "@/lib/settings";
 import { sidecarCall } from "@/lib/sidecar/client";
 import { hasMadeSentryDecision } from "@/lib/telemetry";
 
@@ -1947,12 +1947,32 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         case "annotate":
           void openAnnotation();
           return;
+        case "set_model_opus":
+          setAllStages("claude-opus-4-5");
+          return;
+        case "set_model_sonnet":
+          setAllStages("claude-sonnet-4-5");
+          return;
+        case "set_model_haiku":
+          setAllStages("claude-haiku-4-5");
+          return;
+        case "set_model_default":
+          resetAllSettings();
+          return;
       }
     }
 
-    // Freeform chat: block while a turn is streaming so the novice doesn't
-    // accidentally double-fire Claude. Intents are exempt (handled above).
-    if (status.kind === "streaming" || status.kind === "running") return;
+    // Freeform chat: while a turn is streaming we can't double-fire
+    // Claude, but we *can* tell the user we heard them. Echo + ack
+    // so the chat is never silent.
+    if (status.kind === "streaming" || status.kind === "running") {
+      echoUserMessage(
+        trimmed,
+        "Got it — finishing the current turn first. I'll come back to this once it's done.",
+      );
+      setInput("");
+      return;
+    }
 
     if (!hasStarted) {
       // Pre-build: interview chat. If a queued question exists, treat the
@@ -1962,7 +1982,9 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         submitAnswerForHead(trimmed);
         return;
       }
-      echoUserMessage(trimmed);
+      // Plain-language ack so the chat never goes silent waiting on
+      // Claude's first streamed token.
+      echoUserMessage(trimmed, "Thinking…");
       setInput("");
       void sendInterview(trimmed);
       return;

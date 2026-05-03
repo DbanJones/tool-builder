@@ -116,17 +116,13 @@ interface RightRailProps {
 export function RightRail(props: RightRailProps) {
   const { tab, onTabChange, hasStarted } = props;
 
+  // One-word labels — the panel content is self-explanatory and the
+  // shorter strip reads cleaner on a 400px rail.
   const tabs: { id: RightTab; label: string; visible: boolean }[] = [
-    // Spec absorbs Files (collapsable section above the spec preview).
-    { id: "spec", label: "Spec & files", visible: true },
-    { id: "plan", label: "Plan & status", visible: hasStarted },
-    // Preview is always available — the panel itself handles the
-    // not-yet-launched state with a Start preview button.
+    { id: "spec", label: "Spec", visible: true },
+    { id: "plan", label: "Status", visible: hasStarted },
     { id: "preview", label: "Preview", visible: true },
-    // Review absorbs Debug as a sub-tab (Coverage / Defects). Visible
-    // once a build has started — both the review.md and the defects
-    // table are populated post-build only.
-    { id: "review", label: "Review & defects", visible: hasStarted },
+    { id: "review", label: "Review", visible: hasStarted },
   ];
 
   // True fullscreen mode: when the preview is maximized AND the preview tab
@@ -337,17 +333,6 @@ function SpecPanel({
   const [filesOpen, setFilesOpen] = useState<boolean>(files.length > 0);
   return (
     <>
-      <div className="border-b px-4 py-3">
-        <h2 className="text-sm font-semibold">Spec & files</h2>
-        <p className="text-xs text-muted-foreground">
-          Rebuilt after each answer. Becomes read-only once the build starts. Lines marked
-          <span className="mx-1 inline-flex items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
-            <Sparkles className="h-2.5 w-2.5" aria-hidden="true" />
-            new
-          </span>
-          were added by deep research.
-        </p>
-      </div>
       {research !== null ? <ResearchProgressBlock research={research} /> : null}
       <FilesSection
         files={files}
@@ -609,13 +594,10 @@ function PlanAndStatusPanel({
   }, [recentActions.length]);
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="shrink-0 border-b px-4 py-3">
+      <div className="shrink-0 border-b px-4 py-2.5">
         <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Steps {total > 0 ? `· ${completed} / ${total}` : null}
+          Plan {total > 0 ? `· ${completed} / ${total}` : null}
         </h2>
-        <p className="text-[11px] text-muted-foreground">
-          The plan Dave is working through. Live status is below.
-        </p>
       </div>
       <div className="max-h-[45%] shrink-0 overflow-auto p-4">
         {plan.length === 0 ? (
