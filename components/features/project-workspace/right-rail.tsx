@@ -111,6 +111,10 @@ interface RightRailProps {
   // Files
   files: readonly IngestedFile[];
   onFilesDropped: (files: readonly IngestedFile[], rawFiles: readonly File[]) => void;
+  /** Drops a starter sentence into the chat and focuses it. Called from
+   *  the "Tell Dave to change…" affordance on the Idea tab so the novice
+   *  knows the spec is editable through chat, not a read-only document. */
+  onAskDaveToChangeIdea: () => void;
 }
 
 export function RightRail(props: RightRailProps) {
@@ -119,7 +123,9 @@ export function RightRail(props: RightRailProps) {
   // One-word labels — the panel content is self-explanatory and the
   // shorter strip reads cleaner on a 400px rail.
   const tabs: { id: RightTab; label: string; visible: boolean }[] = [
-    { id: "spec", label: "Spec", visible: true },
+    // "Idea" reads as the novice's own thing, not an engineer artifact
+    // (was "Spec"). Per UX review 2026-05-03 / D-040 follow-up.
+    { id: "spec", label: "Idea", visible: true },
     { id: "plan", label: "Status", visible: hasStarted },
     { id: "preview", label: "Preview", visible: true },
     { id: "review", label: "Review", visible: hasStarted },
@@ -172,6 +178,7 @@ export function RightRail(props: RightRailProps) {
             research={props.researchProgress}
             files={props.files}
             onFilesDropped={props.onFilesDropped}
+            onAskDaveToChangeIdea={props.onAskDaveToChangeIdea}
           />
         )}
         {tab === "plan" && (
@@ -321,11 +328,13 @@ function SpecPanel({
   research,
   files,
   onFilesDropped,
+  onAskDaveToChangeIdea,
 }: {
   spec: string;
   research: ResearchProgressView | null;
   files: readonly IngestedFile[];
   onFilesDropped: (files: readonly IngestedFile[], rawFiles: readonly File[]) => void;
+  onAskDaveToChangeIdea: () => void;
 }) {
   // Files section starts collapsed when empty (the file panel's empty
   // state is large), expanded when at least one file exists so the
@@ -340,6 +349,21 @@ function SpecPanel({
         open={filesOpen}
         onToggle={() => setFilesOpen((v) => !v)}
       />
+      <div className="flex shrink-0 items-center justify-between border-b bg-muted/30 px-4 py-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Your idea, in Dave's words
+        </span>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={onAskDaveToChangeIdea}
+          className="h-6 gap-1 px-2 text-[11px]"
+        >
+          <Pencil className="h-3 w-3" aria-hidden="true" />
+          Tell Dave to change…
+        </Button>
+      </div>
       <SpecBody spec={spec} />
     </>
   );
@@ -467,40 +491,177 @@ const RESEARCH_SECTION_MARKER_PREFIX = "<!-- via deep research";
 function SpecBody({ spec }: { spec: string }) {
   if (spec.trim().length === 0) {
     return (
-      <pre className="flex-1 overflow-auto whitespace-pre-wrap break-words bg-muted/40 p-4 text-xs leading-relaxed">
-        _(no answers recorded yet)_
-      </pre>
+      <div className="flex-1 overflow-auto bg-background p-4 text-xs italic text-muted-foreground">
+        Dave will write up your idea here as you answer the interview questions.
+      </div>
     );
   }
+  return <SpecMarkdown spec={spec} />;
+}
+
+// Lightweight markdown renderer for the Idea tab. Recognises headings
+// (#, ##, ###), bullets (- or *), inline **bold** and `code`. Anything
+// else falls through as paragraph text. Research-added lines retain
+// the inline highlight so the deep-research add-ons stay visible.
+function SpecMarkdown({ spec }: { spec: string }) {
   const lines = spec.split("\n");
-  return (
-    <div className="flex-1 overflow-auto bg-muted/40 p-4 font-mono text-xs leading-relaxed">
-      {lines.map((line, i) => {
-        const isResearchAdded =
-          line.includes(RESEARCH_INLINE_MARKER) ||
-          line.trim().startsWith(RESEARCH_SECTION_MARKER_PREFIX);
-        if (isResearchAdded) {
-          return (
-            <div
-              key={i}
-              className="-mx-2 my-px rounded-sm bg-primary/10 px-2 py-0.5 text-foreground"
-            >
+  const blocks: ReactNode[] = [];
+  let bulletBuf: { text: string; researchAdded: boolean }[] = [];
+  let paraBuf: { text: string; researchAdded: boolean }[] = [];
+  let blockIdx = 0;
+  const flushBullets = (): void => {
+    if (bulletBuf.length === 0) return;
+    const items = bulletBuf;
+    blocks.push(
+      <ul key={`b-${blockIdx++}`} className="my-2 list-disc space-y-1 pl-5">
+        {items.map((b, i) => (
+          <li
+            key={i}
+            className={
+              b.researchAdded ? "rounded-sm bg-primary/10 px-1" : undefined
+            }
+          >
+            {b.researchAdded ? (
               <Sparkles
                 className="mr-1 inline-block h-2.5 w-2.5 text-primary"
                 aria-hidden="true"
               />
-              <span className="whitespace-pre-wrap break-words">{line}</span>
-            </div>
-          );
+            ) : null}
+            {renderInlineMd(b.text)}
+          </li>
+        ))}
+      </ul>,
+    );
+    bulletBuf = [];
+  };
+  const flushPara = (): void => {
+    if (paraBuf.length === 0) return;
+    const text = paraBuf.map((p) => p.text).join(" ");
+    const researchAdded = paraBuf.some((p) => p.researchAdded);
+    blocks.push(
+      <p
+        key={`b-${blockIdx++}`}
+        className={
+          "my-2 leading-relaxed" +
+          (researchAdded ? " -mx-2 rounded-sm bg-primary/10 px-2" : "")
         }
-        return (
-          <div key={i} className="whitespace-pre-wrap break-words">
-            {line.length === 0 ? " " : line}
-          </div>
-        );
-      })}
+      >
+        {researchAdded ? (
+          <Sparkles
+            className="mr-1 inline-block h-3 w-3 text-primary"
+            aria-hidden="true"
+          />
+        ) : null}
+        {renderInlineMd(text)}
+      </p>,
+    );
+    paraBuf = [];
+  };
+  const flushAll = (): void => {
+    flushBullets();
+    flushPara();
+  };
+  for (const raw of lines) {
+    const line = raw.replace(/\s+$/, "");
+    const trimmed = line.trim();
+    const researchAdded =
+      line.includes(RESEARCH_INLINE_MARKER) ||
+      trimmed.startsWith(RESEARCH_SECTION_MARKER_PREFIX);
+    if (trimmed.length === 0) {
+      flushAll();
+      continue;
+    }
+    if (trimmed.startsWith(RESEARCH_SECTION_MARKER_PREFIX)) continue;
+    const headingMatch = /^(#{1,4})\s+(.*)$/.exec(trimmed);
+    if (headingMatch) {
+      flushAll();
+      const level = headingMatch[1]!.length;
+      const text = headingMatch[2]!;
+      const headingClass =
+        level === 1
+          ? "mt-1 text-base font-bold"
+          : level === 2
+            ? "mt-3 text-sm font-semibold"
+            : "mt-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground";
+      blocks.push(
+        <div
+          key={`b-${blockIdx++}`}
+          className={
+            headingClass +
+            (researchAdded ? " -mx-2 rounded-sm bg-primary/10 px-2" : "")
+          }
+        >
+          {researchAdded ? (
+            <Sparkles
+              className="mr-1 inline-block h-3 w-3 text-primary"
+              aria-hidden="true"
+            />
+          ) : null}
+          {renderInlineMd(text)}
+        </div>,
+      );
+      continue;
+    }
+    const bulletMatch = /^[-*]\s+(.*)$/.exec(trimmed);
+    if (bulletMatch) {
+      flushPara();
+      bulletBuf.push({ text: bulletMatch[1]!, researchAdded });
+      continue;
+    }
+    flushBullets();
+    paraBuf.push({ text: trimmed, researchAdded });
+  }
+  flushAll();
+  return (
+    <div className="flex-1 overflow-auto bg-background p-4 text-xs leading-relaxed text-foreground">
+      {blocks}
     </div>
   );
+}
+
+// Inline-token renderer: handles **bold** and `code` only. Anything else
+// falls through as plain text. Returns a flat ReactNode list.
+function renderInlineMd(s: string): ReactNode {
+  const out: ReactNode[] = [];
+  let buf = "";
+  let i = 0;
+  const flush = (): void => {
+    if (buf.length > 0) {
+      out.push(buf);
+      buf = "";
+    }
+  };
+  while (i < s.length) {
+    if (s.startsWith("**", i)) {
+      const end = s.indexOf("**", i + 2);
+      if (end !== -1) {
+        flush();
+        out.push(<strong key={`b-${i}`}>{s.slice(i + 2, end)}</strong>);
+        i = end + 2;
+        continue;
+      }
+    }
+    if (s[i] === "`") {
+      const end = s.indexOf("`", i + 1);
+      if (end !== -1) {
+        flush();
+        out.push(
+          <code
+            key={`c-${i}`}
+            className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]"
+          >
+            {s.slice(i + 1, end)}
+          </code>,
+        );
+        i = end + 1;
+        continue;
+      }
+    }
+    buf += s[i];
+    i += 1;
+  }
+  flush();
+  return out;
 }
 
 // Combined Plan + live Status panel. Top half: TodoWrite plan with steps

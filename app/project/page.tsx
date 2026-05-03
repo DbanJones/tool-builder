@@ -2468,37 +2468,36 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
               {readiness.fastPathAnswered} / {readiness.fastPathTotal} answered
             </span>
           ) : null}
+          {/* Primary verb — promoted out of the Actions dropdown so the
+              novice's most-needed button (Build it / Resume / Stop) is
+              visible in one click instead of two. UX review 2026-05-03. */}
+          {isRunning ? (
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              onClick={() => void stopBuild()}
+              title="Stop the build"
+            >
+              <Square className="mr-1.5 h-3 w-3" aria-hidden="true" />
+              Stop the build
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => void startBuild()}
+              disabled={ceiling.state === "stop" || !canStartOrResume}
+              title={!canStartOrResume ? readiness.reason : undefined}
+            >
+              <Play className="mr-1.5 h-3 w-3" aria-hidden="true" />
+              {hasStarted ? "Resume build" : "Build it"}
+            </Button>
+          )}
           <WorkspaceActionsMenu
-            triggerLabel={
-              isRunning
-                ? "Stop / Actions"
-                : hasStarted
-                  ? "Resume / Actions"
-                  : "Build / Actions"
-            }
+            triggerLabel="Actions"
             items={(() => {
               const items: ActionItem[] = [];
-              // Primary: Build / Resume / Stop. Same gating logic as
-              // before, just no longer a standalone button.
-              if (isRunning) {
-                items.push({
-                  id: "stop",
-                  label: "Stop the build",
-                  icon: <Square className="h-3 w-3" />,
-                  onSelect: () => void stopBuild(),
-                  destructive: true,
-                  title: "Stop the build",
-                });
-              } else {
-                items.push({
-                  id: "build",
-                  label: hasStarted ? "Resume build" : "Build it",
-                  icon: <Play className="h-3 w-3" />,
-                  onSelect: () => void startBuild(),
-                  disabled: ceiling.state === "stop" || !canStartOrResume,
-                  ...(!canStartOrResume ? { title: readiness.reason } : {}),
-                });
-              }
               // Deep research — pre-build OR between turns of a started build.
               if (!isRunning && researchUi.kind === "idle" && (canStartOrResume || hasStarted)) {
                 items.push({
@@ -2510,7 +2509,6 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
                   title: hasStarted
                     ? "Re-run deep research against the current spec — adopted changes survive on Resume"
                     : "Spend 2-5 min researching competitors / edge cases before any code is written",
-                  separatorBefore: true,
                 });
               }
               // Annotate — once any build session has started.
@@ -2791,6 +2789,18 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
           lastDebugScannedAt={lastDebugScannedAt}
           files={files}
           onFilesDropped={handleFilesDropped}
+          onAskDaveToChangeIdea={() => {
+            const starter = "Change ";
+            setInput((prev) => (prev.length === 0 ? starter : prev));
+            requestAnimationFrame(() => {
+              const el = inputRef.current;
+              if (!el) return;
+              el.focus();
+              const end = el.value.length;
+              el.selectionStart = end;
+              el.selectionEnd = end;
+            });
+          }}
           />
         }
       />
