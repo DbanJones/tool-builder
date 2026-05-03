@@ -582,8 +582,33 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     }
     let cancelled = false;
     void (async () => {
-      const r = await sidecarCall<Project | null>("projects.get", { id: projectId });
+      // 8s defensive timeout: if the sidecar bridge is wedged the page
+      // would otherwise sit on "Loading project…" forever. Surfacing a
+      // clear error tells the user to restart instead of staring at a
+      // spinner. Normal `projects.get` returns in well under 100ms.
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("RPC_TIMEOUT")), 8000),
+      );
+      const r = await Promise.race([
+        sidecarCall<Project | null>("projects.get", { id: projectId }),
+        timeoutPromise,
+      ]).catch((e: unknown) => {
+        // eslint-disable-next-line no-console
+        console.error("[ProjectWorkspace] projects.get failed:", e);
+        return e instanceof Error && e.message === "RPC_TIMEOUT"
+          ? ({ kind: "timeout" } as const)
+          : ({ kind: "throw", error: e } as const);
+      });
       if (cancelled) return;
+      // Non-Result branches (timeout / thrown) hit the load-error path.
+      if ("kind" in r && (r.kind === "timeout" || r.kind === "throw")) {
+        setLoadError(
+          r.kind === "timeout"
+            ? "Sidecar didn't respond after 8s. Restart the Builder (close the window and re-launch)."
+            : `Couldn't load project: ${r.error instanceof Error ? r.error.message : String(r.error)}`,
+        );
+        return;
+      }
       r.match(
         (p) => {
           if (p === null) {
