@@ -2632,70 +2632,35 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
       ) : null}
 
       <BannerStack
-        deployStatus={deployStatus}
-        exportStatus={exportStatus}
-        onDismissDeploy={() => setDeployStatus({ kind: "idle" })}
-        onDismissExport={() => setExportStatus({ kind: "idle" })}
-        showSentryPrompt={showSentryPrompt}
-        onSentryDecided={() => setShowSentryPrompt(false)}
-        ceiling={ceiling}
-        pendingFileApproval={pendingFileApprovals[0] ?? null}
-        pendingFileApprovalCount={pendingFileApprovals.length}
-        onApproveFile={approveFileForSpec}
-        onSkipFile={skipFileForSpec}
-        recoveredFromCrash={recoveredFromCrash && !recoveredBannerDismissed}
-        onDismissRecoveredBanner={() => setRecoveredBannerDismissed(true)}
-        openPermissions={openPermissions}
-        onPermissionResolved={(id) =>
-          setOpenPermissions((prev) => prev.filter((p) => p.id !== id))
-        }
-        openDrifts={openDrifts}
-        projectPath={project.path}
-        onDriftResolved={(resolved) =>
-          setOpenDrifts((prev) => prev.filter((d) => d.id !== resolved.id))
-        }
+        notifications={buildWorkspaceNotifications({
+          deployStatus,
+          onDismissDeploy: () => setDeployStatus({ kind: "idle" }),
+          exportStatus,
+          onDismissExport: () => setExportStatus({ kind: "idle" }),
+          showSentryPrompt,
+          onSentryDecided: () => setShowSentryPrompt(false),
+          ceiling,
+          pendingFileApproval: pendingFileApprovals[0] ?? null,
+          pendingFileApprovalCount: pendingFileApprovals.length,
+          onApproveFile: approveFileForSpec,
+          onSkipFile: skipFileForSpec,
+          recoveredFromCrash: recoveredFromCrash && !recoveredBannerDismissed,
+          onDismissRecoveredBanner: () => setRecoveredBannerDismissed(true),
+          openPermissions,
+          onPermissionResolved: (id) =>
+            setOpenPermissions((prev) => prev.filter((p) => p.id !== id)),
+          openDrifts,
+          projectPath: project.path,
+          onDriftResolved: (resolved) =>
+            setOpenDrifts((prev) => prev.filter((d) => d.id !== resolved.id)),
+          reviewMarkdown,
+          reviewBannerDismissed,
+          onDismissReviewBanner: () => setReviewBannerDismissed(true),
+          onFocusChat: () =>
+            requestAnimationFrame(() => inputRef.current?.focus()),
+          onOpenAnnotation: () => void openAnnotation(),
+        })}
       />
-
-      {reviewMarkdown !== null && !reviewBannerDismissed ? (
-        <Alert className="relative mx-4 mt-3 mb-1 pr-9">
-          <AlertTitle>First-pass build done — review and iterate</AlertTitle>
-          <AlertDescription>
-            <p>
-              Try the build below. When you spot something to change, leave a
-              comment in the chat or annotate a screenshot — Dave picks up
-              from where it left off.
-            </p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => {
-                  requestAnimationFrame(() => inputRef.current?.focus());
-                }}
-              >
-                Review with comments
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => void openAnnotation()}
-              >
-                <Pencil className="mr-1 h-3 w-3" aria-hidden="true" />
-                Annotate a screenshot
-              </Button>
-            </div>
-          </AlertDescription>
-          <button
-            type="button"
-            onClick={() => setReviewBannerDismissed(true)}
-            aria-label="Dismiss review banner"
-            className="absolute right-2 top-2 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-          >
-            <X className="h-3.5 w-3.5" aria-hidden="true" />
-          </button>
-        </Alert>
-      ) : null}
 
       <ResizableSplit
         rightWidth={rightRailWidth}
@@ -2950,18 +2915,27 @@ function chatStatusFor(status: Status): ChatStatus {
   return { kind: "idle" };
 }
 
-interface BannerStackProps {
+// One workspace-level notification. Higher `priority` floats earlier.
+// `render` returns the existing Alert / banner JSX so the visual design
+// of each banner stays untouched — only the stacking semantics change.
+export interface WorkspaceNotification {
+  id: string;
+  priority: number;
+  render: () => React.ReactNode;
+}
+
+interface BuildNotificationsArgs {
   deployStatus:
     | { kind: "idle" }
     | { kind: "running" }
     | { kind: "success"; url: string }
     | { kind: "error"; message: string };
+  onDismissDeploy: () => void;
   exportStatus:
     | { kind: "idle" }
     | { kind: "running" }
     | { kind: "success"; url: string }
     | { kind: "error"; message: string };
-  onDismissDeploy: () => void;
   onDismissExport: () => void;
   showSentryPrompt: boolean;
   onSentryDecided: () => void;
@@ -2982,6 +2956,286 @@ interface BannerStackProps {
   openDrifts: readonly DriftEvent[];
   projectPath: string;
   onDriftResolved: (resolved: DriftEvent) => void;
+  reviewMarkdown: string | null;
+  reviewBannerDismissed: boolean;
+  onDismissReviewBanner: () => void;
+  onFocusChat: () => void;
+  onOpenAnnotation: () => void;
+}
+
+// Build the prioritised notification list. Priority bands:
+//   100  drift event (blocks phase advancement, novice intervention)
+//    95  PII file approval (privacy / consent)
+//    90  cost ceiling: stop
+//    85  deploy / export errors
+//    80  permission request
+//    75  file approval (no PII)
+//    70  recovered from crash
+//    60  post-build review CTA
+//    55  cost ceiling: warn
+//    40  deploy / export success
+//    30  sentry prompt
+function buildWorkspaceNotifications(
+  a: BuildNotificationsArgs,
+): readonly WorkspaceNotification[] {
+  const out: WorkspaceNotification[] = [];
+  if (a.openDrifts.length > 0 && a.openDrifts[0]) {
+    const head = a.openDrifts[0];
+    out.push({
+      id: `drift-${head.id}`,
+      priority: 100,
+      render: () => (
+        <DriftBanner
+          event={head}
+          projectPath={a.projectPath}
+          totalOpen={a.openDrifts.length}
+          onResolved={a.onDriftResolved}
+        />
+      ),
+    });
+  }
+  if (a.pendingFileApproval) {
+    const f = a.pendingFileApproval;
+    out.push({
+      id: `file-approval-${f.fileId}`,
+      priority: f.hasPiiWarning ? 95 : 75,
+      render: () => (
+        <Alert
+          variant={f.hasPiiWarning ? "destructive" : "default"}
+          className="mx-4 mt-3 mb-1"
+          role={f.hasPiiWarning ? "alert" : undefined}
+        >
+          <AlertTitle>
+            {f.hasPiiWarning
+              ? "Review personal data before using this file"
+              : "Use this file in the spec?"}
+            {a.pendingFileApprovalCount > 1
+              ? ` (${a.pendingFileApprovalCount} pending)`
+              : ""}
+          </AlertTitle>
+          <AlertDescription>
+            <p className="mb-2 text-sm font-medium">{f.name}</p>
+            <p className="mb-3 max-h-24 overflow-auto whitespace-pre-wrap text-xs">
+              {f.summary}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" onClick={() => a.onApproveFile(f.fileId)}>
+                {f.hasPiiWarning ? "Use reviewed summary" : "Use in spec"}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => a.onSkipFile(f.fileId)}
+              >
+                Not for now
+              </Button>
+            </div>
+          </AlertDescription>
+        </Alert>
+      ),
+    });
+  }
+  if (a.ceiling.state === "stop") {
+    out.push({
+      id: "ceiling-stop",
+      priority: 90,
+      render: () => (
+        <Alert variant="destructive" className="mx-4 mt-3 mb-1">
+          <AlertTitle>Spend cap reached</AlertTitle>
+          <AlertDescription>{a.ceiling.message}</AlertDescription>
+        </Alert>
+      ),
+    });
+  }
+  if (a.deployStatus.kind === "error") {
+    const msg = a.deployStatus.message;
+    out.push({
+      id: "deploy-error",
+      priority: 85,
+      render: () => (
+        <Alert variant="destructive" className="relative mx-4 mt-3 mb-1 py-2 pr-9">
+          <AlertTitle className="text-xs">Deploy failed</AlertTitle>
+          <AlertDescription className="text-xs">{msg}</AlertDescription>
+          <DismissBannerButton
+            onClick={a.onDismissDeploy}
+            label="Dismiss deploy error"
+            variant="destructive"
+          />
+        </Alert>
+      ),
+    });
+  }
+  if (a.exportStatus.kind === "error") {
+    const msg = a.exportStatus.message;
+    out.push({
+      id: "export-error",
+      priority: 85,
+      render: () => (
+        <Alert variant="destructive" className="relative mx-4 mt-3 mb-1 py-2 pr-9">
+          <AlertTitle className="text-xs">GitHub push failed</AlertTitle>
+          <AlertDescription className="text-xs">{msg}</AlertDescription>
+          <DismissBannerButton
+            onClick={a.onDismissExport}
+            label="Dismiss push error"
+            variant="destructive"
+          />
+        </Alert>
+      ),
+    });
+  }
+  if (a.openPermissions.length > 0 && a.openPermissions[0]) {
+    const head = a.openPermissions[0];
+    out.push({
+      id: `permission-${head.id}`,
+      priority: 80,
+      render: () => (
+        <PermissionPromptBanner
+          request={head}
+          totalOpen={a.openPermissions.length}
+          onResolved={a.onPermissionResolved}
+        />
+      ),
+    });
+  }
+  if (a.recoveredFromCrash) {
+    out.push({
+      id: "recovered",
+      priority: 70,
+      render: () => (
+        <Alert className="relative mx-4 mt-3 mb-1 pr-9">
+          <AlertTitle>Recovered from crash</AlertTitle>
+          <AlertDescription>
+            The previous session ended unexpectedly. Click Resume to continue
+            from where it left off, or Stop to drop the session and start
+            fresh.
+          </AlertDescription>
+          <button
+            type="button"
+            onClick={a.onDismissRecoveredBanner}
+            aria-label="Dismiss"
+            title="Dismiss"
+            className="absolute right-2 top-2 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <X className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        </Alert>
+      ),
+    });
+  }
+  if (a.reviewMarkdown !== null && !a.reviewBannerDismissed) {
+    out.push({
+      id: "review-cta",
+      priority: 60,
+      render: () => (
+        <Alert className="relative mx-4 mt-3 mb-1 pr-9">
+          <AlertTitle>First-pass build done — review and iterate</AlertTitle>
+          <AlertDescription>
+            <p>
+              Try the build below. When you spot something to change, leave a
+              comment in the chat or annotate a screenshot — Dave picks up
+              from where it left off.
+            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button type="button" size="sm" onClick={a.onFocusChat}>
+                Review with comments
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={a.onOpenAnnotation}
+              >
+                <Pencil className="mr-1 h-3 w-3" aria-hidden="true" />
+                Annotate a screenshot
+              </Button>
+            </div>
+          </AlertDescription>
+          <button
+            type="button"
+            onClick={a.onDismissReviewBanner}
+            aria-label="Dismiss review banner"
+            className="absolute right-2 top-2 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <X className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        </Alert>
+      ),
+    });
+  }
+  if (a.ceiling.state === "warn") {
+    out.push({
+      id: "ceiling-warn",
+      priority: 55,
+      render: () => (
+        <Alert className="mx-4 mt-3 mb-1">
+          <AlertTitle>Approaching spend cap</AlertTitle>
+          <AlertDescription>{a.ceiling.message}</AlertDescription>
+        </Alert>
+      ),
+    });
+  }
+  if (a.deployStatus.kind === "success") {
+    const url = a.deployStatus.url;
+    out.push({
+      id: "deploy-success",
+      priority: 40,
+      render: () => (
+        <Alert className="relative mx-4 mt-3 mb-1 py-2 pr-9">
+          <AlertTitle className="text-xs">Preview deployed</AlertTitle>
+          <AlertDescription className="text-xs">
+            Copied to clipboard:{" "}
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+            >
+              {url}
+            </a>
+          </AlertDescription>
+          <DismissBannerButton
+            onClick={a.onDismissDeploy}
+            label="Dismiss preview banner"
+          />
+        </Alert>
+      ),
+    });
+  }
+  if (a.exportStatus.kind === "success") {
+    const url = a.exportStatus.url;
+    out.push({
+      id: "export-success",
+      priority: 40,
+      render: () => (
+        <Alert className="relative mx-4 mt-3 mb-1 py-2 pr-9">
+          <AlertTitle className="text-xs">Pushed to GitHub</AlertTitle>
+          <AlertDescription className="text-xs">
+            Copied to clipboard:{" "}
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+            >
+              {url}
+            </a>
+          </AlertDescription>
+          <DismissBannerButton
+            onClick={a.onDismissExport}
+            label="Dismiss push banner"
+          />
+        </Alert>
+      ),
+    });
+  }
+  if (a.showSentryPrompt) {
+    out.push({
+      id: "sentry-prompt",
+      priority: 30,
+      render: () => <SentryPrompt onDecided={a.onSentryDecided} />,
+    });
+  }
+  return out;
 }
 
 function DismissBannerButton({
@@ -3075,145 +3329,34 @@ function ConcurrentBuildPromptDialog({
   );
 }
 
-function BannerStack(props: BannerStackProps) {
+function BannerStack({
+  notifications,
+}: {
+  notifications: readonly WorkspaceNotification[];
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const sorted = [...notifications].sort((a, b) => b.priority - a.priority);
+  if (sorted.length === 0) return null;
+  const head = sorted[0]!;
+  const rest = sorted.slice(1);
   return (
     <div className="shrink-0">
-      {props.deployStatus.kind === "success" ? (
-        <Alert className="relative mx-4 mt-3 mb-1 py-2 pr-9">
-          <AlertTitle className="text-xs">Preview deployed</AlertTitle>
-          <AlertDescription className="text-xs">
-            Copied to clipboard:{" "}
-            <a
-              href={props.deployStatus.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline"
-            >
-              {props.deployStatus.url}
-            </a>
-          </AlertDescription>
-          <DismissBannerButton onClick={props.onDismissDeploy} label="Dismiss preview banner" />
-        </Alert>
-      ) : null}
-      {props.deployStatus.kind === "error" ? (
-        <Alert variant="destructive" className="relative mx-4 mt-3 mb-1 py-2 pr-9">
-          <AlertTitle className="text-xs">Deploy failed</AlertTitle>
-          <AlertDescription className="text-xs">{props.deployStatus.message}</AlertDescription>
-          <DismissBannerButton
-            onClick={props.onDismissDeploy}
-            label="Dismiss deploy error"
-            variant="destructive"
-          />
-        </Alert>
-      ) : null}
-      {props.exportStatus.kind === "success" ? (
-        <Alert className="relative mx-4 mt-3 mb-1 py-2 pr-9">
-          <AlertTitle className="text-xs">Pushed to GitHub</AlertTitle>
-          <AlertDescription className="text-xs">
-            Copied to clipboard:{" "}
-            <a
-              href={props.exportStatus.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline"
-            >
-              {props.exportStatus.url}
-            </a>
-          </AlertDescription>
-          <DismissBannerButton onClick={props.onDismissExport} label="Dismiss push banner" />
-        </Alert>
-      ) : null}
-      {props.exportStatus.kind === "error" ? (
-        <Alert variant="destructive" className="relative mx-4 mt-3 mb-1 py-2 pr-9">
-          <AlertTitle className="text-xs">GitHub push failed</AlertTitle>
-          <AlertDescription className="text-xs">{props.exportStatus.message}</AlertDescription>
-          <DismissBannerButton
-            onClick={props.onDismissExport}
-            label="Dismiss push error"
-            variant="destructive"
-          />
-        </Alert>
-      ) : null}
-      {props.showSentryPrompt ? <SentryPrompt onDecided={props.onSentryDecided} /> : null}
-      {props.ceiling.state === "warn" || props.ceiling.state === "stop" ? (
-        <Alert
-          variant={props.ceiling.state === "stop" ? "destructive" : "default"}
-          className="mx-4 mt-3 mb-1"
-        >
-          <AlertTitle>
-            {props.ceiling.state === "stop" ? "Spend cap reached" : "Approaching spend cap"}
-          </AlertTitle>
-          <AlertDescription>{props.ceiling.message}</AlertDescription>
-        </Alert>
-      ) : null}
-      {props.pendingFileApproval ? (
-        <Alert
-          variant={props.pendingFileApproval.hasPiiWarning ? "destructive" : "default"}
-          className="mx-4 mt-3 mb-1"
-          role={props.pendingFileApproval.hasPiiWarning ? "alert" : undefined}
-        >
-          <AlertTitle>
-            {props.pendingFileApproval.hasPiiWarning
-              ? "Review personal data before using this file"
-              : "Use this file in the spec?"}
-            {props.pendingFileApprovalCount > 1 ? ` (${props.pendingFileApprovalCount} pending)` : ""}
-          </AlertTitle>
-          <AlertDescription>
-            <p className="mb-2 text-sm font-medium">{props.pendingFileApproval.name}</p>
-            <p className="mb-3 max-h-24 overflow-auto whitespace-pre-wrap text-xs">
-              {props.pendingFileApproval.summary}
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                size="sm"
-                onClick={() => props.onApproveFile(props.pendingFileApproval!.fileId)}
-              >
-                {props.pendingFileApproval.hasPiiWarning ? "Use reviewed summary" : "Use in spec"}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => props.onSkipFile(props.pendingFileApproval!.fileId)}
-              >
-                Not for now
-              </Button>
-            </div>
-          </AlertDescription>
-        </Alert>
-      ) : null}
-      {props.recoveredFromCrash ? (
-        <Alert className="relative mx-4 mt-3 mb-1 pr-9">
-          <AlertTitle>Recovered from crash</AlertTitle>
-          <AlertDescription>
-            The previous session ended unexpectedly. Click Resume to continue from where it left
-            off, or Stop to drop the session and start fresh.
-          </AlertDescription>
+      <div key={head.id}>{head.render()}</div>
+      {rest.length > 0 ? (
+        <div className="mx-4 -mt-1 mb-1 flex justify-end">
           <button
             type="button"
-            onClick={props.onDismissRecoveredBanner}
-            aria-label="Dismiss"
-            title="Dismiss"
-            className="absolute right-2 top-2 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+            onClick={() => setExpanded((v) => !v)}
+            aria-expanded={expanded}
+            className="rounded-md border bg-background px-2 py-0.5 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
           >
-            <X className="h-3.5 w-3.5" aria-hidden="true" />
+            {expanded ? "Hide" : `+${rest.length} more`}
           </button>
-        </Alert>
+        </div>
       ) : null}
-      {props.openPermissions.length > 0 && props.openPermissions[0] ? (
-        <PermissionPromptBanner
-          request={props.openPermissions[0]}
-          totalOpen={props.openPermissions.length}
-          onResolved={(id) => props.onPermissionResolved(id)}
-        />
-      ) : null}
-      {props.openDrifts.length > 0 && props.openDrifts[0] ? (
-        <DriftBanner
-          event={props.openDrifts[0]}
-          projectPath={props.projectPath}
-          totalOpen={props.openDrifts.length}
-          onResolved={props.onDriftResolved}
-        />
-      ) : null}
+      {expanded
+        ? rest.map((n) => <div key={n.id}>{n.render()}</div>)
+        : null}
     </div>
   );
 }
