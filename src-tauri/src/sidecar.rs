@@ -61,6 +61,13 @@ impl SidecarState {
 /// cwd ends in `src-tauri`; everywhere else cwd IS the project root.
 pub fn project_root_from_cwd() -> Result<PathBuf, String> {
   let cwd = std::env::current_dir().map_err(|e| format!("cwd: {e}"))?;
+  // A packaged macOS .app launched from Finder has cwd="/"; that is
+  // NOT a meaningful "Builder source folder" — treat it as not-in-dev
+  // so callers can skip dev-only checks (e.g. the
+  // build_capability_check "inside Builder source" guard).
+  if cwd == PathBuf::from("/") {
+    return Err("not running from a dev tree (cwd is filesystem root)".to_string());
+  }
   if cwd.file_name().and_then(|n| n.to_str()) == Some("src-tauri") {
     cwd
       .parent()
