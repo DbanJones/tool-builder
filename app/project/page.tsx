@@ -396,29 +396,67 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
   const runDebugScanNow = useCallback(async () => {
     if (!project) return;
     setIsDebugScanning(true);
+    // Live-tail entry so the novice sees the scan in the status rail
+    // alongside everything else, not just on the Debug panel button.
+    // Three checkpoints: start, finish, summary of top findings.
+    const started = Date.now();
+    const tailLog = (
+      severity: "info" | "warn" | "error",
+      message: string,
+    ): void => {
+      getBridgeListener().pushServerEvent({
+        kind: "server",
+        source: "stdout",
+        severity,
+        message: `[debug] ${message}`.slice(0, 400),
+        ts: Date.now(),
+      });
+    };
+    tailLog(
+      "info",
+      "Scan starting — Layer 1 detectors (tsc, hallucinated imports, secrets, RLS, client-side auth, env-leak, slopsquat). Typically ~5s.",
+    );
     try {
-      // Layer 1 only by default. Layer 2 (validator) is one SDK call
-      // per finding and serialises behind every other sidecar RPC, so
-      // auto-running it on project open or phase-boundary blocks the
-      // workspace for 30-60s on a real codebase. Future: expose an
-      // explicit "Validate findings" toggle on the Debug panel that
-      // re-runs the scan with validate=true on demand.
       const scan = await runDebugScan({ projectId: project.id });
       if (scan.isErr()) {
-        // Surface via the same console pattern as other transient errors;
-        // future G6 follow-up can route this to a toast.
+        tailLog("error", `Scan failed: ${scan.error.message}`);
         // eslint-disable-next-line no-console
         console.error("debug.scan failed:", scan.error.message);
         return;
       }
+      const elapsed = Date.now() - started;
+      const findingCount = scan.value.findingCount;
+      tailLog(
+        findingCount > 0 ? "warn" : "info",
+        `Scan complete in ${(elapsed / 1000).toFixed(1)}s — ${findingCount} finding${findingCount === 1 ? "" : "s"}.`,
+      );
       const list = await listDefects({ projectId: project.id });
       if (list.isErr()) {
+        tailLog("error", `Couldn't load defects: ${list.error.message}`);
         // eslint-disable-next-line no-console
         console.error("debug.list failed:", list.error.message);
         return;
       }
       setDefects(list.value);
       setLastDebugScannedAt(Date.now());
+      // Surface the top 3 findings (by priority, already ranked by the
+      // scan) so the novice sees what to act on without flipping to
+      // the Defects sub-tab.
+      const topByPriority = [...list.value]
+        .sort((a, b) => b.priority - a.priority)
+        .slice(0, 3);
+      for (const d of topByPriority) {
+        tailLog(
+          d.band === "critical" || d.band === "high" ? "error" : "warn",
+          `${d.band.toUpperCase()} · ${d.ruleId} · ${d.file}:${d.lineStart} — ${d.humanExplanation.slice(0, 140)}`,
+        );
+      }
+      if (list.value.length > topByPriority.length) {
+        tailLog(
+          "info",
+          `+${list.value.length - topByPriority.length} more in the Defects sub-tab.`,
+        );
+      }
     } finally {
       setIsDebugScanning(false);
     }
