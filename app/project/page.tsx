@@ -393,11 +393,13 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     if (!project) return;
     setIsDebugScanning(true);
     try {
-      const scan = await runDebugScan({
-        projectId: project.id,
-        validate: true,
-        validatorModel: resolveModel("debug_validator"),
-      });
+      // Layer 1 only by default. Layer 2 (validator) is one SDK call
+      // per finding and serialises behind every other sidecar RPC, so
+      // auto-running it on project open or phase-boundary blocks the
+      // workspace for 30-60s on a real codebase. Future: expose an
+      // explicit "Validate findings" toggle on the Debug panel that
+      // re-runs the scan with validate=true on demand.
+      const scan = await runDebugScan({ projectId: project.id });
       if (scan.isErr()) {
         // Surface via the same console pattern as other transient errors;
         // future G6 follow-up can route this to a toast.

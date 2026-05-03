@@ -213,8 +213,24 @@ pub fn sidecar_rpc(
   let request_str = serde_json::to_string(&request).map_err(|e| format!("serialise: {e}"))?;
   write_to_sidecar(&state, &request_str)?;
 
-  rx.recv()
-    .map_err(|e| format!("sidecar response channel closed: {e}"))
+  // 30s defensive timeout — the sidecar processes one RPC at a time
+  // (better-sqlite3 + a single Node thread), and a long-running call
+  // (debug.scan with validate=true on a real codebase, deep research)
+  // would otherwise block this Tauri worker thread forever if the
+  // response went missing. The cap is generous enough to avoid false
+  // positives on legitimate slow calls — the scan auto-trigger now
+  // runs Layer 1 only specifically to keep this <5s.
+  match rx.recv_timeout(std::time::Duration::from_secs(30)) {
+    Ok(v) => Ok(v),
+    Err(_) => {
+      // Best-effort cleanup so a later, successful response doesn't try
+      // to write into a dropped sender.
+      if let Ok(mut map) = state.pending.lock() {
+        map.remove(&id);
+      }
+      Err(format!("sidecar response timed out after 30s for method={method}"))
+    }
+  }
 }
 
 /// Streaming variant: same request shape, but the webview supplies a
