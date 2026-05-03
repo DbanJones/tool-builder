@@ -66,44 +66,178 @@ fn keychain_delete(service: String, account: String) -> Result<(), String> {
 
 // Claude Code CLI detection per ADR-0002 and build-order.md A3.
 //
-// `cli_is_installed` returns true if `which claude` (or `where` on Windows)
-// resolves AND `claude --version` exits successfully. The version probe
-// guards against PATH lying about a non-functional binary.
+// Robustness note: a packaged macOS .app launched via Finder / Dock
+// inherits a minimal PATH, NOT the user's shell PATH. Plain `which
+// claude` therefore misses Homebrew (`/opt/homebrew/bin`,
+// `/usr/local/bin`), npm-global (`~/.npm-global/bin`), Bun, Volta, and
+// NVM installs even when claude is correctly installed. Detection
+// runs three passes in order and returns the first absolute path that
+// also responds to `--version`:
+//   1. `which` / `where` on the inherited PATH (cheap, dev-build win).
+//   2. The user's login shell (`zsh -lc 'command -v claude'` on Unix,
+//      `cmd /c where claude` on Windows) so .zshrc / .bashrc exports
+//      get sourced. This is what unblocks the GUI-launched .app case.
+//   3. Direct probes of well-known install locations.
 //
-// `cli_is_authenticated` runs `claude -p "ping" --output-format json` and
-// returns true on success. Cost is small (single ping prompt) but real;
-// cache hints can be added in a later phase.
+// `cli_is_authenticated` runs `claude -p "ping" --output-format json`
+// using the resolved path so the same PATH-gap doesn't bite at probe
+// time. Cost is small (single ping prompt) but real.
 
-#[tauri::command]
-fn cli_is_installed() -> Result<bool, String> {
+fn home_dir() -> Option<PathBuf> {
+  std::env::var_os("HOME")
+    .or_else(|| std::env::var_os("USERPROFILE"))
+    .map(PathBuf::from)
+}
+
+/// Candidate install locations probed when neither PATH nor the login
+/// shell yields a hit. Order matters — earlier entries win.
+fn well_known_claude_paths() -> Vec<PathBuf> {
+  let mut out: Vec<PathBuf> = Vec::new();
+  if cfg!(target_os = "windows") {
+    if let Some(home) = home_dir() {
+      out.push(home.join(r"AppData\Roaming\npm\claude.cmd"));
+      out.push(home.join(r"AppData\Roaming\npm\claude.exe"));
+      out.push(home.join(r"AppData\Local\Programs\claude\claude.exe"));
+      out.push(home.join(r"scoop\shims\claude.cmd"));
+      out.push(home.join(r".bun\bin\claude.exe"));
+    }
+    out.push(PathBuf::from(r"C:\Program Files\nodejs\claude.cmd"));
+  } else {
+    // Homebrew (Apple Silicon, Intel, Linuxbrew) + manual /usr/local installs.
+    out.push(PathBuf::from("/opt/homebrew/bin/claude"));
+    out.push(PathBuf::from("/usr/local/bin/claude"));
+    out.push(PathBuf::from("/home/linuxbrew/.linuxbrew/bin/claude"));
+    if let Some(home) = home_dir() {
+      // npm global (PREFIX-based) — common on macOS without Homebrew.
+      out.push(home.join(".npm-global/bin/claude"));
+      out.push(home.join(".npm/bin/claude"));
+      // Bun, Volta, asdf shims, fnm, mise.
+      out.push(home.join(".bun/bin/claude"));
+      out.push(home.join(".volta/bin/claude"));
+      out.push(home.join(".asdf/shims/claude"));
+      out.push(home.join(".local/bin/claude"));
+      out.push(home.join(".local/share/fnm/aliases/default/bin/claude"));
+      out.push(home.join(".local/share/mise/shims/claude"));
+    }
+  }
+  out
+}
+
+/// Run the user's login shell to evaluate `command -v claude` (or
+/// `where claude` on Windows). Catches Homebrew + custom PATH exports
+/// from .zshrc / .bashrc that a Finder-launched app doesn't see.
+fn login_shell_resolve() -> Option<PathBuf> {
+  let (program, args): (&str, &[&str]) = if cfg!(target_os = "windows") {
+    ("cmd", &["/c", "where claude"])
+  } else if cfg!(target_os = "macos") {
+    // -i interactive so PATH from .zshrc gets sourced (login shells on
+    // macOS source .zprofile but not always .zshrc; -i covers both).
+    ("/bin/zsh", &["-ilc", "command -v claude"])
+  } else {
+    ("/bin/bash", &["-ilc", "command -v claude"])
+  };
+  let output = Command::new(program).args(args).output().ok()?;
+  if !output.status.success() {
+    return None;
+  }
+  let s = String::from_utf8_lossy(&output.stdout);
+  let first = s.lines().next()?.trim();
+  if first.is_empty() {
+    return None;
+  }
+  let p = PathBuf::from(first);
+  if p.exists() {
+    Some(p)
+  } else {
+    None
+  }
+}
+
+/// First pass: rely on the inherited PATH. Cheap and works in dev.
+fn path_resolve() -> Option<PathBuf> {
   let which_or_where = if cfg!(target_os = "windows") {
     "where"
   } else {
     "which"
   };
-  let on_path = Command::new(which_or_where)
+  let output = Command::new(which_or_where)
     .arg("claude")
     .output()
-    .map_err(|e| format!("failed to run {which_or_where}: {e}"))?;
-  if !on_path.status.success() {
-    return Ok(false);
+    .ok()?;
+  if !output.status.success() {
+    return None;
   }
-  let version = Command::new("claude").arg("--version").output();
-  match version {
-    Ok(v) => Ok(v.status.success()),
-    Err(_) => Ok(false),
+  let s = String::from_utf8_lossy(&output.stdout);
+  let first = s.lines().next()?.trim();
+  if first.is_empty() {
+    return None;
   }
+  let p = PathBuf::from(first);
+  if p.exists() {
+    Some(p)
+  } else {
+    None
+  }
+}
+
+/// Resolve an absolute path to the `claude` binary using the three-tier
+/// strategy. Returns None if no candidate exists or none responds to
+/// `--version`. The returned path is suitable for direct `Command::new`
+/// invocations elsewhere in the app.
+fn resolve_claude_binary() -> Option<PathBuf> {
+  let candidates: Vec<PathBuf> = std::iter::empty()
+    .chain(path_resolve())
+    .chain(login_shell_resolve())
+    .chain(well_known_claude_paths().into_iter().filter(|p| p.exists()))
+    .collect();
+  for cand in candidates {
+    let probe = Command::new(&cand).arg("--version").output();
+    if let Ok(out) = probe {
+      if out.status.success() {
+        return Some(cand);
+      }
+    }
+  }
+  None
+}
+
+#[tauri::command]
+fn cli_is_installed() -> Result<bool, String> {
+  Ok(resolve_claude_binary().is_some())
+}
+
+/// Diagnostic command: returns the absolute path the resolver settled
+/// on, plus the candidate list it tried. Surfaced to the welcome
+/// screen's "missing" state so the novice can see exactly where we
+/// looked instead of being told a flat "not found".
+#[tauri::command]
+fn cli_resolution_diagnostics() -> Result<serde_json::Value, String> {
+  let resolved = resolve_claude_binary();
+  let probed: Vec<String> = std::iter::empty()
+    .chain(path_resolve())
+    .chain(login_shell_resolve())
+    .chain(well_known_claude_paths())
+    .map(|p| p.to_string_lossy().into_owned())
+    .collect();
+  Ok(serde_json::json!({
+    "resolved": resolved.map(|p| p.to_string_lossy().into_owned()),
+    "probed": probed,
+  }))
 }
 
 #[tauri::command]
 fn cli_is_authenticated() -> Result<bool, String> {
-  let output = Command::new("claude")
+  let path = match resolve_claude_binary() {
+    Some(p) => p,
+    None => return Ok(false),
+  };
+  let output = Command::new(&path)
     .arg("-p")
     .arg("ping")
     .arg("--output-format")
     .arg("json")
     .output()
-    .map_err(|e| format!("failed to spawn claude: {e}"))?;
+    .map_err(|e| format!("failed to spawn claude at {}: {e}", path.display()))?;
   Ok(output.status.success())
 }
 
@@ -381,24 +515,14 @@ fn build_capability_check(project_path: String) -> Result<CapabilityReport, Stri
     }
   }
 
-  // 4. claude CLI on PATH and runnable.
-  let which_or_where = if cfg!(target_os = "windows") {
-    "where"
-  } else {
-    "which"
-  };
-  match Command::new(which_or_where).arg("claude").output() {
-    Ok(o) if o.status.success() => {
-      // Probe --version too in case PATH lies about a non-functional binary.
-      match Command::new("claude").arg("--version").output() {
-        Ok(v) if v.status.success() => {}
-        Ok(_) => errors
-          .push("`claude` is on PATH but `claude --version` failed; reinstall the Claude Code CLI.".to_string()),
-        Err(e) => errors.push(format!("Couldn't run `claude --version`: {e}")),
-      }
-    }
-    _ => errors.push(
-      "Claude Code CLI (`claude`) not found on PATH. Install it from https://docs.claude.com/en/docs/claude-code/setup."
+  // 4. claude CLI resolvable + runnable. Uses the same three-tier
+  // resolver as cli_is_installed so a Finder-launched .app with a
+  // minimal inherited PATH still finds Homebrew / npm-global / Bun /
+  // NVM installs via the user's login shell.
+  match resolve_claude_binary() {
+    Some(_) => {}
+    None => errors.push(
+      "Claude Code CLI (`claude`) not found. Install it from https://docs.claude.com/en/docs/claude-code/setup, or open the Builder once from a terminal where `claude --version` works."
         .to_string(),
     ),
   }
@@ -1037,8 +1161,53 @@ fn project_create_folder(name: String, folder: String) -> Result<String, String>
     .map_err(|e| format!("failed to canonicalise project path: {e}"))
 }
 
+/// Capture the user's login-shell PATH and use it as the process PATH
+/// so every child process (sidecar, node, claude, gh, vercel) inherits
+/// the same environment a terminal user would see. Without this, a
+/// Finder/Dock-launched .app on macOS gets a minimal PATH that misses
+/// Homebrew, npm-global, NVM, Bun, Volta, etc. Standard fix used by
+/// most Electron apps (cf. fix-path / shell-env). Skipped on Windows
+/// where the GUI shell PATH is normally complete.
+fn augment_path_from_login_shell() {
+  if cfg!(target_os = "windows") {
+    return;
+  }
+  let (program, args): (&str, &[&str]) = if cfg!(target_os = "macos") {
+    // -i interactive so .zshrc gets sourced (-l alone only sources
+    // .zprofile / .zlogin, which often don't set PATH).
+    ("/bin/zsh", &["-ilc", "echo \"__DAVE_PATH__:$PATH\""])
+  } else {
+    ("/bin/bash", &["-ilc", "echo \"__DAVE_PATH__:$PATH\""])
+  };
+  let output = match Command::new(program).args(args).output() {
+    Ok(o) if o.status.success() => o,
+    _ => return,
+  };
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  // Look for our sentinel-prefixed line so prompt noise from .zshrc /
+  // .bashrc (e.g. nvm chatter) doesn't get treated as PATH.
+  for line in stdout.lines() {
+    if let Some(rest) = line.strip_prefix("__DAVE_PATH__:") {
+      let new_path = rest.trim();
+      if !new_path.is_empty() {
+        log::info!(
+          "augmented PATH from login shell ({} entries)",
+          new_path.split(':').count()
+        );
+        std::env::set_var("PATH", new_path);
+      }
+      return;
+    }
+  }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+  // Run BEFORE Tauri's builder kicks off any child processes. Side
+  // effects: sets the process PATH so every later Command::new inherits
+  // the user's full shell PATH.
+  augment_path_from_login_shell();
+
   tauri::Builder::default()
     .setup(|app| {
       let state = SidecarState::new();
@@ -1091,6 +1260,7 @@ pub fn run() {
       keychain_delete,
       cli_is_installed,
       cli_is_authenticated,
+      cli_resolution_diagnostics,
       project_create_folder,
       file_save_uploaded,
       feedback_image_save,
