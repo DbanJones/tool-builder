@@ -97,7 +97,7 @@ export function ChatPanel({
   const head = questionQueue[0];
 
   return (
-    <section className="flex min-h-0 flex-col">
+    <section className="flex h-full min-h-0 flex-col">
       <div
         ref={scrollRef}
         onScroll={onScroll}

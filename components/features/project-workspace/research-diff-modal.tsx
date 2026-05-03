@@ -51,7 +51,7 @@ export function ResearchDiffModal({
       <Dialog.Portal>
         <Dialog.Backdrop className="fixed inset-0 bg-black/40 backdrop-blur-sm" />
         <Dialog.Popup className="fixed left-1/2 top-1/2 flex max-h-[90vh] w-full max-w-6xl -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border bg-background shadow-lg">
-          <div className="border-b p-5">
+          <div className="shrink-0 border-b p-5">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <Dialog.Title className="flex items-center gap-2 text-base font-semibold">
@@ -103,7 +103,7 @@ export function ResearchDiffModal({
                 <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                   Headline of the changes
                 </p>
-                <pre className="whitespace-pre-wrap break-words text-[11px] leading-relaxed text-foreground">
+                <pre className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words text-[11px] leading-relaxed text-foreground">
                   {summaryOfChanges.trim()}
                 </pre>
               </div>
@@ -116,7 +116,7 @@ export function ResearchDiffModal({
             <RawDiffView original={originalMarkdown} proposed={proposedMarkdown} />
           )}
 
-          <div className="flex items-center justify-between gap-3 border-t bg-background p-4">
+          <div className="flex shrink-0 items-center justify-between gap-3 border-t bg-background p-4">
             <p className="text-[11px] text-muted-foreground">
               Adopting writes the proposal to spec.md. Original is saved to
               .builder/spec.pre-research.md.

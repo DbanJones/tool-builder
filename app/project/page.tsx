@@ -122,6 +122,14 @@ import { hasMadeSentryDecision } from "@/lib/telemetry";
 
 const HISTORY_TAIL_LIMIT = 200;
 
+// HTML-comment marker prepended to spec.md when the novice adopts a
+// deep-research proposal. Detected on every Build click so the
+// deterministic rebuild from answers doesn't silently overwrite the
+// adopted spec. Renders invisibly when spec.md is rendered as
+// markdown — humans don't see it, but the build path does.
+const SPEC_RESEARCH_ADOPTED_MARKER =
+  "<!-- dave: spec adopted from deep research; do not auto-rebuild -->";
+
 interface AnswerRow {
   id: string;
   projectId: string;
@@ -1135,24 +1143,50 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
           currentSessionId: event.id,
         });
       } else if (event.kind === "todos_updated") {
-        // After first-pass build completes (review.md exists) the agent
-        // often emits a fresh todo list for the iterate phase. Replacing
-        // would erase the build plan from the rail; merge instead so
-        // build items survive as completed and new review items appear
-        // below them. Per D-040 follow-up: "if a review happens, add it
-        // to the plan, not erase the plan".
-        if (reviewMarkdown !== null) {
-          setPlan((prev) => {
+        // Two things happen here:
+        //  1. Diff prev → next to spot newly-completed plan items, and
+        //     emit a synthetic "Stage X of N complete" line into the
+        //     live tail so the novice sees milestones without having to
+        //     read the rail.
+        //  2. Update the plan, with the review-mode merge from D-040
+        //     follow-up so reviews don't erase the build plan.
+        setPlan((prev) => {
+          const next = event.todos;
+          const newlyCompleted: { idx: number; content: string }[] = [];
+          next.forEach((t, i) => {
+            const before = prev[i];
+            if (t.status === "completed" && before?.status !== "completed") {
+              newlyCompleted.push({ idx: i, content: t.content });
+            }
+          });
+          if (newlyCompleted.length > 0) {
+            const at = Date.now();
+            const total = next.length;
+            setActions((acts) => [
+              ...acts,
+              ...newlyCompleted.map((c, j) => ({
+                id: `stage-${String(at)}-${String(c.idx)}`,
+                ts: at + j,
+                tool: "stage",
+                rawInput: "",
+                humanLine: `Stage ${String(c.idx + 1)} of ${String(total)} complete — ${c.content}`,
+                phase: null,
+                taskId: null,
+              })),
+            ]);
+          }
+          if (reviewMarkdown !== null) {
             const prevContents = new Set(prev.map((t) => t.content));
             const carried = prev.map((t) =>
-              t.status === "completed" ? t : { ...t, status: "completed" as const },
+              t.status === "completed"
+                ? t
+                : { ...t, status: "completed" as const },
             );
-            const additions = event.todos.filter((t) => !prevContents.has(t.content));
+            const additions = next.filter((t) => !prevContents.has(t.content));
             return [...carried, ...additions];
-          });
-        } else {
-          setPlan(event.todos);
-        }
+          }
+          return next;
+        });
       } else if (event.kind === "tool_use") {
         const humanLine = translate(event.tool, event.raw_input);
         setLatestToolLine(humanLine);
@@ -1504,9 +1538,18 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
     if (researchUi.kind !== "review" || !project) return;
     try {
       await invoke("backup_target_spec", { projectPath: project.path });
+      // Prepend a Builder-controlled header so the build path can detect
+      // adoption deterministically — the (via deep research) inline marker
+      // depends on the model honouring its prompt and was sometimes
+      // missing, causing the build to silently revert the spec to the
+      // deterministic rebuild from answers.
+      const header = SPEC_RESEARCH_ADOPTED_MARKER + "\n\n";
+      const text = researchUi.proposedMarkdown.startsWith(SPEC_RESEARCH_ADOPTED_MARKER)
+        ? researchUi.proposedMarkdown
+        : header + researchUi.proposedMarkdown;
       await invoke("write_target_spec", {
         projectPath: project.path,
-        specText: researchUi.proposedMarkdown,
+        specText: text,
       });
       appendAssistantMessage(
         "Adopted the new spec. Original saved to .builder/spec.pre-research.md.",
@@ -1569,7 +1612,16 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
       const existingSpec = await invoke<string | null>("read_target_spec", {
         projectPath: project.path,
       });
-      if (existingSpec !== null && existingSpec.includes("(via deep research)")) {
+      if (
+        existingSpec !== null &&
+        // Primary, deterministic marker we write at adoption time. Robust
+        // against the model occasionally omitting the inline marker.
+        (existingSpec.includes(SPEC_RESEARCH_ADOPTED_MARKER) ||
+          // Fallback for specs adopted by older Builder versions that
+          // didn't write the header — they relied on the model's
+          // (via deep research) inline marker.
+          existingSpec.includes("(via deep research)"))
+      ) {
         researchAdopted = true;
       }
     } catch (e) {
@@ -2611,25 +2663,10 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
         etaMsPerTurn={liveEta.medianMs ?? 0}
       />
 
-      {hasStarted ? (
-        <div className="border-b bg-primary/5 px-6 py-3">
-          <div className="flex items-center gap-3">
-            {isRunning ? (
-              <Loader2 className="h-4 w-4 animate-spin text-primary motion-reduce:animate-none" />
-            ) : (
-              <span className="inline-block h-2 w-2 rounded-full bg-muted-foreground/40" />
-            )}
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-foreground">
-                {nowDoingLine ?? (isRunning ? "Working…" : "Ready when you are.")}
-              </p>
-              {stepCounter ? (
-                <p className="text-[11px] text-muted-foreground">{stepCounter}</p>
-              ) : null}
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {/* The standalone "now doing" strip was removed per UX review
+          2026-05-03 — its content (spinner + nowDoingLine + stepCounter)
+          already lives in the StatusFooter at the bottom of the
+          workspace, so showing it twice was a scannability tax. */}
 
       <BannerStack
         notifications={buildWorkspaceNotifications({
@@ -2733,6 +2770,11 @@ function ProjectWorkspace({ projectId }: { projectId: string | null }) {
             // console/network output as a follow-up turn.
             echoUserMessage(summary, "On it — looking at that now.");
             void runFollowUpTurn(summary);
+            // Return the rail to its default Status view so the novice
+            // sees Dave start working on the fix instead of staying on
+            // the broken preview iframe.
+            setTab(hasStarted ? "plan" : "spec");
+            setPreviewMaximized(false);
           }}
           researchProgress={
             researchUi.kind === "running"

@@ -286,6 +286,11 @@ function ReviewAndDebugPanel(props: {
             onBuildMissing={props.onBuildMissing}
             echoBackPreview={props.echoBackPreview}
             onSendBuildFeedback={props.onSendBuildFeedback}
+            isDebugScanning={props.isDebugScanning}
+            onBugCheck={() => {
+              setSub("defects");
+              props.onDebugScanNow();
+            }}
           />
         ) : (
           <div className="flex flex-1 items-center justify-center p-8 text-center text-xs text-muted-foreground">
@@ -735,6 +740,34 @@ function PlanAndStatusPanel({
   });
   useEffect(() => getBridgeListener().subscribe(setBridge), []);
   const [planCollapsed, setPlanCollapsed] = useState(false);
+  // Resizable divider between Plan and Live Status. Dragging the handle
+  // shrinks the plan section so the live status can take over the rail
+  // (or vice versa). Clamped 5-95% so neither side disappears entirely.
+  const [planPercent, setPlanPercent] = useState(45);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const onHandleMouseDown = (e: React.MouseEvent): void => {
+    e.preventDefault();
+    const container = containerRef.current;
+    if (!container) return;
+    const headerEl = container.firstElementChild as HTMLElement | null;
+    const headerHeight = headerEl?.offsetHeight ?? 40;
+    const onMove = (ev: MouseEvent): void => {
+      const rect = container.getBoundingClientRect();
+      const usable = rect.height - headerHeight;
+      if (usable <= 0) return;
+      const planHeight = ev.clientY - rect.top - headerHeight;
+      const pct = Math.max(5, Math.min(95, (planHeight / usable) * 100));
+      setPlanPercent(pct);
+    };
+    const onUp = (): void => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+    };
+    document.body.style.cursor = "row-resize";
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
 
   const completed = plan.filter((t) => t.status === "completed").length;
   const total = plan.length;
@@ -755,7 +788,7 @@ function PlanAndStatusPanel({
     el.scrollTop = el.scrollHeight;
   }, [recentActions.length]);
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div ref={containerRef} className="flex min-h-0 flex-1 flex-col">
       <button
         type="button"
         onClick={() => setPlanCollapsed((c) => !c)}
@@ -773,7 +806,11 @@ function PlanAndStatusPanel({
         </h2>
       </button>
       {planCollapsed ? null : (
-        <div id="plan-rail-detail" className="max-h-[45%] shrink-0 overflow-auto p-4">
+        <div
+          id="plan-rail-detail"
+          style={{ height: `${planPercent}%` }}
+          className="shrink-0 overflow-auto p-4"
+        >
           {plan.length === 0 ? (
             <p className="text-xs text-muted-foreground">
               Dave will lay out the steps here as soon as the build starts.
@@ -800,6 +837,18 @@ function PlanAndStatusPanel({
               ))}
             </ol>
           )}
+        </div>
+      )}
+      {planCollapsed ? null : (
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize plan panel"
+          onMouseDown={onHandleMouseDown}
+          className="group relative h-1 shrink-0 cursor-row-resize bg-border hover:bg-primary/40"
+          title="Drag to resize the plan panel"
+        >
+          <span className="pointer-events-none absolute left-1/2 top-1/2 h-0.5 w-8 -translate-x-1/2 -translate-y-1/2 rounded bg-muted-foreground/40 group-hover:bg-primary/70" />
         </div>
       )}
       <div className="flex min-h-0 flex-1 flex-col border-t">
@@ -1089,18 +1138,22 @@ function ReviewPanel({
   onBuildMissing,
   echoBackPreview,
   onSendBuildFeedback,
+  onBugCheck,
+  isDebugScanning,
 }: {
   markdown: string;
   isRunning: boolean;
   onBuildMissing: () => void;
   echoBackPreview: EchoBackPreview;
   onSendBuildFeedback: (feedback: string) => void;
+  onBugCheck: () => void;
+  isDebugScanning: boolean;
 }) {
   const counts = parseReviewCounts(markdown);
   const hasGaps = (counts?.partial ?? 0) + (counts?.missing ?? 0) > 0;
   return (
     <>
-      <div className="flex shrink-0 items-center justify-between border-b px-4 py-2">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b px-4 py-2">
         <div>
           <h2 className="text-sm font-semibold">Review against your spec</h2>
           <p className="text-[11px] text-muted-foreground">
@@ -1109,11 +1162,23 @@ function ReviewPanel({
               : "Coverage report"}
           </p>
         </div>
-        {hasGaps ? (
-          <Button size="sm" disabled={isRunning} onClick={onBuildMissing}>
-            Build the missing pieces
+        <div className="flex shrink-0 gap-1.5">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={isDebugScanning}
+            onClick={onBugCheck}
+            title="Scan the build for security, logic, and architecture defects, then jump to the Defects view"
+          >
+            <Bug className="mr-1 h-3 w-3" aria-hidden="true" />
+            {isDebugScanning ? "Scanning…" : "Bug check"}
           </Button>
-        ) : null}
+          {hasGaps ? (
+            <Button size="sm" disabled={isRunning} onClick={onBuildMissing}>
+              Build the missing pieces
+            </Button>
+          ) : null}
+        </div>
       </div>
       <div className="flex-1 overflow-auto">
         <BuildPreviewVerifier
