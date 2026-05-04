@@ -1,0 +1,106 @@
+name: Build Windows installer
+
+# Two ways to trigger:
+#   1. Push a tag matching v* (e.g. `git tag v0.1.0 && git push --tags`)
+#      → builds and attaches the .msi + .exe to a GitHub Release.
+#   2. Manual run from the Actions tab (workflow_dispatch)
+#      → builds and uploads the .msi + .exe as workflow artifacts you can
+#      download from the run page.
+#
+# Spec O1: signed-installer pipeline. Mac + Linux jobs are intentionally
+# omitted from this workflow; extend the matrix or add sibling workflows
+# when those targets are needed (Tauri's bundle config already supports
+# all three; only the runner choice differs).
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  build:
+    name: Build Dave for Windows
+    runs-on: windows-latest
+    permissions:
+      contents: write # needed to attach artifacts to a release on tag push
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          # Avoid clobbering ubuntu/macos cache if those jobs are added later.
+          shared-key: tauri-windows
+
+      - name: Install JS dependencies (root)
+        run: corepack pnpm install --frozen-lockfile
+
+      # The sidecar is a separate package (not a pnpm workspace member),
+      # so `pnpm install` at the root does not pull its deps. The
+      # tauri-action's beforeBuildCommand → `pnpm build` chains through
+      # `pnpm sidecar:build` which tsc-compiles the sidecar; without its
+      # node_modules every drizzle-orm / ulid / better-sqlite3 import
+      # fails type resolution and the build aborts.
+      - name: Install JS dependencies (sidecar)
+        run: corepack pnpm --dir sidecar install --frozen-lockfile
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          # Updater signing is intentionally NOT wired in this workflow —
+          # the placeholder pubkey in tauri.conf.json is the documented
+          # Phase E0 deferral (drift D-017 / ADR-0017). Leaving the env
+          # var unset triggers the same exit-1 we get locally; the .msi +
+          # .exe are still produced before that step. When E0 lands, set
+          # TAURI_SIGNING_PRIVATE_KEY (and TAURI_SIGNING_PRIVATE_KEY_PASSWORD)
+          # as repo secrets and the artifacts will be signed for the
+          # in-app updater.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # When triggered by a tag push, tauri-action creates / updates a
+          # Release with this title and uploads the bundles as assets.
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: "Dave ${{ github.ref_type == 'tag' && github.ref_name || github.run_number }}"
+          releaseBody: |
+            Windows installer build.
+
+            * `.msi` — Microsoft Installer (recommended; supports update via WiX).
+            * `*-setup.exe` — NSIS portable installer.
+
+            Not code-signed (no Authenticode certificate yet). Windows
+            SmartScreen will warn on first run; click "More info" → "Run
+            anyway", or sign the binaries with `signtool` after download.
+          releaseDraft: true
+          prerelease: false
+
+      # On manual runs (no tag), the tauri-action above does not upload
+      # to a release — surface the bundles as workflow artifacts so the
+      # user can grab them from the Actions run page.
+      - name: Upload installers as workflow artifacts
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dave-windows-installers
+          path: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: warn
+          retention-days: 30

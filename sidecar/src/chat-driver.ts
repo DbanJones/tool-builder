@@ -34,11 +34,16 @@ THE PIPELINE (read this carefully — it changes how you should behave):
 
 The first turn is special:
 - The novice's first message describes their project. The Builder UI shows a 'Preparing question bank' indicator while you generate your reply.
-- In your first reply: briefly (one sentence) reflect what you understood, then state 'Question bank ready: ~32 fast-path questions to work through.', then call \`queue_questions\` with the FIRST batch of up to 10 questions. Do NOT call record_answer for the freeform first message.
+- In your first reply: briefly (one sentence) reflect what you understood, then state 'Question bank ready: ~35 fast-path questions to work through.', then call \`queue_questions\` with the FIRST batch of up to 10 questions. Do NOT call record_answer for the freeform first message.
 
 Files: The first batch SHOULD include one question asking the novice if they have any supporting files (PDFs, screenshots, schemas, CSVs, spreadsheets, transcripts) they'd like to share. Tell them they can drop files anywhere on the workspace; the right rail's Files tab shows what they've shared. If they reference a file with @filename in chat, the workspace will inject the file's structural summary into your context — treat the summary as authoritative for that file.
 
-Valid question ids are Q1 through Q32 only. The Builder will reject any other id.
+Valid question ids are Q1 through Q35 only. The Builder will reject any other id.
+
+Three of the questions exist specifically to stop the build from generating something the novice didn't picture. Treat them as load-bearing — never skip them, never paper over a vague answer:
+- **Q33 (deliverable artifact)**: forces the novice to name the concrete thing they will open at the end (an .xlsx file, a web dashboard, an emailed PDF). If they answer in features ("a financial model"), follow up to get the form ("an Excel file? a web app?"). Without this answer, the agent will pick a shape and probably the wrong one.
+- **Q34 (reference anchors)**: 1-3 named tools the build should resemble, with similarities and differences. Anchors the agent to prior art rather than inventing.
+- **Q35 (non-negotiables)**: features or properties whose absence would make the novice reject the build outright. Capture them verbatim; they become hard constraints downstream.
 
 How to write each queued question:
 - Plain language. No jargon unless you have just defined it.
@@ -55,6 +60,9 @@ export interface ChatOptions {
   projectPath: string;
   prompt: string;
   sessionId?: string | null;
+  /** Model override from settings. When omitted, the driver picks
+   *  Opus for first turn / Sonnet for subsequent turns. */
+  model?: string;
 }
 
 export interface QueuedQuestion {
@@ -197,8 +205,9 @@ export async function runChat(
       additionalDirectories: [opts.projectPath],
       // First turn → Opus for first-impression quality. Subsequent turns
       // (sessionId set) → Sonnet for speed/cost. Same heuristic as the
-      // old chat.rs.
-      model: opts.sessionId ? "claude-sonnet-4-5" : "claude-opus-4-5",
+      // old chat.rs. Settings can override either branch by passing
+      // `model`; without an override the heuristic stands.
+      model: opts.model ?? (opts.sessionId ? "claude-sonnet-4-5" : "claude-opus-4-5"),
       permissionMode: "default",
       // Chat path doesn't need to write files in the novice's project,
       // and we want NO permission UI for it. Allow only our own MCP tools.

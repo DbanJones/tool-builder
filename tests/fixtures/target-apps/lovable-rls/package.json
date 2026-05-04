@@ -1,0 +1,6 @@
+{
+  "name": "lovable-rls-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Test fixture replaying the Lovable CVE-2025-48757 RLS-missing pattern. Used by tests/integration/sidecar-debug.test.ts."
+}

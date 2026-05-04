@@ -1,0 +1,1 @@
+ALTER TABLE `defects` ADD `suggestion` text;

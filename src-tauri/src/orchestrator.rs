@@ -31,16 +31,20 @@ pub async fn orchestrator_start(
   project_path: String,
   prompt: Option<String>,
   session_id: Option<String>,
+  model: Option<String>,
   on_event: Channel<Value>,
 ) -> Result<(), String> {
   let stream_id = Uuid::new_v4().to_string();
-  let params = serde_json::json!({
+  let mut params = serde_json::json!({
     "streamId": stream_id,
     "projectId": project_id,
     "projectPath": project_path,
     "prompt": prompt,
     "sessionId": session_id,
   });
+  if let Some(m) = model {
+    params["model"] = serde_json::Value::String(m);
+  }
   // Hand the stream id to the sidecar so its writeNotification(streamId, ev)
   // routes back to OUR Channel via the bridge.
   sidecar_rpc_stream(state, "orch.start".to_string(), params, stream_id, on_event)

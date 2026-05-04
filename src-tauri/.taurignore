@@ -1,0 +1,6 @@
+# Tell Tauri's dev file watcher to ignore the materialised sidecar
+# bundle. The bundle is ~400MB of pnpm install output that gets
+# regenerated on every `pnpm tauri build`; without this entry, every
+# file change inside node_modules triggers a Rust rebuild + app
+# restart, which makes the dev window flicker open/closed continuously.
+sidecar-bundle/

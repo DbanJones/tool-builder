@@ -10,14 +10,13 @@ import { ProjectsPicker } from "@/components/features/projects-picker/projects-p
 
 export default function NewProjectPage() {
   return (
-    <main className="flex min-h-full items-center justify-center bg-background p-8">
+    <main className="flex min-h-full justify-center overflow-y-auto bg-background p-8">
       <div className="w-full max-w-2xl space-y-4">
         <NewProjectForm />
         <ProjectsPicker
           title="Open an existing project"
           collapsable
           defaultOpen={false}
-          persistKey="builder.newProject.existingOpen"
         />
       </div>
     </main>

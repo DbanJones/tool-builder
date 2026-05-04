@@ -42,12 +42,34 @@ import {
 } from "./orchestrator-driver.js";
 import { cancelChat, runChat } from "./chat-driver.js";
 import {
+  cancelAllResearch,
+  cancelResearch,
+  runResearch,
+  stubTransport as researchStubTransport,
+  type ResearchTransport,
+} from "./research-driver.js";
+import {
+  listByProject as listResearchFindingsByProject,
+  listByScan as listResearchFindingsByScan,
+} from "./handlers/research-findings.js";
+import {
+  graph as debugGraph,
+  list as listDefects,
+  scan as debugScan,
+} from "./handlers/debug.js";
+import {
+  applyFix as debugApplyFix,
+  rollbackFix as debugRollbackFix,
+} from "./handlers/repair.js";
+import { stubTransport, type ValidatorTransport } from "./debug/validator/index.js";
+import {
   append as appendDrift,
   listOpen as listOpenDrifts,
   resolve as resolveDrift,
 } from "./handlers/drift.js";
 import { logEvent, listEvents } from "./handlers/audit.js";
 import { extractText, fetchUrl, parseDataSample, parseSchema, summariseImage } from "./handlers/files.js";
+import { verify as verifyEasterEgg } from "./handlers/easter-egg.js";
 import { guardPii } from "./handlers/pii.js";
 import {
   create as createProject,
@@ -114,6 +136,31 @@ try {
   process.exit(1);
 }
 
+// Test injection point: when BUILDER_VALIDATOR_STUB_JSON is set, parse
+// it as a `Record<ruleId, jsonResponseString>` and use stubTransport.
+// Used only by the integration test harness; production startup leaves
+// this undefined and the scan handler defaults to sdkTransport.
+const validatorTransportOverride: ValidatorTransport | undefined =
+  parseValidatorStub();
+
+function parseValidatorStub(): ValidatorTransport | undefined {
+  const raw = process.env.BUILDER_VALIDATOR_STUB_JSON;
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, string>;
+    writeLog("info", "validator stub transport active for tests");
+    return stubTransport(parsed);
+  } catch (e) {
+    writeLog(
+      "warn",
+      `BUILDER_VALIDATOR_STUB_JSON failed to parse — falling back to sdkTransport: ${
+        e instanceof Error ? e.message : String(e)
+      }`
+    );
+    return undefined;
+  }
+}
+
 const handlers: Record<string, Handler> = {
   ping: () => ({ pong: true, version: "0.1.0", at: new Date().toISOString() }),
   "audit.logEvent": logEvent,
@@ -130,6 +177,7 @@ const handlers: Record<string, Handler> = {
   "files.parseDataSample": parseDataSample,
   "files.fetchUrl": fetchUrl,
   "files.guardPii": guardPii,
+  "easterEgg.verify": verifyEasterEgg,
   "actions.append": appendAction,
   "actions.list": listActions,
   "costs.append": appendCost,
@@ -137,6 +185,11 @@ const handlers: Record<string, Handler> = {
   "drift.append": appendDrift,
   "drift.resolve": resolveDrift,
   "drift.listOpen": listOpenDrifts,
+  "debug.scan": (params) => debugScan(params, undefined, validatorTransportOverride),
+  "debug.list": listDefects,
+  "debug.graph": debugGraph,
+  "debug.applyFix": debugApplyFix,
+  "debug.rollbackFix": debugRollbackFix,
   "chatMessages.append": appendChatMessage,
   "chatMessages.list": listChatMessages,
   "permissionRequests.listOpen": listOpenPermissionRequests,
@@ -145,7 +198,36 @@ const handlers: Record<string, Handler> = {
   "orch.stop": orchStop,
   "chat.start": chatStart,
   "chat.stop": chatStop,
+  "research.start": researchStart,
+  "research.stop": researchStop,
+  "researchFindings.listByScan": listResearchFindingsByScan,
+  "researchFindings.listByProject": listResearchFindingsByProject,
 };
+
+// Test injection: BUILDER_RESEARCH_STUB_JSON encodes the stub options
+// (findings, proposal, abort point) so the integration test can run the
+// research driver without a real Claude call. Same pattern as
+// validatorTransportOverride above.
+const researchTransportOverride: ResearchTransport | undefined =
+  parseResearchStub();
+
+function parseResearchStub(): ResearchTransport | undefined {
+  const raw = process.env.BUILDER_RESEARCH_STUB_JSON;
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as Parameters<typeof researchStubTransport>[0];
+    writeLog("info", "research stub transport active for tests");
+    return researchStubTransport(parsed);
+  } catch (e) {
+    writeLog(
+      "warn",
+      `BUILDER_RESEARCH_STUB_JSON failed to parse — falling back to sdkTransport: ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    );
+    return undefined;
+  }
+}
 
 // ADR-0005: streaming orchestrator. The webview-side Tauri command holds
 // the request open while we push notifications keyed by streamId. Returns
@@ -156,6 +238,7 @@ const OrchStartParams = z.object({
   projectPath: z.string().min(1),
   prompt: z.string().nullable().optional(),
   sessionId: z.string().nullable().optional(),
+  model: z.string().min(1).optional(),
 });
 async function orchStart(rawParams: unknown): Promise<{ ok: true }> {
   const params = OrchStartParams.parse(rawParams);
@@ -166,6 +249,7 @@ async function orchStart(rawParams: unknown): Promise<{ ok: true }> {
       projectPath: params.projectPath,
       prompt: params.prompt ?? null,
       sessionId: params.sessionId ?? null,
+      ...(params.model !== undefined ? { model: params.model } : {}),
     },
     (event) => writeNotification(params.streamId, event),
   );
@@ -198,6 +282,7 @@ const ChatStartParams = z.object({
   projectPath: z.string().min(1),
   prompt: z.string().min(1),
   sessionId: z.string().nullable().optional(),
+  model: z.string().min(1).optional(),
 });
 async function chatStart(rawParams: unknown): Promise<{ ok: true }> {
   const params = ChatStartParams.parse(rawParams);
@@ -208,6 +293,7 @@ async function chatStart(rawParams: unknown): Promise<{ ok: true }> {
       projectPath: params.projectPath,
       prompt: params.prompt,
       sessionId: params.sessionId ?? null,
+      ...(params.model !== undefined ? { model: params.model } : {}),
     },
     (event) => writeNotification(params.streamId, event),
   );
@@ -218,6 +304,59 @@ const ChatStopParams = z.object({ streamId: z.string().min(1) });
 function chatStop(rawParams: unknown): { cancelled: boolean } {
   const params = ChatStopParams.parse(rawParams);
   return { cancelled: cancelChat(params.streamId) };
+}
+
+// Deep research path (Flow M). Streams ResearchEvents via notifications
+// keyed by streamId. ADR-0017 §"Why a separate SDK session" — runs in its
+// own inflight slot, never shares state with the build orchestrator.
+const ResearchStartParams = z.object({
+  streamId: z.string().min(1),
+  projectId: z.string().min(1),
+  projectPath: z.string().min(1),
+  specMarkdown: z.string().min(1),
+  answersDigest: z.string(),
+  filesDigest: z.string(),
+  // Tauri shell ships the system prompt (compile-time include_str!).
+  // Optional so the integration test can fall back to the file path.
+  systemPrompt: z.string().min(1).optional(),
+  builderRepoPath: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+});
+async function researchStart(rawParams: unknown): Promise<{ ok: true }> {
+  const params = ResearchStartParams.parse(rawParams);
+  await runResearch(
+    params.streamId,
+    {
+      projectId: params.projectId,
+      projectPath: params.projectPath,
+      specMarkdown: params.specMarkdown,
+      answersDigest: params.answersDigest,
+      filesDigest: params.filesDigest,
+      ...(params.systemPrompt !== undefined
+        ? { systemPrompt: params.systemPrompt }
+        : {}),
+      ...(params.builderRepoPath !== undefined
+        ? { builderRepoPath: params.builderRepoPath }
+        : {}),
+      ...(params.model !== undefined ? { model: params.model } : {}),
+    },
+    (event) => writeNotification(params.streamId, event),
+    researchTransportOverride,
+  );
+  return { ok: true };
+}
+
+const ResearchStopParams = z.object({
+  streamId: z.string().min(1).nullable().optional(),
+});
+function researchStop(rawParams: unknown): { cancelled: boolean; count: number } {
+  const params = ResearchStopParams.parse(rawParams);
+  if (params.streamId) {
+    const cancelled = cancelResearch(params.streamId);
+    return { cancelled, count: cancelled ? 1 : 0 };
+  }
+  const count = cancelAllResearch();
+  return { cancelled: count > 0, count };
 }
 
 const handleLine = async (line: string): Promise<void> => {

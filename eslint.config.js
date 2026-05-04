@@ -14,6 +14,7 @@ export default tseslint.config(
       ".next/**",
       "out/**",
       "src-tauri/target/**",
+      "src-tauri/sidecar-bundle/**",
       "dist/**",
       "apps/marketing/**",
       "sidecar/**",

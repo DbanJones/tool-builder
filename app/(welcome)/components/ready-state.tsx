@@ -16,8 +16,7 @@ export function ReadyState() {
       <ProjectsPicker
         title="Open an existing project"
         collapsable
-        defaultOpen={false}
-        persistKey="builder.welcome.projectsOpen"
+        defaultOpen={true}
       />
     </div>
   );

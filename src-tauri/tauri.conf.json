@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Builder",
+  "productName": "Dave-Builder (Demo)",
   "version": "0.1.0",
   "identifier": "com.airtec.builder",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Builder",
+        "title": "Dave-Builder (Demo)",
         "width": 1280,
         "height": 800,
         "minWidth": 1024,
@@ -22,7 +22,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' ipc: http://ipc.localhost; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' ipc: http://ipc.localhost http://localhost:3000 ws://localhost:3000; img-src 'self' data:; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self' ipc: http://ipc.localhost; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' ipc: http://ipc.localhost http://localhost:3000 ws://localhost:3000; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-src 'self' http://localhost:* http://127.0.0.1:*"
     }
   },
   "bundle": {
@@ -35,7 +35,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "createUpdaterArtifacts": true
+    "resources": {
+      "sidecar-bundle": "sidecar-bundle"
+    },
+    "createUpdaterArtifacts": false
   },
   "plugins": {
     "updater": {

@@ -1,9 +1,9 @@
 {
-  "name": "tool-builder",
-  "version": "0.1.0",
+  "name": "dave-builder",
+  "version": "0.1.0-demo",
   "private": true,
   "type": "module",
-  "description": "Desktop app that lets absolute novices build production web apps by chatting with Claude. See spec.md.",
+  "description": "Dave-Builder (Demo). Desktop app that lets absolute novices build production web apps by chatting with Dave. Demo build locks down on the configured expiry date — see lib/demo/config.ts.",
   "license": "UNLICENSED",
   "packageManager": "pnpm@9.15.0",
   "engines": {
@@ -19,8 +19,9 @@
     "tauri:build": "tauri build",
     "sidecar:install": "corepack pnpm --dir sidecar install",
     "sidecar:build": "corepack pnpm --dir sidecar build",
+    "sidecar:package": "node scripts/package-sidecar.mjs",
     "predev": "corepack pnpm sidecar:build",
-    "prebuild": "corepack pnpm sidecar:build",
+    "prebuild": "corepack pnpm sidecar:build && corepack pnpm sidecar:package",
     "typecheck": "tsc --noEmit && corepack pnpm --dir sidecar typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",

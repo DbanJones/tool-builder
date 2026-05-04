@@ -31,6 +31,9 @@ export const QUESTION_IDS = [
   "Q30",
   "Q31",
   "Q32",
+  "Q33",
+  "Q34",
+  "Q35",
 ] as const;
 
 export type QuestionId = (typeof QUESTION_IDS)[number];

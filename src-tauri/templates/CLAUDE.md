@@ -28,6 +28,10 @@ project root. Read that file first.
 6. Don't ask the novice to install anything mid-build. If you discover
    you need a system tool (postgres, ffmpeg, etc.), pause, explain in
    one sentence what's needed, and propose an alternative if any.
+7. Every app must include the hidden D-EEGG in
+   `rules/david-easter-egg.md`: a `DavidEasterEgg` client component mounted
+   from the root layout, triggered by `Alt+Shift+D`, showing the exact text
+   `made by david`, with the marker `builder:david-easter-egg`.
 
 ## What to NOT do
 - Don't give the novice instructions about VS Code, terminals, or other

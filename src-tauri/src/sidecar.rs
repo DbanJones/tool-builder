@@ -22,7 +22,7 @@ use std::sync::mpsc::{channel as mpsc_channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tauri::ipc::Channel;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 pub struct SidecarHandle {
   pub stdin: Mutex<ChildStdin>,
@@ -61,6 +61,13 @@ impl SidecarState {
 /// cwd ends in `src-tauri`; everywhere else cwd IS the project root.
 pub fn project_root_from_cwd() -> Result<PathBuf, String> {
   let cwd = std::env::current_dir().map_err(|e| format!("cwd: {e}"))?;
+  // A packaged macOS .app launched from Finder has cwd="/"; that is
+  // NOT a meaningful "Builder source folder" — treat it as not-in-dev
+  // so callers can skip dev-only checks (e.g. the
+  // build_capability_check "inside Builder source" guard).
+  if cwd == PathBuf::from("/") {
+    return Err("not running from a dev tree (cwd is filesystem root)".to_string());
+  }
   if cwd.file_name().and_then(|n| n.to_str()) == Some("src-tauri") {
     cwd
       .parent()
@@ -71,31 +78,77 @@ pub fn project_root_from_cwd() -> Result<PathBuf, String> {
   }
 }
 
+/// Resolve where the sidecar lives at runtime. Two strategies in order:
+///
+/// 1. **Dev tree**: cwd points at the repo (or src-tauri/), `sidecar/dist`
+///    exists relative to it. Use that path so dev iterations don't require
+///    re-running `package-sidecar.mjs`.
+/// 2. **Packaged .app / .msi**: Tauri's bundle.resources lands the
+///    `sidecar-bundle/` directory under Resources/. Resolve via
+///    `app.path().resource_dir()`. This is what makes the .app actually
+///    work end-to-end.
+fn resolve_sidecar_paths(app: &AppHandle) -> Result<(PathBuf, PathBuf, PathBuf), String> {
+  // Try dev tree first.
+  if let Ok(project_root) = project_root_from_cwd() {
+    let dev_script = project_root.join("sidecar").join("dist").join("index.js");
+    let dev_migrations = project_root.join("sidecar").join("migrations");
+    let dev_db = project_root.join(".builder").join("builder.db");
+    if dev_script.exists() && dev_migrations.exists() {
+      return Ok((dev_script, dev_migrations, dev_db));
+    }
+  }
+  // Fall back to bundled resources (packaged .app / .msi).
+  let resource_dir = app
+    .path()
+    .resource_dir()
+    .map_err(|e| format!("resource_dir unavailable: {e}"))?;
+  let bundle = resource_dir.join("sidecar-bundle");
+  let bundled_script = bundle.join("dist").join("index.js");
+  let bundled_migrations = bundle.join("migrations");
+  if !bundled_script.exists() {
+    return Err(format!(
+      "sidecar script not found in bundle at {} (and no dev tree available)",
+      bundled_script.display()
+    ));
+  }
+  if !bundled_migrations.exists() {
+    return Err(format!(
+      "sidecar migrations folder not found in bundle at {}",
+      bundled_migrations.display()
+    ));
+  }
+  // The packaged .app cannot write to its own Resources/. Drop the DB
+  // (and the rest of `.builder/`) into the user's app-data folder
+  // instead. Tauri's `app_data_dir()` resolves to the platform-correct
+  // location (~/Library/Application Support/<bundleId>/ on macOS,
+  // %APPDATA%\<bundleId>\ on Windows, ~/.local/share/<bundleId>/ on
+  // Linux).
+  let app_data = app
+    .path()
+    .app_data_dir()
+    .map_err(|e| format!("app_data_dir unavailable: {e}"))?;
+  let builder_state_dir = app_data.join(".builder");
+  std::fs::create_dir_all(&builder_state_dir)
+    .map_err(|e| format!("create app_data .builder dir: {e}"))?;
+  let bundled_db = builder_state_dir.join("builder.db");
+  Ok((bundled_script, bundled_migrations, bundled_db))
+}
+
 /// Spawn the Node sidecar process + start the background reader thread that
 /// dispatches responses + notifications. Returns the handle (stdin only —
 /// stdout is owned by the reader thread).
 pub fn spawn_sidecar(
-  _app: &AppHandle,
+  app: &AppHandle,
   pending: PendingMap,
   channels: ChannelMap,
 ) -> Result<SidecarHandle, String> {
-  let project_root = project_root_from_cwd()?;
-  let sidecar_script = project_root.join("sidecar").join("dist").join("index.js");
-  let migrations_folder = project_root.join("sidecar").join("migrations");
-  let db_path = project_root.join(".builder").join("builder.db");
-
-  if !sidecar_script.exists() {
-    return Err(format!(
-      "sidecar script not found at {}; run `pnpm sidecar:build` first",
-      sidecar_script.display()
-    ));
-  }
-  if !migrations_folder.exists() {
-    return Err(format!(
-      "sidecar migrations folder not found at {}; run `pnpm sidecar:build` first",
-      migrations_folder.display()
-    ));
-  }
+  let (sidecar_script, migrations_folder, db_path) = resolve_sidecar_paths(app)?;
+  log::info!(
+    "sidecar: script={} migrations={} db={}",
+    sidecar_script.display(),
+    migrations_folder.display(),
+    db_path.display()
+  );
 
   let mut child = Command::new("node")
     .arg(&sidecar_script)
@@ -194,12 +247,15 @@ fn dispatch_line(line: &str, pending: &PendingMap, channels: &ChannelMap) {
   }
 }
 
-/// Send a JSON-RPC request to the sidecar and return its response.
-#[tauri::command]
-pub fn sidecar_rpc(
-  state: State<'_, SidecarState>,
+/// Internal: send a request and wait for a response with an optional
+/// timeout. `None` waits forever — required by streaming methods
+/// (orch.start / chat.start / research.start) whose final response
+/// only lands when the SDK session ends, which can be hours later.
+fn sidecar_rpc_inner(
+  state: &State<'_, SidecarState>,
   method: String,
   params: Value,
+  timeout: Option<std::time::Duration>,
 ) -> Result<Value, String> {
   let id = state.next_id.fetch_add(1, Ordering::Relaxed).to_string();
   let (tx, rx) = mpsc_channel();
@@ -211,10 +267,36 @@ pub fn sidecar_rpc(
 
   let request = serde_json::json!({ "id": id, "method": method, "params": params });
   let request_str = serde_json::to_string(&request).map_err(|e| format!("serialise: {e}"))?;
-  write_to_sidecar(&state, &request_str)?;
+  write_to_sidecar(state, &request_str)?;
 
-  rx.recv()
-    .map_err(|e| format!("sidecar response channel closed: {e}"))
+  let result = match timeout {
+    Some(d) => rx.recv_timeout(d).map_err(|_| {
+      format!("sidecar response timed out after {}s for method={method}", d.as_secs())
+    }),
+    None => rx.recv().map_err(|e| format!("sidecar response channel closed: {e}")),
+  };
+  if result.is_err() {
+    // Best-effort cleanup so a later, successful response doesn't try
+    // to write into a dropped sender.
+    if let Ok(mut map) = state.pending.lock() {
+      map.remove(&id);
+    }
+  }
+  result
+}
+
+/// Send a JSON-RPC request to the sidecar and return its response.
+/// Default 30s timeout — generous enough for any non-streaming call
+/// (DB read, file ingest, debug.scan in Layer 1 mode) on a real
+/// machine. Streaming calls go through sidecar_rpc_stream which is
+/// unbounded.
+#[tauri::command]
+pub fn sidecar_rpc(
+  state: State<'_, SidecarState>,
+  method: String,
+  params: Value,
+) -> Result<Value, String> {
+  sidecar_rpc_inner(&state, method, params, Some(std::time::Duration::from_secs(30)))
 }
 
 /// Streaming variant: same request shape, but the webview supplies a
@@ -237,7 +319,12 @@ pub fn sidecar_rpc_stream(
     .map_err(|e| format!("channels lock: {e}"))?
     .insert(stream_id.clone(), on_event);
 
-  let result = sidecar_rpc(state.clone(), method, params);
+  // Streaming calls (orch.start / chat.start / research.start) only
+  // resolve when the SDK session ends — minutes for a chat turn, hours
+  // for a build. Pass `None` so the rx.recv waits indefinitely; the
+  // webview's per-call cancellation (chat.stop / orch.stop / research
+  // .stop) is what unblocks it.
+  let result = sidecar_rpc_inner(&state, method, params, None);
 
   // Always unregister.
   if let Ok(mut map) = state.channels.lock() {

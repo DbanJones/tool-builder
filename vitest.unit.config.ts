@@ -7,6 +7,7 @@ export default defineConfig({
       "tests/unit/**/*.test.ts",
       "lib/**/*.test.ts",
       "components/**/*.test.{ts,tsx}",
+      "sidecar/src/**/*.test.ts",
     ],
     environment: "node",
     globals: false,

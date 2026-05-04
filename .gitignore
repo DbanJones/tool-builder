@@ -1,6 +1,12 @@
 # Dependencies
 node_modules/
 
+# Fixture target apps need stub node_modules entries so the hallucinated-
+# import detector resolves their imports. These are tiny package.json
+# placeholders, not real installs — track them.
+!tests/fixtures/target-apps/*/node_modules/
+!tests/fixtures/target-apps/*/node_modules/**
+
 # Next.js build output
 .next/
 out/

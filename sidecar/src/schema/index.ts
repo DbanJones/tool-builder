@@ -7,3 +7,5 @@ export * from "./costs.js";
 export * from "./drift-events.js";
 export * from "./chat-messages.js";
 export * from "./permission-requests.js";
+export * from "./defects.js";
+export * from "./research-findings.js";

@@ -24,6 +24,12 @@ design. The agent runs the protocol at every phase boundary, before every PR
 to main, and on every `/recheck`. Three drift forms are equally serious:
 implementation drift, scope drift, silent assumption drift.
 
+## Discipline protocol (canonical)
+See `rules/08-discipline.md`. Governs per-edit behaviour: state assumptions
+before coding, surface the simpler path, restate the task as a verifiable
+goal, limit changes to what the request requires, do not "improve" adjacent
+code, no speculative features or error handling. Applies to every edit.
+
 ## Self-drive protocol (canonical)
 See `docs/agent-runbook.md`. The agent reads `.builder/state.json` to find the
 current phase and next task, executes per the runbook, pauses only at the

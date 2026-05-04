@@ -1,0 +1,4 @@
+# This directory is materialised by `scripts/package-sidecar.mjs` at
+# build time. The .gitkeep keeps the directory tracked so Tauri's
+# codegen can resolve `bundle.resources.sidecar-bundle` during
+# `cargo check`; everything else under here is gitignored.

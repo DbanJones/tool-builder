@@ -34,6 +34,8 @@ export interface ChatSendOptions {
    * them, the chat falls back to plain (no-tools) Claude. */
   projectId?: string | null;
   projectPath?: string | null;
+  /** Optional model id from settings; sidecar falls back to default. */
+  model?: string;
   onChunk: (chunk: ChatChunk) => void;
 }
 
@@ -67,6 +69,7 @@ export function chatSend(options: ChatSendOptions): ResultAsync<void, ChatError>
       sessionId: options.sessionId ?? null,
       projectId: options.projectId ?? null,
       projectPath: options.projectPath ?? null,
+      model: options.model ?? null,
       onChunk: channel,
     }),
     fromInvokeError,

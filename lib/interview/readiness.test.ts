@@ -12,13 +12,13 @@ const allFastPathAnswered: readonly RebuildAnswer[] = FAST_PATH_QUESTIONS.map((q
 }));
 
 describe("checkReadiness", () => {
-  it("returns not ready with all 32 missing when no answers are provided", () => {
+  it("returns not ready with all 35 missing when no answers are provided", () => {
     const r = checkReadiness([]);
     expect(r.ready).toBe(false);
     expect(r.fastPathAnswered).toBe(0);
-    expect(r.fastPathTotal).toBe(32);
-    expect(r.missingFastPath).toHaveLength(32);
-    expect(r.reason).toMatch(/32 fast-path questions/);
+    expect(r.fastPathTotal).toBe(35);
+    expect(r.missingFastPath).toHaveLength(35);
+    expect(r.reason).toMatch(/35 fast-path questions/);
   });
 
   it("returns not ready with N missing for a partial answer set", () => {
@@ -26,31 +26,31 @@ describe("checkReadiness", () => {
     const r = checkReadiness(partial);
     expect(r.ready).toBe(false);
     expect(r.fastPathAnswered).toBe(5);
-    expect(r.fastPathTotal).toBe(32);
-    expect(r.missingFastPath).toHaveLength(27);
-    expect(r.reason).toMatch(/27 fast-path questions/);
+    expect(r.fastPathTotal).toBe(35);
+    expect(r.missingFastPath).toHaveLength(30);
+    expect(r.reason).toMatch(/30 fast-path questions/);
   });
 
   it("uses singular 'question' when exactly one is missing", () => {
-    const allButOne = allFastPathAnswered.slice(0, 31);
+    const allButOne = allFastPathAnswered.slice(0, 34);
     const r = checkReadiness(allButOne);
     expect(r.ready).toBe(false);
     expect(r.reason).toMatch(/1 fast-path question still to answer/);
   });
 
-  it("returns not ready when all 32 answered but echo-back not confirmed", () => {
+  it("returns not ready when all 35 answered but echo-back not confirmed", () => {
     const r = checkReadiness(allFastPathAnswered);
     expect(r.ready).toBe(false);
-    expect(r.fastPathAnswered).toBe(32);
+    expect(r.fastPathAnswered).toBe(35);
     expect(r.missingFastPath).toEqual([]);
     expect(r.echoBackConfirmed).toBe(false);
     expect(r.reason).toMatch(/Confirm the echo-back/);
   });
 
-  it("returns ready when all 32 answered AND echo-back confirmed", () => {
+  it("returns ready when all 35 answered AND echo-back confirmed", () => {
     const r = checkReadiness(allFastPathAnswered, { echoBackConfirmed: true });
     expect(r.ready).toBe(true);
-    expect(r.fastPathAnswered).toBe(32);
+    expect(r.fastPathAnswered).toBe(35);
     expect(r.echoBackConfirmed).toBe(true);
     expect(r.reason).toBe("Ready to build.");
   });
@@ -61,13 +61,13 @@ describe("checkReadiness", () => {
     expect(r.ready).toBe(false);
     expect(r.fastPathAnswered).toBe(10);
     expect(r.echoBackConfirmed).toBe(true);
-    expect(r.reason).toMatch(/22 fast-path questions/);
+    expect(r.reason).toMatch(/25 fast-path questions/);
   });
 
   it("missingFastPath lists ids in library order, not answer-input order", () => {
     const r = checkReadiness([]);
     expect(r.missingFastPath[0]).toBe("Q1");
-    expect(r.missingFastPath[31]).toBe("Q32");
+    expect(r.missingFastPath[34]).toBe("Q35");
   });
 
   it("ignores duplicate answers for the same question (latest still counts)", () => {

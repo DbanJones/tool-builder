@@ -97,6 +97,7 @@ When you pause, write a clear question and wait. Do not assume.
 - @rules/05-testing.md trophy, coverage, factories, CI gating
 - @rules/06-other.md deploy, observability, security, privacy, beginner safety
 - @rules/07-self-check.md drift detection vs spec.md
+- @rules/08-discipline.md per-edit behaviour: think first, simplest path, surgical changes, verifiable goals
 
 ## Where to find specifics
 - The build target is in `spec.md`.
